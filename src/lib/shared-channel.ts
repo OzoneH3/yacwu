@@ -27,7 +27,9 @@ export function hasSharedChannelContext(text: string): boolean {
 
 /** Remove Yacwu's transport-only channel guidance from transcript presentation. */
 export function visibleUserText(text: string): string {
-	const markerAt = text.indexOf(SHARED_CHANNEL_MARKER);
+	// App-server backends may trim leading blank lines before echoing user input,
+	// so match the sentinel itself rather than depending on its surrounding LFs.
+	const markerAt = text.indexOf('<!-- YACWU_SHARED_BACKGROUND_CHANNEL -->');
 	return markerAt < 0 ? text : text.slice(0, markerAt).trimEnd();
 }
 

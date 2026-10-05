@@ -7966,13 +7966,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			color: var(--color-ink);
 		}
 
-		.delete-session {
+		.delete-session,
+		.session-actions .move-session {
 			opacity: 0;
 			pointer-events: none;
 		}
 
 		.session-row:hover .delete-session,
-		.session-row:focus-within .delete-session {
+		.session-row:focus-within .delete-session,
+		.session-row:hover .move-session,
+		.session-row:focus-within .move-session {
 			opacity: 1;
 			pointer-events: auto;
 		}

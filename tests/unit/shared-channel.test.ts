@@ -21,6 +21,7 @@ describe('shared background channel', () => {
 		expect(hasSharedChannelContext(withContext)).toBe(true);
 		expect(withContext).toContain('Your session ID: thread-a');
 		expect(visibleUserText(withContext)).toBe(prompt);
+		expect(visibleUserText(withContext.replace('\n\n<!--', '<!--'))).toBe(prompt);
 		expect(visibleUserText(prompt)).toBe(prompt);
 	});
 });
