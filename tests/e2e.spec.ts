@@ -547,6 +547,11 @@ test('side-chat delete unsubscribes without archiving and stays deleted after re
 });
 
 test('new session can target a specific working directory', async ({ page }) => {
+	let openRequests = 0;
+	await page.route('**/api/threads/*/open**', async (route) => {
+		openRequests++;
+		await route.fallback();
+	});
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 
@@ -558,6 +563,9 @@ test('new session can target a specific working directory', async ({ page }) => 
 
 	// Composer opens and the topbar reflects the chosen cwd.
 	await expect(page.locator('.composer')).toBeVisible();
+	// thread/start already created this empty session; opening its history again
+	// immediately can fail on Codex versions that have no rollout yet.
+	expect(openRequests).toBe(0);
 	await expect(page.locator('.topbar .meta').first()).toContainText('/tmp', {
 		timeout: 15_000
 	});

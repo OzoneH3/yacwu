@@ -129,6 +129,10 @@
 	const pendingUserEchoes: Record<string, { id: string; text: string }[]> = {};
 
 	let sessions = $state<ThreadSummary[]>([]);
+	const SESSION_ORDER_KEY = 'yacwu-session-order';
+	let sessionOrder = $state<string[]>([]);
+	let draggingSessionId = $state<string | null>(null);
+	let dragOverSessionId = $state<string | null>(null);
 	// Host picker: local plus the remote machines found in ~/.ssh/config.
 	let newHost = $state(LOCAL_HOST);
 	let hostChoices = $state<HostInfo[]>([]);
@@ -246,11 +250,21 @@
 	// Side chats (ephemeral /btw forks) nest under their parent in the sidebar.
 	// Orphans — whose parent was archived or isn't listed — stay top-level so
 	// they remain reachable.
-	const topSessions = $derived(
-		sessions.filter(
+	const topSessions = $derived.by(() => {
+		const roots = sessions.filter(
 			(s) => !isSideChat(s) || !sessions.some((p) => p.id === s.forkedFromId)
-		)
-	);
+		);
+		const positions = new Map(sessionOrder.map((id, index) => [id, index]));
+		return roots
+			.map((session, index) => ({ session, index, position: positions.get(session.id) }))
+			.sort((a, b) => {
+				if (a.position !== undefined && b.position !== undefined) return a.position - b.position;
+				if (a.position !== undefined) return 1;
+				if (b.position !== undefined) return -1;
+				return a.index - b.index;
+			})
+			.map(({ session }) => session);
+	});
 	const activeIsSide = $derived(Boolean(activeSummary && isSideChat(activeSummary)));
 	const activeParent = $derived(
 		activeIsSide ? (sessions.find((s) => s.id === activeSummary?.forkedFromId) ?? null) : null
@@ -511,8 +525,35 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		);
 	}
 
+	function reorderSession(draggedId: string, targetId: string) {
+		const ids = topSessions.map((session) => session.id);
+		const from = ids.indexOf(draggedId);
+		const to = ids.indexOf(targetId);
+		if (from < 0 || to < 0 || from === to) return;
+		ids.splice(to, 0, ids.splice(from, 1)[0]);
+		sessionOrder = ids;
+		localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(ids));
+	}
+
+	function moveSessionByKeyboard(id: string, offset: -1 | 1) {
+		const ids = topSessions.map((session) => session.id);
+		const index = ids.indexOf(id);
+		const target = ids[index + offset];
+		if (target) reorderSession(id, target);
+	}
+
+	function startSessionDrag(event: DragEvent, id: string) {
+		draggingSessionId = id;
+		if (event.dataTransfer) {
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('text/plain', id);
+		}
+	}
+
 	function removeSession(id: string) {
 		sessions = sessions.filter((s) => s.id !== id);
+		sessionOrder = sessionOrder.filter((sessionId) => sessionId !== id);
+		localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
 		delete activeTurnBySession[id];
 		delete latestWorkOrderBySession[id];
 		if (interruptedSessions[id]) {
@@ -1195,7 +1236,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		creating = false;
 		const id = data.thread?.id;
 		if (id) {
-			ensureThread(id);
+			const thread = ensureThread(id);
+			thread.status = data.thread?.status?.type === 'active' ? 'running' : 'idle';
+			// thread/start already gave us an empty transcript. Avoid immediately
+			// calling thread/read + thread/resume, which fails on Codex builds where
+			// the new rollout has no history yet.
+			sessionHistoryLoaded[id] = true;
 			upsertSession({ ...data.thread, host: data.host ?? host });
 			setFastSession(id, data.serviceTier === 'priority');
 			goto(`/s/${id}${hostQuery(data.host ?? host)}`);
@@ -2857,6 +2903,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	onMount(() => {
 		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
+		try {
+			const savedOrder = JSON.parse(localStorage.getItem(SESSION_ORDER_KEY) ?? '[]');
+			if (Array.isArray(savedOrder)) sessionOrder = savedOrder.filter((id): id is string => typeof id === 'string');
+		} catch {
+			sessionOrder = [];
+		}
 		const mobileQuery = window.matchMedia('(max-width: 59.999rem)');
 		const updateMobileViewport = () => {
 			mobileViewport = mobileQuery.matches;
@@ -3257,7 +3309,43 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{/if}
 		<nav class="sessions" data-loaded={sessionsLoaded}>
 			{#each topSessions as s (s.id)}
-				<div class="session-row">
+				<div
+					class="session-row"
+					role="group"
+					aria-label={`Session ${shortLabel(s)}`}
+					class:drop-target={dragOverSessionId === s.id && draggingSessionId !== s.id}
+					ondragover={(event) => {
+						if (!draggingSessionId || draggingSessionId === s.id) return;
+						event.preventDefault();
+						dragOverSessionId = s.id;
+						if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+					}}
+					ondragleave={() => { if (dragOverSessionId === s.id) dragOverSessionId = null; }}
+					ondrop={(event) => {
+						event.preventDefault();
+						const draggedId = event.dataTransfer?.getData('text/plain') || draggingSessionId;
+						if (draggedId) reorderSession(draggedId, s.id);
+						draggingSessionId = null;
+						dragOverSessionId = null;
+					}}
+				>
+					<button
+						class="session-drag-handle"
+						type="button"
+						draggable="true"
+						aria-label={`Reorder ${shortLabel(s)}`}
+						title="Drag to reorder"
+						ondragstart={(event) => startSessionDrag(event, s.id)}
+						ondragend={() => { draggingSessionId = null; dragOverSessionId = null; }}
+						onkeydown={(event) => {
+							if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+								event.preventDefault();
+								moveSessionByKeyboard(s.id, event.key === 'ArrowUp' ? -1 : 1);
+							}
+						}}
+					>
+						<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3h1M10 3h1M5 8h1m4 0h1m-6 5h1m4 0h1" /></svg>
+					</button>
 					<a
 						class="session"
 						class:active={s.id === activeId}
@@ -4767,10 +4855,40 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.session-row {
 		position: relative;
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-columns: var(--space-md) minmax(0, 1fr) auto;
 		align-items: center;
 		margin-block-end: var(--space-3xs);
 	}
+
+	.session-row.drop-target {
+		border-radius: var(--radius-input);
+		background: var(--color-hover);
+		outline: 1px dashed var(--color-accent);
+		outline-offset: -1px;
+	}
+
+	.session-drag-handle {
+		display: grid;
+		place-items: center;
+		width: var(--space-md);
+		height: var(--control-height-compact);
+		padding: 0;
+		border: 0;
+		border-radius: var(--radius-input);
+		background: transparent;
+		color: var(--color-faint);
+		cursor: grab;
+		touch-action: none;
+	}
+
+	.session-drag-handle:hover,
+	.session-drag-handle:focus-visible {
+		color: var(--color-ink);
+		background: var(--color-hover);
+	}
+
+	.session-drag-handle:active { cursor: grabbing; }
+	.session-drag-handle svg { width: 14px; height: 14px; fill: currentColor; }
 
 	.session {
 		position: relative;
@@ -4886,6 +5004,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.session-row.side-row {
 		padding-inline-start: var(--space-md);
+		grid-template-columns: minmax(0, 1fr) auto;
 	}
 
 	.session.side .label {
@@ -5575,17 +5694,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		display: flex;
 		flex-direction: column;
 		align-items: flex-start;
-		gap: var(--space-xs);
+		gap: 0;
 		min-width: 12rem;
 		max-width: min(20rem, calc(100vw - 2rem));
 		max-height: min(24rem, 65vh);
 		overflow-x: hidden;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		padding: var(--space-sm);
+		padding: var(--space-2xs);
 		border: 1px solid var(--color-rule-2);
 		border-radius: var(--radius-sm);
-		background: var(--color-surface);
+		background: var(--color-paper-3);
 		box-shadow: var(--shadow-popover);
 	}
 
