@@ -28,6 +28,7 @@ import simplifile
 import yacwu/auth
 import yacwu/backends
 import yacwu/codex.{type Codex}
+import yacwu/diagnostics
 import yacwu/defaults
 import yacwu/files
 import yacwu/git
@@ -443,6 +444,14 @@ fn dispatch(
     ["api", "threads", id], Get -> {
       use _, cx <- with_codex(ctx, req, Some(id))
       read_thread(cx, req, id)
+    }
+    ["api", "threads", id, "diagnostics"], Get -> {
+      use _, cx <- with_codex(ctx, req, Some(id))
+      json_response(200, codex.diagnostic_snapshot(cx))
+    }
+    ["api", "threads", id, "diagnostics"], Post -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      record_client_diagnostics(host, cx, req, id)
     }
     ["api", "threads", id, "open"], Post -> {
       use host, cx <- with_codex(ctx, req, Some(id))
@@ -2161,6 +2170,51 @@ fn message(
 }
 
 // -- Remaining thread endpoints ----------------------------------------------
+
+/// Browser observations use an allowlist so prompts, output and arbitrary
+/// error text cannot be copied into the metadata log.
+fn record_client_diagnostics(
+  host: String,
+  cx: Codex,
+  req: Request(Connection),
+  thread: String,
+) -> Response(ResponseData) {
+  let body = read_json_body(req)
+  let event = jsonx.field_string(body, ["event"]) |> result.unwrap("")
+  case
+    list.contains(
+      [
+        "stop_requested",
+        "stop_succeeded",
+        "stop_failed",
+        "sse_connected",
+        "sse_disconnected",
+      ],
+      event,
+    )
+  {
+    False -> json_response(400, error_body("Unknown diagnostic event"))
+    True -> {
+      let snapshot = codex.diagnostic_snapshot(cx)
+      diagnostics.record(host, oauth.now(), "browser", [
+        #("threadId", json.string(thread)),
+        #("clientEvent", json.string(event)),
+        #(
+          "connected",
+          json.bool(
+            jsonx.field_bool(body, ["connected"]) |> result.unwrap(False),
+          ),
+        ),
+        #(
+          "visible",
+          json.bool(jsonx.field_bool(body, ["visible"]) |> result.unwrap(False)),
+        ),
+        #("snapshot", snapshot),
+      ])
+      json_response(200, snapshot)
+    }
+  }
+}
 
 /// Interrupt the in-flight turn on a thread.
 fn interrupt(

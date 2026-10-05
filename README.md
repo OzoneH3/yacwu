@@ -337,6 +337,44 @@ byte-for-byte to the HTTP listener bound on a loopback ephemeral port (mist
 itself only speaks TCP). HTTP, SSE, and auth headers/cookies pass through
 unchanged.
 
+### Stalled-task diagnostics
+
+Yacwu records Codex RPC timing, lifecycle event metadata, connection changes,
+and browser Stop/SSE observations automatically. Every 30 seconds it records a
+manager snapshot with pending request ages, active turn activity, subscriber
+count, and the local Codex process ID. On Linux, snapshots also include
+process state, CPU counters, thread count, and resident memory pages. A turn without an event for two minutes
+produces a `turn_silent` snapshot, repeated at most once every two minutes.
+Silence can also mean legitimate reasoning or a long-running tool; Yacwu does
+not cancel the turn automatically.
+
+Logs live in `$XDG_STATE_HOME/yacwu/diagnostics` (default
+`~/.local/state/yacwu/diagnostics`). Set `YACWU_DIAGNOSTICS_DIR` to override it.
+Each host has a `codex-*.jsonl` metadata log and a `codex-*.stderr.log` log.
+Metadata rotates at 5 MiB; local child stderr is checked every 30 seconds and
+retains the last 5 MiB in `.1` before truncating in place. Each log keeps one
+previous file. The directory is mode 0700 and files are mode 0600. Log write
+failures do not prevent requests from running.
+
+The metadata log excludes prompts, command output, and streamed text. The
+local Codex child's stderr is retained separately and can contain Codex's own
+error details. `RUST_LOG` defaults to `info` for newly spawned local children
+and respects an existing override. Remote Codex stderr stays on the remote
+host; local connection/RPC diagnostics are still recorded.
+
+To inspect a stalled session without waiting for a Codex RPC, read
+`GET /api/threads/<session-id>/diagnostics` (add `?host=<host>` for remote
+routing). This uses the same authentication as the other API endpoints and
+returns the manager snapshot and exact log paths. Correlate its turn and
+request IDs with the retained logs and Codex's session transcript. It can
+separate an unresponsive RPC, disconnected transport, missing browser events,
+and a silent turn, but cannot guarantee an explanation for an internal model
+or upstream service stall.
+
+Backend diagnostics take effect after restarting Yacwu; local stderr capture
+starts with the next local child. Let active tasks finish before restarting a
+server that owns their Codex child. Reload the browser after rebuilding.
+
 ## License
 
 MIT

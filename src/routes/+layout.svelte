@@ -2279,15 +2279,32 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
-	async function interrupt() {
-		if (!activeId) return;
-		const t = threads[activeId];
-		const response = await fetch(threadApi(activeId, '/interrupt'), {
+	function reportDiagnostics(id: string, event: string) {
+		void fetch(threadApi(id, '/diagnostics'), {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ turnId: t?.turnId })
-		});
-		if (response.ok) markTaskCompleted(activeId);
+			body: JSON.stringify({ event, connected, visible: document.visibilityState === 'visible' }),
+			signal: AbortSignal.timeout(3_000)
+		}).catch(() => {});
+	}
+
+	async function interrupt() {
+		const id = activeId;
+		if (!id) return;
+		const t = threads[id];
+		reportDiagnostics(id, 'stop_requested');
+		try {
+			const response = await fetch(threadApi(id, '/interrupt'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ turnId: t?.turnId })
+			});
+			reportDiagnostics(id, response.ok ? 'stop_succeeded' : 'stop_failed');
+			if (response.ok) markTaskCompleted(id);
+		} catch (error) {
+			reportDiagnostics(id, 'stop_failed');
+			throw error;
+		}
 	}
 
 	async function playInterruptedSession() {
@@ -3298,8 +3315,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (activeId) void loadAccountUsage(activeHost, true);
 		}, 5 * 60 * 1000);
 		const es = new EventSource('/api/events');
-		es.onopen = () => (connected = true);
-		es.onerror = () => (connected = false);
+		es.onopen = () => {
+			connected = true;
+			if (activeId) reportDiagnostics(activeId, 'sse_connected');
+		};
+		es.onerror = () => {
+			const wasConnected = connected;
+			connected = false;
+			if (wasConnected && activeId) reportDiagnostics(activeId, 'sse_disconnected');
+		};
 		es.onmessage = (e) => {
 			try {
 				const msg = JSON.parse(e.data) as JsonRpcNotification;

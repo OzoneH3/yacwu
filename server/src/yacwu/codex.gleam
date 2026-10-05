@@ -39,7 +39,9 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import yacwu/diagnostics
 import yacwu/jsonx
+import yacwu/oauth
 import yacwu/remote
 import yacwu/ws
 
@@ -150,6 +152,8 @@ pub opaque type Msg {
   TcpClosed
   SubscriberDown(pid: Pid)
   LinkedExit(exit: process.ExitMessage)
+  DiagnosticTick
+  GetDiagnostics(reply: Subject(Json))
   Ignore
 }
 
@@ -182,6 +186,19 @@ pub fn request(codex: Codex, method: String, params: Json) -> Reply {
   {
     Ok(reply) -> reply
     Error(_) -> Error("codex manager is restarting; retry shortly")
+  }
+}
+
+/// Read manager diagnostics without waiting for a Codex JSON-RPC response.
+pub fn diagnostic_snapshot(codex: Codex) -> Json {
+  case
+    exception.rescue(fn() {
+      process.call(process.named_subject(codex), 2000, GetDiagnostics)
+    })
+  {
+    Ok(snapshot) -> snapshot
+    Error(_) ->
+      json.object([#("connection", json.string("manager_unavailable"))])
   }
 }
 
@@ -243,6 +260,7 @@ pub fn start(
     // signal kills the manager along with every pending request and the
     // resumed-thread list; trapped, it is just a disconnect.
     process.trap_exits(True)
+    let _ = process.send_after(subject, 30_000, DiagnosticTick)
     let selector =
       process.new_selector()
       |> process.select(subject)
@@ -278,7 +296,12 @@ type ReplyTo {
 }
 
 type Pending {
-  Pending(method: String, thread: Option(String), reply_to: ReplyTo)
+  Pending(
+    method: String,
+    thread: Option(String),
+    reply_to: ReplyTo,
+    started_at: Int,
+  )
 }
 
 type Conn {
@@ -316,6 +339,9 @@ type State {
     remote_sock: String,
     backoff: Int,
     last_error: String,
+    activity: diagnostics.Tracker,
+    last_diagnostic_at: Int,
+    last_received_at: Int,
   )
 }
 
@@ -341,6 +367,9 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     remote_sock: "",
     backoff: 0,
     last_error: "",
+    activity: dict.new(),
+    last_diagnostic_at: 0,
+    last_received_at: 0,
   )
 }
 
@@ -485,8 +514,99 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           on_disconnect(state, "connection to codex app-server lost")
         _ -> actor.continue(state)
       }
+    GetDiagnostics(reply) -> {
+      process.send(reply, state_diagnostics(state, oauth.now()))
+      actor.continue(state)
+    }
+    DiagnosticTick -> {
+      let at = oauth.now()
+      let _ = diagnostics.rotate_stderr(state.label)
+      let snapshot = state_diagnostics(state, at)
+      diagnostics.record(state.label, at, "heartbeat", [#("snapshot", snapshot)])
+      case
+        diagnostics.is_silent(state.activity, at)
+        && at - state.last_diagnostic_at >= 120
+      {
+        True -> {
+          diagnostics.record(state.label, at, "turn_silent", [
+            #("snapshot", snapshot),
+          ])
+          actor.continue(State(..state, last_diagnostic_at: at))
+        }
+        False -> actor.continue(state)
+      }
+      |> reschedule_diagnostics(state.self)
+    }
     Ignore -> actor.continue(state)
   }
+}
+
+fn reschedule_diagnostics(
+  next: actor.Next(State, Msg),
+  self: Codex,
+) -> actor.Next(State, Msg) {
+  let _ =
+    process.send_after(process.named_subject(self), 30_000, DiagnosticTick)
+  next
+}
+
+fn state_diagnostics(state: State, at: Int) -> Json {
+  let connection = case state.status {
+    NotRunning -> "disconnected"
+    Connecting(_) -> "connecting"
+    Initializing(_, _, _) -> "initializing"
+    Running(_) -> "connected"
+  }
+  let pending =
+    dict.to_list(state.pending)
+    |> list.map(fn(entry) {
+      let #(id, request) = entry
+      json.object([
+        #("id", json.int(id)),
+        #("method", json.string(request.method)),
+        #("threadId", case request.thread {
+          Some(id) -> json.string(id)
+          None -> json.null()
+        }),
+        #("ageSeconds", json.int(at - request.started_at)),
+      ])
+    })
+  let queued = case state.status {
+    Connecting(queued) | Initializing(_, _, queued) -> list.length(queued)
+    _ -> 0
+  }
+  let os_pid = case state.status {
+    Running(PortConn(port)) | Initializing(PortConn(port), _, _) ->
+      exception.rescue(fn() { erl_port_info(port, atom.create("os_pid")) })
+      |> result.replace_error(Nil)
+      |> result.try(fn(info) {
+        decode.run(info, decode.at([1], decode.int))
+        |> result.replace_error(Nil)
+      })
+      |> result.map(json.int)
+      |> result.unwrap(json.null())
+    _ -> json.null()
+  }
+  let stats =
+    json.parse(json.to_string(os_pid), decode.int)
+    |> result.map(diagnostics.process_stats)
+    |> result.map(jsonx.to_json)
+    |> result.unwrap(json.null())
+  let #(events, stderr) = diagnostics.paths(state.label)
+  json.object([
+    #("at", json.int(at)),
+    #("host", json.string(state.label)),
+    #("connection", json.string(connection)),
+    #("osPid", os_pid),
+    #("process", stats),
+    #("lastReceivedAt", json.int(state.last_received_at)),
+    #("queuedCount", json.int(queued)),
+    #("subscriberCount", json.int(list.length(state.subscribers))),
+    #("pending", json.preprocessed_array(pending)),
+    #("activeTurns", diagnostics.snapshot(state.activity, at)),
+    #("eventLog", json.string(events)),
+    #("stderrLog", json.string(stderr)),
+  ])
 }
 
 fn on_request(
@@ -525,6 +645,25 @@ fn send_request(
   reply_to: ReplyTo,
 ) -> State {
   let id = state.next_id
+  let at = oauth.now()
+  let turn_id =
+    json.parse(json.to_string(params), decode.at(["turnId"], decode.string))
+    |> result.unwrap(
+      json.parse(
+        json.to_string(params),
+        decode.at(["expectedTurnId"], decode.string),
+      )
+      |> result.unwrap(""),
+    )
+  diagnostics.record(state.label, at, "rpc_sent", [
+    #("id", json.int(id)),
+    #("method", json.string(method)),
+    #("turnId", json.string(turn_id)),
+    #("threadId", case request_thread_id(method, params) {
+      Some(id) -> json.string(id)
+      None -> json.null()
+    }),
+  ])
   write_request(conn, id, method, params)
   State(
     ..state,
@@ -532,20 +671,16 @@ fn send_request(
     pending: dict.insert(
       state.pending,
       id,
-      Pending(method, request_thread_id(method, params), reply_to),
+      Pending(method, request_thread_id(method, params), reply_to, at),
     ),
   )
 }
 
 /// The threadId a request operates on, captured for the handful of methods
 /// whose *response* doesn't echo it (needed to maintain `resumed`).
-fn request_thread_id(method: String, params: Json) -> Option(String) {
-  case method {
-    "thread/unsubscribe" | "thread/archive" | "thread/resume" ->
-      json.parse(json.to_string(params), decode.at(["threadId"], decode.string))
-      |> option.from_result
-    _ -> None
-  }
+fn request_thread_id(_method: String, params: Json) -> Option(String) {
+  json.parse(json.to_string(params), decode.at(["threadId"], decode.string))
+  |> option.from_result
 }
 
 // -- Connection establishment -------------------------------------------------
@@ -553,7 +688,7 @@ fn request_thread_id(method: String, params: Json) -> Option(String) {
 fn begin_connect(state: State, queued: List(Queued)) -> actor.Next(State, Msg) {
   case state.transport {
     Local(command) -> {
-      let port = spawn_codex(command)
+      let port = spawn_codex(command, state.label)
       actor.continue(begin_initialize(state, PortConn(port), queued))
     }
     UnixSock(_) | Ssh(_) -> {
@@ -596,7 +731,22 @@ fn begin_initialize(state: State, conn: Conn, queued: List(Queued)) -> State {
   )
 }
 
-fn spawn_codex(command: List(String)) -> Port {
+fn spawn_codex(command: List(String), label: String) -> Port {
+  let capture = diagnostics.rotate_stderr(label)
+  let #(_, stderr) = diagnostics.paths(label)
+  diagnostics.record(label, oauth.now(), "child_start", [
+    #("stderrCapture", json.bool(capture)),
+  ])
+  let command = case capture {
+    True -> [
+      "/bin/sh",
+      "-c",
+      "exec \"$@\" 2>>\"$YACWU_CODEX_STDERR_LOG\"",
+      "yacwu-codex",
+      ..command
+    ]
+    False -> command
+  }
   erl_open_port(SpawnExecutable("/usr/bin/env"), [
     Binary,
     ExitStatus,
@@ -605,7 +755,13 @@ fn spawn_codex(command: List(String)) -> Port {
     // The AppImage bundles libraries on LD_LIBRARY_PATH for its own Erlang
     // runtime; codex and other backends are system binaries and must not
     // inherit that path.
-    Args(["-u", "LD_LIBRARY_PATH", ..command]),
+    Args([
+      "-u",
+      "LD_LIBRARY_PATH",
+      "YACWU_CODEX_STDERR_LOG=" <> stderr,
+      "RUST_LOG=" <> { envoy.get("RUST_LOG") |> result.unwrap("info") },
+      ..command
+    ]),
     Cd(default_cwd()),
   ])
 }
@@ -801,6 +957,7 @@ fn process_line(state: State, line: BitArray) -> State {
   case json.parse_bits(line, decode.dynamic) {
     Error(_) -> state
     Ok(msg) -> {
+      let state = State(..state, last_received_at: oauth.now())
       let id = decode.run(msg, decode.at(["id"], decode.int))
       let method = decode.run(msg, decode.at(["method"], decode.string))
       let has_result =
@@ -814,7 +971,71 @@ fn process_line(state: State, line: BitArray) -> State {
         Ok(_), Ok(request_method) ->
           on_server_request(state, line, msg, request_method)
         // Notification.
-        _, Ok(_) -> broadcast(state, line)
+        _, Ok(method) -> {
+          let at = oauth.now()
+          let state =
+            State(
+              ..state,
+              activity: diagnostics.observe(state.activity, msg, at),
+            )
+          case method {
+            "turn/started"
+            | "turn/completed"
+            | "item/started"
+            | "item/completed"
+            | "error" ->
+              diagnostics.record(state.label, at, "notification", [
+                #("method", json.string(method)),
+                #(
+                  "threadId",
+                  json.string(
+                    jsonx.field_string(msg, ["params", "threadId"])
+                    |> result.unwrap(""),
+                  ),
+                ),
+                #(
+                  "turnId",
+                  json.string(
+                    jsonx.field_string(msg, ["params", "turnId"])
+                    |> result.unwrap(
+                      jsonx.field_string(msg, ["params", "turn", "id"])
+                      |> result.unwrap(""),
+                    ),
+                  ),
+                ),
+                #(
+                  "itemType",
+                  json.string(
+                    jsonx.field_string(msg, ["params", "item", "type"])
+                    |> result.unwrap(""),
+                  ),
+                ),
+                #(
+                  "itemId",
+                  json.string(
+                    jsonx.field_string(msg, ["params", "item", "id"])
+                    |> result.unwrap(""),
+                  ),
+                ),
+                #(
+                  "turnStatus",
+                  json.string(
+                    jsonx.field_string(msg, ["params", "turn", "status"])
+                    |> result.unwrap(""),
+                  ),
+                ),
+                #(
+                  "itemStatus",
+                  json.string(
+                    jsonx.field_string(msg, ["params", "item", "status"])
+                    |> result.unwrap(""),
+                  ),
+                ),
+              ])
+            _ -> Nil
+          }
+          broadcast(state, line)
+        }
         _, _ -> state
       }
     }
@@ -887,7 +1108,28 @@ fn on_response(
       }
     _ ->
       case dict.get(state.pending, id) {
-        Ok(Pending(method, thread, reply_to)) -> {
+        Ok(Pending(method, thread, reply_to, started_at)) -> {
+          let at = oauth.now()
+          diagnostics.record(state.label, at, "rpc_result", [
+            #("id", json.int(id)),
+            #("method", json.string(method)),
+            #("elapsedSeconds", json.int(at - started_at)),
+            #("ok", json.bool(result.is_ok(reply))),
+            #(
+              "errorCode",
+              json.int(
+                jsonx.field_int(msg, ["error", "code"]) |> result.unwrap(0),
+              ),
+            ),
+          ])
+          let state = case reply {
+            Ok(value) ->
+              State(
+                ..state,
+                activity: diagnostics.restore(state.activity, value, at),
+              )
+            Error(_) -> state
+          }
           case reply_to {
             Caller(subject) -> process.send(subject, reply)
             Discard -> Nil
@@ -982,6 +1224,10 @@ fn broadcast(state: State, line: BitArray) -> State {
 /// Tell subscribers (the SSE stream) about remote connection transitions as a
 /// synthetic notification. Local child restarts stay silent, as before.
 fn broadcast_status(state: State, connection: String, error: String) -> State {
+  diagnostics.record(state.label, oauth.now(), "connection", [
+    #("state", json.string(connection)),
+    #("hasError", json.bool(error != "")),
+  ])
   case state.transport {
     Local(_) -> state
     _ ->
@@ -1013,6 +1259,9 @@ fn broadcast_status(state: State, connection: String, error: String) -> State {
 
 /// The local child process exited.
 fn on_child_exit(state: State, code: Int) -> actor.Next(State, Msg) {
+  diagnostics.record(state.label, oauth.now(), "child_exit", [
+    #("code", json.int(code)),
+  ])
   io.println_error(
     "[codex "
     <> state.label
@@ -1084,6 +1333,10 @@ fn on_disconnect(state: State, message: String) -> actor.Next(State, Msg) {
 }
 
 fn fail_all(state: State, message: String) -> State {
+  let at = oauth.now()
+  diagnostics.record(state.label, at, "connection_lost", [
+    #("snapshot", state_diagnostics(state, at)),
+  ])
   let failure = Error(message)
   dict.each(state.pending, fn(_, pending) {
     case pending.reply_to {
