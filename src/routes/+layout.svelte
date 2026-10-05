@@ -33,6 +33,7 @@
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
+	import { parseInteractiveChoice } from '$lib/interactive-choice';
 
 	let { children } = $props();
 
@@ -171,6 +172,10 @@
 	let unseenActivity = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
+	let interactiveChoiceDialog = $state<HTMLDialogElement | null>(null);
+	let dismissedChoiceId = $state<string | null>(null);
+	let choiceCustomAnswer = $state('');
+	let choicePromptId = $state<string | null>(null);
 	// Read-only file browser (FileBrowser.svelte), rooted at the session cwd.
 	let filesOpen = $state(false);
 	let filesReveal = $state<{ path: string; line: number | null; nonce: number } | null>(null);
@@ -246,6 +251,31 @@
 		if (latestPrompt) lines.push(`Latest prompt: ${latestPrompt}`);
 		if (originalPrompt && originalPrompt !== latestPrompt) lines.push(`Original prompt: ${originalPrompt}`);
 		return lines.join('\n');
+	});
+	const pendingInteractiveChoice = $derived.by(() => {
+		if (!activeId || viewedAgentId) return null;
+		const items = itemsOf(active);
+		for (let index = items.length - 1; index >= 0; index--) {
+			const item = items[index] as any;
+			if (item.type === 'userMessage') return null;
+			if (item.type === 'agentMessage') {
+				const choice = parseInteractiveChoice(String(item.text ?? ''));
+				return choice ? { id: String(item.id), ...choice } : null;
+			}
+		}
+		return null;
+	});
+	$effect(() => {
+		const pending = pendingInteractiveChoice;
+		if (pending && pending.id !== choicePromptId) {
+			choicePromptId = pending.id;
+			choiceCustomAnswer = '';
+		}
+		if (!pending || pending.id === dismissedChoiceId) {
+			if (interactiveChoiceDialog?.open) interactiveChoiceDialog.close();
+			return;
+		}
+		if (interactiveChoiceDialog && !interactiveChoiceDialog.open) interactiveChoiceDialog.showModal();
 	});
 	const activeConfig = $derived(activeId ? sessionConfigs[activeId] : null);
 	const activeModels = $derived(activeId ? (sessionModels[activeId] ?? []) : []);
@@ -1660,6 +1690,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} finally {
 			sendingMessage = false;
 		}
+	}
+
+	function answerInteractiveChoice(option: string) {
+		if (!pendingInteractiveChoice || sendingMessage || !option.trim()) return;
+		dismissedChoiceId = pendingInteractiveChoice.id;
+		interactiveChoiceDialog?.close();
+		input = `I choose: ${option}`;
+		void send();
+	}
+
+	function dismissInteractiveChoice() {
+		if (pendingInteractiveChoice) dismissedChoiceId = pendingInteractiveChoice.id;
+		interactiveChoiceDialog?.close();
 	}
 
 	function fmtDuration(sec: number): string {
@@ -3793,6 +3836,56 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			</dialog>
 
+			<dialog
+				class="interactive-choice-dialog"
+				bind:this={interactiveChoiceDialog}
+				aria-labelledby="interactive-choice-title"
+				aria-describedby="interactive-choice-question"
+				oncancel={dismissInteractiveChoice}
+			>
+				{#if pendingInteractiveChoice}
+					<div class="interactive-choice-panel">
+						<div class="session-info-heading">
+							<h2 id="interactive-choice-title">Codex has a question</h2>
+							<button class="session-info-close" type="button" onclick={dismissInteractiveChoice} aria-label="Dismiss question" title="Dismiss">
+								<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
+							</button>
+						</div>
+						<p id="interactive-choice-question">{pendingInteractiveChoice.question}</p>
+						<div class="interactive-choice-options" aria-label="Choose a response">
+							{#each pendingInteractiveChoice.options as option, index (option)}
+								<button
+									type="button"
+									class="interactive-choice-option"
+									disabled={sendingMessage}
+									onclick={() => answerInteractiveChoice(option)}
+								>
+									<span>{index + 1}</span>{option}
+								</button>
+							{/each}
+						</div>
+						<form
+							class="interactive-choice-other"
+							onsubmit={(event) => {
+								event.preventDefault();
+								answerInteractiveChoice(choiceCustomAnswer);
+							}}
+						>
+							<label for="interactive-choice-custom">Other</label>
+							<textarea
+								id="interactive-choice-custom"
+								bind:value={choiceCustomAnswer}
+								rows="2"
+								placeholder="Type another answer…"
+							></textarea>
+							<button type="submit" class="mini" disabled={!choiceCustomAnswer.trim() || sendingMessage}>
+								Send answer
+							</button>
+						</form>
+					</div>
+				{/if}
+			</dialog>
+
 			{#if activeIsSide}
 				<div class="side-banner">
 					<span class="side-banner-label">Side conversation · ephemeral — not saved</span>
@@ -5558,6 +5651,96 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.session-info-dialog::backdrop {
 		background: var(--color-overlay);
+	}
+
+	.interactive-choice-dialog {
+		position: fixed;
+		inset: 0;
+		width: min(calc(100% - var(--space-lg)), 34rem);
+		max-width: none;
+		max-height: calc(100dvh - var(--space-xl));
+		margin: auto;
+		padding: 0;
+		overflow: auto;
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-card);
+		background: var(--color-paper);
+		box-shadow: var(--shadow-card);
+		color: var(--color-ink);
+	}
+
+	.interactive-choice-dialog::backdrop { background: var(--color-overlay); }
+
+	.interactive-choice-panel { padding: var(--space-sm); }
+
+	.interactive-choice-panel > p {
+		margin: var(--space-sm) 0;
+		color: var(--color-ink-2);
+		white-space: pre-wrap;
+	}
+
+	.interactive-choice-options {
+		display: grid;
+		gap: var(--space-2xs);
+	}
+
+	.interactive-choice-option {
+		display: flex;
+		align-items: center;
+		gap: var(--space-xs);
+		min-height: var(--control-height);
+		padding: var(--space-xs) var(--space-sm);
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-input);
+		background: var(--color-paper-2);
+		color: var(--color-ink);
+		text-align: start;
+		cursor: pointer;
+	}
+
+	.interactive-choice-option:hover,
+	.interactive-choice-option:focus-visible {
+		border-color: var(--color-accent);
+		background: var(--color-paper-3);
+	}
+
+	.interactive-choice-option > span {
+		display: grid;
+		place-items: center;
+		flex: none;
+		width: var(--space-md);
+		height: var(--space-md);
+		border-radius: var(--radius-pill);
+		background: var(--color-paper-3);
+		color: var(--color-muted);
+		font-size: var(--text-xs);
+	}
+
+	.interactive-choice-other {
+		display: grid;
+		justify-items: start;
+		gap: var(--space-2xs);
+		margin-block-start: var(--space-sm);
+		padding-block-start: var(--space-sm);
+		border-block-start: var(--rule-hair) solid var(--color-rule);
+	}
+
+	.interactive-choice-other label {
+		color: var(--color-muted);
+		font-size: var(--text-sm);
+		font-weight: 600;
+	}
+
+	.interactive-choice-other textarea {
+		width: 100%;
+		min-height: calc(var(--control-height) * 1.6);
+		padding: var(--space-xs);
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-input);
+		background: var(--color-paper-2);
+		color: var(--color-ink);
+		font: inherit;
+		resize: vertical;
 	}
 
 	.session-info-panel {
