@@ -64,6 +64,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 		id: string;
 		file: File;
 		name: string;
+		previewUrl: string;
 	}
 
 	interface ArchivedSessionSnapshot {
@@ -198,16 +199,16 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	let instantTooltipTarget: Element | null = null;
 	const internallyRemovedTitles = new WeakSet<Element>();
 	// Read-only file browser (FileBrowser.svelte), rooted at the session cwd.
-	let filesOpen = $state(false);
-	let filesReveal = $state<{ path: string; line: number | null; nonce: number } | null>(null);
+	let filesOpenBySession = $state<Record<string, boolean>>({});
+	let filesRevealBySession = $state<Record<string, { path: string; line: number | null; nonce: number } | null>>({});
 	let fileChangeLineStats = $state<Record<string, { additions: number | null; deletions: number | null }>>({});
 	let fileChangeStatsRequest = 0;
 	let fileLinkPreview = $state<{ path: string; content: string } | null>(null);
 	let copiedFileLink = $state<string | null>(null);
 	let filesRefresh = $state(0);
 	let filesToggleEl = $state<HTMLButtonElement | null>(null);
-	let changesOpen = $state(false);
-	let changesReveal = $state<{ path: string; nonce: number } | null>(null);
+	let changesOpenBySession = $state<Record<string, boolean>>({});
+	let changesRevealBySession = $state<Record<string, { path: string; nonce: number } | null>>({});
 	let sidebarEl = $state<HTMLElement | null>(null);
 	let sidebarToggleEl = $state<HTMLButtonElement | null>(null);
 	let imageInputEl = $state<HTMLInputElement | null>(null);
@@ -260,6 +261,10 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 
 	// The active session is whatever is in the URL (/s/<id>); / shows the welcome.
 	const activeId = $derived(page.params.id ?? null);
+	const filesOpen = $derived(activeId ? filesOpenBySession[activeId] ?? false : false);
+	const filesReveal = $derived(activeId ? filesRevealBySession[activeId] ?? null : null);
+	const changesOpen = $derived(activeId ? changesOpenBySession[activeId] ?? false : false);
+	const changesReveal = $derived(activeId ? changesRevealBySession[activeId] ?? null : null);
 	const active = $derived(activeId ? threads[activeId] : null);
 	const activeSummary = $derived(sessions.find((s) => s.id === activeId) ?? null);
 	const userPrompts = $derived.by(() =>
@@ -1959,7 +1964,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 			if (input === draftInput) input = '';
 			if (input === '') promptDrafts[id] = '';
-			if (selectedImages === draftImages) selectedImages = [];
+			if (selectedImages === draftImages) {
+				for (const image of draftImages) URL.revokeObjectURL(image.previewUrl);
+				selectedImages = [];
+			}
 			composerHistoryOf(id).record(text);
 		} catch (err) {
 			t.status = 'idle';
@@ -2841,11 +2849,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function imageSrc(path: string): string {
+		if (/^https?:\/\//i.test(path)) return path;
 		if (isRemoteHost(activeHost)) {
 			return `/api/images?path=${encodeURIComponent(path)}&host=${encodeURIComponent(activeHost)}`;
 		}
-		if (/^https?:\/\//i.test(path)) return path;
 		return `/api/images?path=${encodeURIComponent(path)}`;
+	}
+
+	function markdownImageSrc(path: string): string | null {
+		if (/^https?:\/\//i.test(path)) return path;
+		const target = agentPathTarget(path, false);
+		if (!target || !activeId) return null;
+		const cwd = (cwds[activeId] ?? activeSummary?.cwd)?.replace(/[\\/]+$/, '');
+		if (!cwd) return null;
+		return imageSrc(`${cwd}/${target.path}`);
 	}
 
 	function imageLabel(path: string): string {
@@ -2897,18 +2914,67 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		imageInputEl?.click();
 	}
 
+	const promptImageMimeByExtension: Record<string, string> = {
+		png: 'image/png',
+		jpg: 'image/jpeg',
+		jpeg: 'image/jpeg',
+		webp: 'image/webp',
+		gif: 'image/gif'
+	};
+
+	function supportedPromptImage(file: File): File | null {
+		const mime = file.type.toLowerCase().split(';', 1)[0];
+		if (Object.values(promptImageMimeByExtension).includes(mime)) return file;
+		const extension = file.name.split('.').at(-1)?.toLowerCase() ?? '';
+		const inferredMime = promptImageMimeByExtension[extension];
+		return inferredMime ? new File([file], file.name, { type: inferredMime, lastModified: file.lastModified }) : null;
+	}
+
 	function onImagesSelected(e: Event) {
 		const files = Array.from((e.currentTarget as HTMLInputElement).files ?? []);
-		selectedImages = [
-			...selectedImages,
-			...files
-				.filter((file) => file.type.startsWith('image/'))
-				.map((file) => ({ id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`, file, name: file.name }))
-		];
+		const accepted = files.map(supportedPromptImage).filter((file): file is File => file !== null);
+		if (accepted.length !== files.length) {
+			showArchiveNotice({ tone: 'error', message: 'Codex accepts PNG, JPEG, WebP, and non-animated GIF images here.' }, 4500);
+		}
+		addPromptImages(accepted);
 		if (imageInputEl) imageInputEl.value = '';
 	}
 
+	function addPromptImages(files: File[]) {
+		selectedImages = [
+			...selectedImages,
+			...files.map((file) => {
+				const extension = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+				const name = file.name || `pasted-image-${Date.now()}.${extension}`;
+				return {
+					id: `${name}-${file.size}-${file.lastModified}-${Math.random()}`,
+					file,
+					name,
+					previewUrl: URL.createObjectURL(file)
+				};
+			})
+		];
+	}
+
+	function onComposerPaste(event: ClipboardEvent) {
+		const imageItems = Array.from(event.clipboardData?.items ?? [])
+			.filter((item) => item.type.startsWith('image/'));
+		if (!imageItems.length) return;
+		const files = imageItems
+			.map((item) => item.getAsFile())
+			.filter((file): file is File => file !== null);
+		const accepted = files.map(supportedPromptImage).filter((file): file is File => file !== null);
+		if (accepted.length !== files.length) {
+			showArchiveNotice({ tone: 'error', message: 'Paste a PNG, JPEG, WebP, or non-animated GIF image.' }, 4500);
+		}
+		addPromptImages(accepted);
+		// Preserve normal text pasting if the clipboard provides both text and an image.
+		if (!event.clipboardData?.getData('text/plain')) event.preventDefault();
+	}
+
 	function removeSelectedImage(id: string) {
+		const removed = selectedImages.find((img) => img.id === id);
+		if (removed) URL.revokeObjectURL(removed.previewUrl);
 		selectedImages = selectedImages.filter((img) => img.id !== id);
 	}
 
@@ -2993,30 +3059,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function toggleFilesPanel() {
+		if (!activeId) return;
 		if (filesOpen || changesOpen) {
-			filesOpen = false;
-			changesOpen = false;
+			filesOpenBySession[activeId] = false;
+			changesOpenBySession[activeId] = false;
 			filesToggleEl?.focus();
 		} else {
-			filesOpen = true;
+			filesOpenBySession[activeId] = true;
 		}
 	}
 
 	function openFilesPanel() {
-		changesOpen = false;
-		filesOpen = true;
+		if (!activeId) return;
+		changesOpenBySession[activeId] = false;
+		filesOpenBySession[activeId] = true;
 	}
 
 	function closeFilesPanel() {
-		filesOpen = false;
+		if (activeId) filesOpenBySession[activeId] = false;
 		filesToggleEl?.focus();
 	}
 
 	/** Open the file browser at a session-relative path, optionally on a line. */
 	function openFileInBrowser(rel: string, line: number | null = null) {
-		changesOpen = false;
-		filesOpen = true;
-		filesReveal = { path: rel, line, nonce: ++localCounter };
+		if (!activeId) return;
+		changesOpenBySession[activeId] = false;
+		filesOpenBySession[activeId] = true;
+		filesRevealBySession[activeId] = { path: rel, line, nonce: ++localCounter };
 	}
 
 	async function loadFileLinkPreview(path: string) {
@@ -3049,13 +3118,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function openChangesPanel(path: string | null = null) {
-		filesOpen = false;
-		changesOpen = true;
-		if (path) changesReveal = { path, nonce: ++localCounter };
+		if (!activeId) return;
+		filesOpenBySession[activeId] = false;
+		changesOpenBySession[activeId] = true;
+		if (path) changesRevealBySession[activeId] = { path, nonce: ++localCounter };
 	}
 
 	function closeChangesPanel() {
-		changesOpen = false;
+		if (activeId) changesOpenBySession[activeId] = false;
 		filesToggleEl?.focus();
 	}
 
@@ -3358,6 +3428,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			default:
 				return { prefix: 'Sub-agent activity:', path };
 		}
+	}
+
+	function openAgentActivity(item: any) {
+		const agentId = typeof item?.agentThreadId === 'string' ? item.agentThreadId : null;
+		if (!agentId || !activeId || agentId === activeId) return;
+		const knownAgent = agents[agentId];
+		if (!knownAgent) {
+			trackAgentItem(agents, activeId, item);
+		}
+		goto(agentHref(agentId));
 	}
 
 	function truncateText(text: string, max: number): string {
@@ -3717,8 +3797,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				{@render markdownInlines(token.children)}
 			{/if}
 		{:else if token.type === 'image'}
-			{#if token.src}
-				<img class="markdown-image" src={token.src} alt={token.alt} title={token.title ?? undefined} loading="lazy" />
+			{@const src = token.src ? markdownImageSrc(token.src) : null}
+			{#if src}
+				<img class="markdown-image" src={src} alt={token.alt} title={token.title ?? undefined} loading="lazy" />
 			{:else}
 				<span>{token.alt}</span>
 			{/if}
@@ -3828,6 +3909,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		inert={(mobileViewport && !mobileSidebarOpen) || (!mobileViewport && desktopSidebarHidden)}
 	>
 		<div class="brand">
+			<a class="brand-identity" href="/" aria-label="Yacwu home">
+				<img src="/yacwu-icon.svg" alt="" width="32" height="32" />
+				<span>Yacwu</span>
+			</a>
 			<button
 				class="drawer-close"
 				type="button"
@@ -4790,7 +4875,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{@const activity = subAgentActivityParts(item)}
 								<div class="item subagent" title={`agent thread ${(item as any).agentThreadId ?? ''}`}>
 									<span class="gutter">⎇</span>
-									<div class="body">{activity.prefix} <span class="agent-path">{activity.path}</span></div>
+									<div class="body">{activity.prefix} {#if (item as any).agentThreadId && (item as any).agentThreadId !== activeId}<button type="button" class="agent-path agent-activity-link" onclick={() => openAgentActivity(item)} title="Open this agent's transcript">{activity.path}</button>{:else}<span class="agent-path">{activity.path}</span>{/if}</div>
 								</div>
 							{:else if item.type === 'collabAgentToolCall'}
 								<div class="item collab">
@@ -4900,6 +4985,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									aria-label={`Remove ${image.name}`}
 									title={`Remove ${image.name}`}
 								>
+									<img class="attachment-preview" src={image.previewUrl} alt="" />
 									<span>{image.name}</span>
 									<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
 										<path d="M4 4l8 8M12 4l-8 8" />
@@ -4936,7 +5022,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							bind:this={imageInputEl}
 							class="image-input"
 							type="file"
-							accept="image/*"
+							accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"
 							multiple
 							onchange={onImagesSelected}
 						/>
@@ -4946,6 +5032,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							placeholder={composerPlaceholder}
 							bind:value={input}
 							oninput={resizeComposer}
+							onpaste={onComposerPaste}
 							onkeydown={onKeydown}
 							enterkeyhint={mobileViewport ? 'enter' : 'send'}
 							autocapitalize="sentences"
@@ -4962,7 +5049,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								: undefined}
 						></textarea>
 						<div class="composer-actions">
-							<button class="attach" type="button" onclick={chooseImages} title="Attach images" aria-label="Attach images">
+							<button class="attach" type="button" onclick={chooseImages} title="Attach PNG, JPEG, WebP, or non-animated GIF images, or paste one into the prompt" aria-label="Attach supported images or paste from clipboard">
 								<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 									<path d="M12 5v14M5 12h14" />
 								</svg>
@@ -5259,6 +5346,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		min-height: var(--rail-header-height);
 		padding: var(--space-xs) var(--space-sm);
 		border-block-end: var(--rule-hair) solid var(--color-rule);
+	}
+
+	.brand-identity {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-xs);
+		min-width: 0;
+		color: var(--color-ink);
+		font-family: var(--font-display);
+		font-size: var(--text-lg);
+		font-weight: 650;
+		letter-spacing: -0.035em;
+		text-decoration: none;
+	}
+
+	.brand-identity img {
+		flex: 0 0 auto;
+		border-radius: var(--radius-input);
 	}
 
 	.drawer-close {
@@ -7939,6 +8044,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-family: var(--font-outlier);
 	}
 
+	.item.subagent .agent-activity-link {
+		padding: 0;
+		border: 0;
+		background: transparent;
+		font: inherit;
+		text-align: start;
+		cursor: pointer;
+	}
+
+	.item.subagent .agent-activity-link:hover {
+		text-decoration: underline;
+	}
+
+	.item.subagent .agent-activity-link:focus-visible {
+		outline: var(--rule-fine) solid var(--color-focus);
+		outline-offset: var(--focus-offset);
+	}
+
 	.item.collab {
 		display: flex;
 		flex-direction: column;
@@ -8278,6 +8401,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.attachment .attachment-preview {
+		flex: 0 0 auto;
+		width: 2.25rem;
+		height: 2.25rem;
+		border: var(--rule-hair) solid var(--color-rule);
+		border-radius: var(--radius-input);
+		background: var(--color-paper-2);
+		object-fit: cover;
 	}
 
 	.attachment svg {
