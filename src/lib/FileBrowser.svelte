@@ -31,6 +31,7 @@
 		cwd,
 		host = '',
 		theme = 'light',
+		embedded = false,
 		reveal = null,
 		refreshNonce = 0,
 		onchanges,
@@ -41,6 +42,7 @@
 		/** Remote host serving this session's files ('' or 'local' for this machine). */
 		host?: string;
 		theme?: 'light' | 'dark';
+		embedded?: boolean;
 		reveal?: { path: string; line?: number | null; nonce: number } | null;
 		refreshNonce?: number;
 		onchanges: () => void;
@@ -327,7 +329,7 @@
 	{/if}
 {/snippet}
 
-<aside class="file-browser" class:file-open={selectedPath !== null} aria-label="Session files">
+<aside class="file-browser" class:embedded class:file-open={selectedPath !== null} aria-label="Session files">
 	<header class="fb-header">
 		<div class="fb-tabs" role="tablist" aria-label="Workspace inspector">
 			<button type="button" role="tab" aria-selected="true">Files</button>
@@ -428,6 +430,14 @@
 		border-inline-start: var(--rule-hair) solid var(--color-rule);
 		background: var(--color-paper);
 		box-shadow: var(--shadow-drawer);
+	}
+
+	.file-browser.embedded {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		border: 0;
+		box-shadow: none;
 	}
 
 	.fb-header {

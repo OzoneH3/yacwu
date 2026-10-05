@@ -131,7 +131,13 @@
 
 	let sessions = $state<ThreadSummary[]>([]);
 	const SESSION_ORDER_KEY = 'yacwu-session-order';
+	const WORKSPACE_SPLIT_KEY = 'yacwu-workspace-split';
+	const DISMISSED_GOALS_KEY = 'yacwu-dismissed-goals';
 	let sessionOrder = $state<string[]>([]);
+	let workspaceSplitRatio = $state(0.38);
+	let workspaceSplitEl = $state<HTMLDivElement | null>(null);
+	let workspaceResizePointerId = $state<number | null>(null);
+	let dismissedGoalBySession = $state<Record<string, string>>({});
 	let draggingSessionId = $state<string | null>(null);
 	let dragOverSessionId = $state<string | null>(null);
 	let pointerSessionDrag = $state<{
@@ -623,6 +629,41 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		};
 		draggingSessionId = id;
 		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+	}
+
+	function startWorkspaceResize(event: PointerEvent) {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		workspaceResizePointerId = event.pointerId;
+		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+	}
+
+	function resizeWorkspace(event: PointerEvent) {
+		if (workspaceResizePointerId !== event.pointerId || !workspaceSplitEl) return;
+		const rect = workspaceSplitEl.getBoundingClientRect();
+		const position = mobileViewport ? event.clientY - rect.top : event.clientX - rect.left;
+		const size = mobileViewport ? rect.height : rect.width;
+		if (size <= 0) return;
+		workspaceSplitRatio = Math.max(0.2, Math.min(0.7, position / size));
+		localStorage.setItem(WORKSPACE_SPLIT_KEY, String(workspaceSplitRatio));
+	}
+
+	function finishWorkspaceResize(event: PointerEvent) {
+		if (workspaceResizePointerId === event.pointerId) workspaceResizePointerId = null;
+	}
+
+	function nudgeWorkspaceSplit(event: KeyboardEvent) {
+		const towardFirstPane = mobileViewport ? event.key === 'ArrowUp' : event.key === 'ArrowLeft';
+		const towardSecondPane = mobileViewport ? event.key === 'ArrowDown' : event.key === 'ArrowRight';
+		if (!towardFirstPane && !towardSecondPane) return;
+		event.preventDefault();
+		workspaceSplitRatio = Math.max(0.2, Math.min(0.7, workspaceSplitRatio + (towardFirstPane ? -0.02 : 0.02)));
+		localStorage.setItem(WORKSPACE_SPLIT_KEY, String(workspaceSplitRatio));
+	}
+
+	function dismissGoalBar(id: string, objective: string) {
+		dismissedGoalBySession = { ...dismissedGoalBySession, [id]: objective };
+		localStorage.setItem(DISMISSED_GOALS_KEY, JSON.stringify(dismissedGoalBySession));
 	}
 
 	function moveSessionDrag(event: PointerEvent) {
@@ -3117,6 +3158,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch {
 			sessionOrder = [];
 		}
+		const savedSplit = Number(localStorage.getItem(WORKSPACE_SPLIT_KEY));
+		if (Number.isFinite(savedSplit) && savedSplit >= 0.2 && savedSplit <= 0.7) workspaceSplitRatio = savedSplit;
+		try {
+			const savedDismissedGoals = JSON.parse(localStorage.getItem(DISMISSED_GOALS_KEY) ?? '{}');
+			if (savedDismissedGoals && typeof savedDismissedGoals === 'object' && !Array.isArray(savedDismissedGoals)) {
+				dismissedGoalBySession = Object.fromEntries(
+					Object.entries(savedDismissedGoals).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+				);
+			}
+		} catch {
+			dismissedGoalBySession = {};
+		}
 		const mobileQuery = window.matchMedia('(max-width: 59.999rem)');
 		const updateMobileViewport = () => {
 			mobileViewport = mobileQuery.matches;
@@ -3864,35 +3917,63 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			{/if}
 
-			{#if filesOpen}
-				{#key activeId}
-					<FileBrowser
-						threadId={activeId}
-						cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
-						host={activeHost}
-						{theme}
-						reveal={filesReveal}
-						refreshNonce={filesRefresh}
-						onchanges={() => openChangesPanel()}
-						onclose={closeFilesPanel}
-					/>
-				{/key}
-			{/if}
-
-			{#if changesOpen}
-				{#key activeId}
-					<GitDiffViewer
-						threadId={activeId}
-						cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
-						{theme}
-						reveal={changesReveal}
-						refreshNonce={filesRefresh}
-						onfiles={openFilesPanel}
-						onviewfile={(path) => openFileInBrowser(path)}
-						onclose={closeChangesPanel}
-					/>
-				{/key}
-			{/if}
+			<div
+				class="workspace-split"
+				class:inspector-open={filesOpen || changesOpen}
+				bind:this={workspaceSplitEl}
+				style={`--workspace-split: ${Math.round(workspaceSplitRatio * 100)}%`}
+			>
+				<div class="workspace-pane" hidden={!filesOpen && !changesOpen}>
+					{#if filesOpen}
+						{#key activeId}
+							<FileBrowser
+								threadId={activeId}
+								cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
+								host={activeHost}
+								embedded
+								{theme}
+								reveal={filesReveal}
+								refreshNonce={filesRefresh}
+								onchanges={() => openChangesPanel()}
+								onclose={closeFilesPanel}
+							/>
+						{/key}
+					{/if}
+					{#if changesOpen}
+						{#key activeId}
+							<GitDiffViewer
+								threadId={activeId}
+								cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
+								embedded
+								{theme}
+								reveal={changesReveal}
+								refreshNonce={filesRefresh}
+								onfiles={openFilesPanel}
+								onviewfile={(path) => openFileInBrowser(path)}
+								onclose={closeChangesPanel}
+							/>
+						{/key}
+					{/if}
+				</div>
+				{#if filesOpen || changesOpen}
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+					<div
+						class="workspace-resizer"
+						role="separator"
+						tabindex="0"
+						aria-label="Resize file viewer and transcript"
+						aria-valuemin="20"
+						aria-valuemax="70"
+						aria-valuenow={Math.round(workspaceSplitRatio * 100)}
+						aria-orientation={mobileViewport ? 'horizontal' : 'vertical'}
+						onpointerdown={startWorkspaceResize}
+						onpointermove={resizeWorkspace}
+						onpointerup={finishWorkspaceResize}
+						onpointercancel={finishWorkspaceResize}
+						onkeydown={nudgeWorkspaceSplit}
+					></div>
+				{/if}
+				<section class="conversation-pane">
 
 			<dialog
 				class="session-info-dialog"
@@ -4053,7 +4134,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			{/if}
 
-			{#if active?.goal}
+			{#if active?.goal && dismissedGoalBySession[activeId] !== active.goal.objective}
 				<div class="goal-tracker" aria-label="active goal">
 					<div class="goal-main">
 						<span class="goal-marker">◎</span>
@@ -4074,6 +4155,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{/if}
 						<span>{fmtDuration(active.goal.timeUsedSeconds ?? 0)}</span>
 					</div>
+					<button
+						type="button"
+						class="goal-dismiss"
+						aria-label="Close goal bar"
+						title="Close goal bar"
+						onclick={() => dismissGoalBar(activeId, active.goal!.objective)}
+					>
+						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
+					</button>
 				</div>
 			{/if}
 
@@ -4544,6 +4634,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 				{/if}
 			{/if}
+				</section>
+			</div>
 		{/if}
 	</main>
 </div>
@@ -5402,6 +5494,91 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-ink);
 	}
 
+	.workspace-split {
+		display: grid;
+		flex: 1;
+		grid-template-columns: minmax(0, 1fr);
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.workspace-split.inspector-open {
+		grid-template-columns: minmax(15rem, var(--workspace-split)) var(--space-2xs) minmax(0, 1fr);
+	}
+
+	.workspace-pane,
+	.conversation-pane {
+		position: relative;
+		min-width: 0;
+		min-height: 0;
+	}
+
+	.workspace-pane {
+		overflow: hidden;
+		border-inline-end: var(--rule-hair) solid var(--color-rule);
+		background: var(--color-paper-2);
+	}
+
+	.workspace-pane[hidden] { display: none; }
+
+	.conversation-pane {
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.workspace-resizer {
+		position: relative;
+		z-index: 2;
+		width: var(--space-2xs);
+		background: var(--color-paper-3);
+		cursor: col-resize;
+		touch-action: none;
+		user-select: none;
+	}
+
+	.workspace-resizer::after {
+		position: absolute;
+		inset-block: 0;
+		inset-inline-start: 50%;
+		width: 1px;
+		background: var(--color-rule-2);
+		content: '';
+	}
+
+	.workspace-resizer:hover,
+	.workspace-resizer:focus-visible {
+		background: var(--color-accent-soft);
+		outline: none;
+	}
+
+	.workspace-resizer:focus-visible::after { background: var(--color-accent); }
+
+	@media (max-width: 59.999rem) {
+		.workspace-split.inspector-open {
+			grid-template-columns: minmax(0, 1fr);
+			grid-template-rows: minmax(10rem, var(--workspace-split)) var(--space-2xs) minmax(0, 1fr);
+		}
+
+		.workspace-pane {
+			border-inline-end: 0;
+			border-block-end: var(--rule-hair) solid var(--color-rule);
+		}
+
+		.workspace-resizer {
+			width: auto;
+			cursor: row-resize;
+		}
+
+		.workspace-resizer::after {
+			inset-block: 50% auto;
+			inset-inline: 0;
+			width: auto;
+			height: 1px;
+		}
+	}
+
 	.welcome {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
@@ -6017,6 +6194,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		border-block-end: var(--rule-hair) solid var(--color-rule);
 		font-size: var(--text-xs);
 	}
+
+	.goal-dismiss {
+		display: grid;
+		place-items: center;
+		flex: none;
+		width: var(--control-height-compact);
+		height: var(--control-height-compact);
+		margin-inline-start: auto;
+		padding: 0;
+		border: 0;
+		border-radius: var(--radius-input);
+		background: transparent;
+		color: var(--color-muted);
+		cursor: pointer;
+	}
+
+	.goal-dismiss svg { width: var(--space-sm); height: var(--space-sm); fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 2; }
+	.goal-dismiss:hover { background: var(--color-paper-3); color: var(--color-ink); }
 
 	.side-banner {
 		background: var(--color-warning-soft);

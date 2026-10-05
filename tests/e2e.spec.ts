@@ -679,6 +679,15 @@ test('Git changes viewer filters and renders a responsive Monaco diff', async ({
 	await expect(page.locator('.composer')).toBeVisible();
 
 	await page.locator('.files-trigger').click();
+	await expect(page.locator('.workspace-pane')).toBeVisible();
+	await expect(page.locator('.conversation-pane')).toBeVisible();
+	const filePaneRight = await page.locator('.workspace-pane').evaluate((node) => node.getBoundingClientRect().right);
+	const transcriptLeft = await page.locator('.transcript-frame').evaluate((node) => node.getBoundingClientRect().left);
+	expect(filePaneRight).toBeLessThan(transcriptLeft);
+	const resizer = page.getByRole('separator', { name: 'Resize file viewer and transcript' });
+	const splitBefore = Number(await resizer.getAttribute('aria-valuenow'));
+	await resizer.press('ArrowLeft');
+	await expect(resizer).toHaveAttribute('aria-valuenow', String(splitBefore - 2));
 	await page.getByRole('tab', { name: 'Changes' }).click();
 	await expect(page.locator('.git-viewer')).toBeVisible();
 	await expect(page.locator('.gv-branch')).toHaveText('feature/diff-viewer');
@@ -734,6 +743,8 @@ test('slash commands: /goal sets, shows, and clears the goal', async ({ page }) 
 	await expect(page.locator('.goal-tracker')).toContainText('Placeholder e2e goal (not an instruction)');
 	await expect(page.locator('.goal-tracker')).toContainText('active');
 	await expect(page.locator('.item.note').last()).toContainText('goal set');
+	await page.getByRole('button', { name: 'Close goal bar' }).click();
+	await expect(page.locator('.goal-tracker')).toHaveCount(0);
 
 	// /goal with no arguments reads and displays the current goal.
 	await ta.fill('/goal');
@@ -742,6 +753,7 @@ test('slash commands: /goal sets, shows, and clears the goal', async ({ page }) 
 		'goal: Placeholder e2e goal (not an instruction)',
 		{ timeout: 15_000 }
 	);
+	await expect(page.locator('.goal-tracker')).toHaveCount(0);
 
 	// /goal clear removes it.
 	await ta.fill('/goal clear');

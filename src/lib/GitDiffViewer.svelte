@@ -28,6 +28,7 @@
 		threadId,
 		cwd,
 		theme = 'light',
+		embedded = false,
 		reveal = null,
 		refreshNonce = 0,
 		onfiles,
@@ -37,6 +38,7 @@
 		threadId: string;
 		cwd: string;
 		theme?: 'light' | 'dark';
+		embedded?: boolean;
 		reveal?: { path: string; nonce: number } | null;
 		refreshNonce?: number;
 		onfiles: () => void;
@@ -301,7 +303,7 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
-<aside class="git-viewer" class:file-open={selectedPath !== null} aria-label="Git changes">
+<aside class="git-viewer" class:embedded class:file-open={selectedPath !== null} aria-label="Git changes">
 	<header class="gv-header">
 		<div class="gv-tabs" role="tablist" aria-label="Workspace inspector">
 			<button type="button" role="tab" aria-selected="false" onclick={onfiles}>Files</button>
@@ -415,6 +417,7 @@
 
 <style>
 	.git-viewer { position: fixed; inset-block: 0; inset-inline-end: 0; z-index: var(--z-dropdown); display: flex; flex-direction: column; width: min(64rem, 100%); border-inline-start: var(--rule-hair) solid var(--color-rule); background: var(--color-paper); box-shadow: var(--shadow-drawer); }
+	.git-viewer.embedded { position: absolute; inset: 0; z-index: 1; width: 100%; border: 0; box-shadow: none; }
 	.gv-header { display: flex; align-items: center; gap: var(--space-2xs); min-height: var(--rail-header-height); padding: calc(var(--space-3xs) + env(safe-area-inset-top)) var(--space-sm) var(--space-3xs); border-block-end: var(--rule-hair) solid var(--color-rule); }
 	.gv-tabs { display: flex; gap: var(--space-3xs); }
 	.gv-tabs button, .gv-scopes button, .gv-action { min-height: var(--control-height-compact); padding-inline: var(--space-xs); border: var(--rule-hair) solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-muted); cursor: pointer; font: inherit; font-size: var(--text-sm); }
