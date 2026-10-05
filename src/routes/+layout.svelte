@@ -176,6 +176,9 @@
 	let dismissedChoiceId = $state<string | null>(null);
 	let choiceCustomAnswer = $state('');
 	let choicePromptId = $state<string | null>(null);
+	let instantTooltip = $state<{ text: string; left: number; top: number } | null>(null);
+	let instantTooltipTarget: Element | null = null;
+	const internallyRemovedTitles = new WeakSet<Element>();
 	// Read-only file browser (FileBrowser.svelte), rooted at the session cwd.
 	let filesOpen = $state(false);
 	let filesReveal = $state<{ path: string; line: number | null; nonce: number } | null>(null);
@@ -3002,12 +3005,112 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (persist) localStorage.setItem('yacwu-theme', next);
 	}
 
+	function tooltipTargetFrom(target: EventTarget | null): Element | null {
+		return target instanceof Element ? target.closest('[data-yacwu-tooltip], [title]') : null;
+	}
+
+	function storeAndRemoveTitle(element: Element, title: string) {
+		if (title.trim()) element.setAttribute('data-yacwu-tooltip', title);
+		else element.removeAttribute('data-yacwu-tooltip');
+		internallyRemovedTitles.add(element);
+		element.removeAttribute('title');
+		window.setTimeout(() => internallyRemovedTitles.delete(element), 0);
+	}
+
+	function showInstantTooltip(target: Element | null) {
+		if (!target) return;
+		if (instantTooltipTarget && instantTooltipTarget !== target) hideInstantTooltip();
+		const nativeTitle = target.getAttribute('title');
+		const text = target.getAttribute('data-yacwu-tooltip') ?? nativeTitle;
+		if (!text?.trim()) return;
+		if (nativeTitle !== null) {
+			storeAndRemoveTitle(target, nativeTitle);
+		}
+		instantTooltipTarget = target;
+		const rect = target.getBoundingClientRect();
+		const width = Math.min(288, window.innerWidth - 16);
+		const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2));
+		const below = rect.bottom + 10;
+		const top = below + 90 < window.innerHeight ? below : Math.max(8, rect.top - 52);
+		const describedBy = new Set((target.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean));
+		describedBy.add('yacwu-instant-tooltip');
+		target.setAttribute('aria-describedby', [...describedBy].join(' '));
+		instantTooltip = { text, left, top };
+	}
+
+	function hideInstantTooltip(target?: Element | null) {
+		if (!instantTooltipTarget || (target && target !== instantTooltipTarget)) return;
+		const describedBy = (instantTooltipTarget.getAttribute('aria-describedby') ?? '')
+			.split(/\s+/).filter((id) => id && id !== 'yacwu-instant-tooltip');
+		if (describedBy.length) instantTooltipTarget.setAttribute('aria-describedby', describedBy.join(' '));
+		else instantTooltipTarget.removeAttribute('aria-describedby');
+		instantTooltipTarget = null;
+		instantTooltip = null;
+	}
+
+	function onTooltipPointerOver(event: PointerEvent) {
+		if (event.pointerType === 'touch') return;
+		const target = tooltipTargetFrom(event.target);
+		if (target && target !== instantTooltipTarget) showInstantTooltip(target);
+	}
+
+	function onTooltipPointerOut(event: PointerEvent) {
+		const from = tooltipTargetFrom(event.target);
+		const to = tooltipTargetFrom(event.relatedTarget);
+		if (from === instantTooltipTarget && to !== from) hideInstantTooltip(from);
+	}
+
+	function onTooltipFocusIn(event: FocusEvent) {
+		showInstantTooltip(tooltipTargetFrom(event.target));
+	}
+
+	function onTooltipFocusOut(event: FocusEvent) {
+		const from = tooltipTargetFrom(event.target);
+		const to = tooltipTargetFrom(event.relatedTarget);
+		if (from === instantTooltipTarget && to !== from) hideInstantTooltip(from);
+	}
+
+	function dismissTooltipOnViewportChange() {
+		hideInstantTooltip();
+	}
+
 	function toggleTheme() {
 		applyTheme(theme === 'dark' ? 'light' : 'dark');
 	}
 
 	onMount(() => {
 		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
+		const transferTitle = (element: Element) => {
+			const title = element.getAttribute('title');
+			if (title !== null) {
+				storeAndRemoveTitle(element, title);
+			} else if (!internallyRemovedTitles.has(element)) {
+				element.removeAttribute('data-yacwu-tooltip');
+			}
+		};
+		const transferTitleTree = (root: ParentNode) => {
+			if (root instanceof Element) transferTitle(root);
+			root.querySelectorAll('[title]').forEach(transferTitle);
+		};
+		transferTitleTree(document);
+		const tooltipObserver = new MutationObserver((records) => {
+			for (const record of records) {
+				if (record.type === 'attributes' && record.target instanceof Element) transferTitle(record.target);
+				for (const node of record.addedNodes) if (node instanceof Element) transferTitleTree(node);
+			}
+		});
+		tooltipObserver.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ['title'],
+			childList: true,
+			subtree: true
+		});
+		window.addEventListener('pointerover', onTooltipPointerOver);
+		window.addEventListener('pointerout', onTooltipPointerOut);
+		window.addEventListener('focusin', onTooltipFocusIn);
+		window.addEventListener('focusout', onTooltipFocusOut);
+		window.addEventListener('scroll', dismissTooltipOnViewportChange, true);
+		window.addEventListener('resize', dismissTooltipOnViewportChange);
 		try {
 			const savedOrder = JSON.parse(localStorage.getItem(SESSION_ORDER_KEY) ?? '[]');
 			if (Array.isArray(savedOrder)) sessionOrder = savedOrder.filter((id): id is string => typeof id === 'string');
@@ -3063,6 +3166,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		};
 		return () => {
 			es.close();
+			tooltipObserver.disconnect();
+			window.removeEventListener('pointerover', onTooltipPointerOver);
+			window.removeEventListener('pointerout', onTooltipPointerOut);
+			window.removeEventListener('focusin', onTooltipFocusIn);
+			window.removeEventListener('focusout', onTooltipFocusOut);
+			window.removeEventListener('scroll', dismissTooltipOnViewportChange, true);
+			window.removeEventListener('resize', dismissTooltipOnViewportChange);
 			clearInterval(accountUsageTimer);
 			if (archiveNoticeTimer) clearTimeout(archiveNoticeTimer);
 			if (agentCopyTimer) clearTimeout(agentCopyTimer);
@@ -4447,6 +4557,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	</div>
 {/if}
 
+{#if instantTooltip}
+	<div
+		id="yacwu-instant-tooltip"
+		class="instant-tooltip"
+		role="tooltip"
+		style={`left: ${instantTooltip.left}px; top: ${instantTooltip.top}px`}
+	>{instantTooltip.text}</div>
+{/if}
+
 {@render children()}
 
 <style>
@@ -4457,6 +4576,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	 * responsive: pass (34, 49) · icons: pass (30) · mobile: pass (34, 49, 50–57)
 	 */
 	@import '../../tokens.css';
+
+	.instant-tooltip {
+		position: fixed;
+		z-index: 10000;
+		width: max-content;
+		max-width: min(18rem, calc(100vw - 1rem));
+		padding: var(--space-2xs) var(--space-xs);
+		border: 1px solid var(--color-rule-2);
+		border-radius: var(--radius-card);
+		background: var(--color-paper-3);
+		box-shadow: var(--shadow-popover);
+		color: var(--color-ink);
+		font-size: var(--text-xs);
+		line-height: 1.4;
+		white-space: pre-line;
+		overflow-wrap: anywhere;
+		pointer-events: none;
+	}
 
 	:global(*) {
 		box-sizing: border-box;

@@ -85,6 +85,14 @@ test('dark mode is accessible and persists across reloads', async ({ page }) => 
 	await expect(page.locator('.theme-toggle')).toHaveAttribute('aria-label', 'Switch to light mode');
 });
 
+test('title hints use immediate chat-bubble tooltips', async ({ page }) => {
+	await page.goto('/');
+	const themeToggle = page.locator('.theme-toggle');
+	await expect(themeToggle).not.toHaveAttribute('title');
+	await themeToggle.focus();
+	await expect(page.getByRole('tooltip')).toHaveText('Switch to dark mode');
+});
+
 test('mobile drawer, compact header, composer growth, and archive undo remain usable', async ({ page }) => {
 	await page.setViewportSize({ width: 375, height: 780 });
 	await page.goto('/');
