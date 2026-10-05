@@ -25,7 +25,8 @@ state lives entirely in Codex's own persistent sessions, read back via
   elapsed time appears while work runs and on its completed response
 - 🤝 Multi-agent visibility: switch between the session and spawned agents,
   see which agents are active, and browse finished agents in a separate
-  Previous group; agent transcripts are read-only
+  Previous group; agent transcripts are read-only, and agent activity links
+  jump directly to the corresponding transcript
 - 🧠 Choose a model and reasoning effort per session. Model capability,
   usage-efficiency, and value indicators appear in the model choices; after
   selection, the picker shows only the model name. These are Yacwu display
@@ -34,10 +35,14 @@ state lives entirely in Codex's own persistent sessions, read back via
   choose one in a prompt dialog or enter a custom response
 - 📁 Workspace browser rooted at the session folder, with a Monaco text editor
   (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
-  links in assistant messages
+  links in assistant messages. The file and diff viewer state is kept per
+  session, and worktree-prefixed file links select the corresponding diff
 - ± Git changes inspector with All, Staged, and Unstaged scopes, added/removed
   line counts in both the inspector and transcript file-change entries, lazy
   unified diffs, and a resizable split view
+- 🖼️ Add images to prompts with the attach button or clipboard paste, preview
+  them before sending, and view image attachments and generated images inline
+  in messages
 - 🧭 Transcript position rail for jumping between messages in long sessions
 - ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
   prompt history with the Codex TUI's shell-style recall semantics
