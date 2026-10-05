@@ -22,6 +22,7 @@
 		agentRootId,
 		agentsForSession,
 		isSubAgentThread,
+		isAgentRunning,
 		mergeAgentThreadMeta,
 		trackAgentItem,
 		type AgentInfo,
@@ -89,9 +90,26 @@
 		models: ModelChoice[];
 	}
 
+	interface RateLimitWindow {
+		usedPercent: number;
+		windowDurationMins: number;
+		resetsAt: number;
+	}
+
+	interface AccountUsage {
+		fiveHour: RateLimitWindow | null;
+	sevenDay: RateLimitWindow | null;
+	}
+
 	interface ProfileChoice {
 		name: string;
 		model: string | null;
+	}
+
+	interface DirectoryChoice {
+		name: string;
+		kind: 'dir' | 'file' | 'other';
+		symlink: boolean;
 	}
 
 	type RenderPart =
@@ -114,18 +132,23 @@
 	let hostDefaultCwds = $state<Record<string, string>>({});
 	let sessionsLoaded = $state(false);
 	let threads = $state<Record<string, ThreadState>>({});
+	let sessionHistoryLoaded = $state<Record<string, boolean>>({});
+	let sessionOpening = $state<Record<string, boolean>>({});
+	let interruptedSessions = $state<Record<string, boolean>>({});
+	let recoveringSessions = $state<Record<string, boolean>>({});
+	let startupRecoveryComplete = $state(false);
 	let sessionConfigs = $state<Record<string, { model: string; effort: string; profile: string | null }>>({});
 	let fastSessions = $state<Record<string, boolean>>({});
 	let input = $state('');
 	let selectedImages = $state<SelectedImage[]>([]);
 	let sendingMessage = $state(false);
 	let connected = $state(false);
-	let loadingHistory = $state(false);
 	let cwds = $state<Record<string, string>>({});
 	let conflict = $state<{ id: string; holders: { pid: number; command: string }[] } | null>(null);
 	let mobileSidebarOpen = $state(false);
 	let mobileViewport = $state(false);
 	let desktopSidebarHidden = $state(false);
+	let theme = $state<'light' | 'dark'>('light');
 	let unseenActivity = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
@@ -141,11 +164,15 @@
 	let imageInputEl = $state<HTMLInputElement | null>(null);
 	let composerTextareaEl = $state<HTMLTextAreaElement | null>(null);
 	// Reasoning efforts offered by the active session's model (thread /model).
+	let sessionModels = $state<Record<string, ModelChoice[]>>({});
 	let modelEfforts = $state<Record<string, string[]>>({});
+	let modelPending = $state(false);
 	let effortPending = $state(false);
+	let accountUsageByHost = $state<Record<string, AccountUsage>>({});
+	let accountUsageFetchedAt = $state<Record<string, number>>({});
+	let accountUsagePending = $state<Record<string, boolean>>({});
 	// Sub-agent threads spawned by sessions (multi-agent collaboration).
 	let agents = $state<AgentRegistry>({});
-	let agentMenuOpen = $state(false);
 	let agentHistoryLoading = $state(false);
 	// Agent threads whose metadata (nickname/role) was already requested.
 	const agentMetaFetched = new Set<string>();
@@ -155,6 +182,8 @@
 	let commandOutputExpanded = $state<Record<string, boolean>>({});
 	// Per-message toggle between rendered and raw Markdown for Codex replies.
 	let agentRawShown = $state<Record<string, boolean>>({});
+	let agentCopyStatus = $state<Record<string, 'copied' | 'failed'>>({});
+	let agentCopyTimer: ReturnType<typeof setTimeout> | null = null;
 	// Touch devices have no hover: a tap on a message stands in for it,
 	// revealing that message's raw-Markdown toggle until a tap elsewhere.
 	let hoverPointer = $state(true);
@@ -167,16 +196,39 @@
 	const COMMAND_OUTPUT_COLLAPSE_LINES = 10;
 	const COMMAND_OUTPUT_COLLAPSE_CHARS = 1200;
 	const FAST_SESSIONS_KEY = 'yacwu-fast-sessions';
+	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
+	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
+	let runningTasks: Record<string, string> = {};
 	let archiveNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// The active session is whatever is in the URL (/s/<id>); / shows the welcome.
 	const activeId = $derived(page.params.id ?? null);
 	const active = $derived(activeId ? threads[activeId] : null);
 	const activeSummary = $derived(sessions.find((s) => s.id === activeId) ?? null);
+	const originalPrompt = $derived.by(() => {
+		const firstUserMessage = itemsOf(active).find((item) => item.type === 'userMessage') as any;
+		return (firstUserMessage?.content ?? [])
+			.map((part: any) => typeof part?.text === 'string' ? part.text : '')
+			.join(' ')
+			.replace(/\s+/g, ' ')
+			.trim();
+	});
+	const sessionContextLine = $derived(activeSummary?.name?.trim() || originalPrompt);
+	const sessionContextTitle = $derived.by(() => {
+		if (activeSummary?.name?.trim() && originalPrompt && activeSummary.name.trim() !== originalPrompt) {
+			return `Session: ${activeSummary.name.trim()}\nOriginal prompt: ${originalPrompt}`;
+		}
+		return originalPrompt || activeSummary?.name || '';
+	});
 	const activeConfig = $derived(activeId ? sessionConfigs[activeId] : null);
+	const activeModels = $derived(activeId ? (sessionModels[activeId] ?? []) : []);
 	const activeEfforts = $derived(activeId ? (modelEfforts[activeId] ?? []) : []);
+	const activeModelChoice = $derived(
+		activeConfig ? (activeModels.find((choice) => choice.id === activeConfig.model) ?? null) : null
+	);
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
+	const activeAccountUsage = $derived(accountUsageByHost[activeHost] ?? null);
 	const activeHostState = $derived(
 		activeRemote ? (hostStates[activeHost] ?? 'connected') : 'connected'
 	);
@@ -196,31 +248,12 @@
 	// ?agent= query param) shows its transcript read-only; the session itself
 	// stays the URL's identity, so the rail selection never moves.
 	const activeAgents = $derived(activeId ? agentsForSession(agents, activeId) : []);
+	const currentAgents = $derived(activeAgents.filter((agent) => agentIsRunning(agent)));
+	const previousAgents = $derived(activeAgents.filter((agent) => !agentIsRunning(agent)));
 	const viewedAgentId = $derived(activeId ? page.url.searchParams.get('agent') : null);
 	const viewedId = $derived(viewedAgentId ?? activeId);
 	const viewed = $derived(viewedId ? (threads[viewedId] ?? null) : null);
 	const viewedAgent = $derived(viewedAgentId ? (agents[viewedAgentId] ?? null) : null);
-	// The header shows at most 5 agents; the rest live behind a menu. Running
-	// agents take the visible slots first (spawn order within each group),
-	// and a selected agent from the overflow swaps into the last visible slot
-	// so the current-location mark is always in view.
-	const AGENT_ROW_MAX = 5;
-	const headerAgents = $derived.by(() => {
-		if (activeAgents.length <= AGENT_ROW_MAX) return { visible: activeAgents, overflow: [] };
-		const ranked = [
-			...activeAgents.filter((agent) => agentIsRunning(agent)),
-			...activeAgents.filter((agent) => !agentIsRunning(agent))
-		];
-		const visible = ranked.slice(0, AGENT_ROW_MAX);
-		const overflow = ranked.slice(AGENT_ROW_MAX);
-		const selected = overflow.findIndex((agent) => agent.id === viewedAgentId);
-		if (selected >= 0) {
-			const swap = visible[AGENT_ROW_MAX - 1];
-			visible[AGENT_ROW_MAX - 1] = overflow[selected];
-			overflow[selected] = swap;
-		}
-		return { visible, overflow };
-	});
 	// Slash-command autocomplete: offered while the composer holds a bare
 	// command token ("/…" with no whitespace or newline yet), mirroring the
 	// codex TUI's command popup. Esc hides it until the token changes.
@@ -265,6 +298,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let creating = $state(false);
 	let createError = $state<string | null>(null);
 	let newCwd = $state('');
+	let cwdBrowseOpen = $state(false);
+	let cwdBrowsePath = $state('');
+	let cwdBrowseEntries = $state<DirectoryChoice[]>([]);
+	let showHiddenDirectories = $state(false);
+	let cwdBrowseLoading = $state(false);
+	let cwdBrowseError = $state<string | null>(null);
+	const visibleCwdBrowseEntries = $derived(
+		cwdBrowseEntries.filter((entry) => showHiddenDirectories || !entry.name.startsWith('.'))
+	);
 	let newProfile = $state('');
 	let profileChoices = $state<ProfileChoice[]>([]);
 	let defaultCwd = $state('');
@@ -277,6 +319,38 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	const virtualTranscript = $derived(
 		virtualizeItems(viewedItems, transcriptScrollTop, transcriptViewportHeight, transcriptHeightVersion)
 	);
+	const transcriptJumpPoints = $derived.by(() => {
+		const total = Math.max(1, virtualTranscript.total);
+		let offset = 0;
+		const points: { id: string; index: number; offset: number; top: number; label: string }[] = [];
+		for (let index = 0; index < viewedItems.length; index += 1) {
+			const item = viewedItems[index];
+			if (item.type === 'userMessage') {
+				const rawText = ((item as any).content ?? [])
+					.map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+					.join(' ')
+					.trim();
+				points.push({
+					id: String((item as any).id ?? index),
+					index,
+					offset,
+					top: Math.max(2, Math.min(98, (offset / total) * 100)),
+					label: truncateText(rawText || 'User message', 72)
+				});
+			}
+			offset += measuredRowHeight(item);
+		}
+		return points;
+	});
+	const activeTranscriptPointId = $derived.by(() => {
+		const readingLine = transcriptScrollTop + Math.min(120, transcriptViewportHeight * 0.25);
+		let current: string | null = transcriptJumpPoints[0]?.id ?? null;
+		for (const point of transcriptJumpPoints) {
+			if (point.offset > readingLine) break;
+			current = point.id;
+		}
+		return current;
+	});
 
 	function ensureThread(id: string): ThreadState {
 		if (!threads[id]) {
@@ -382,6 +456,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function removeSession(id: string) {
 		sessions = sessions.filter((s) => s.id !== id);
+		if (interruptedSessions[id]) {
+			delete interruptedSessions[id];
+			persistInterruptedSessions();
+		}
 		for (const agent of Object.values(agents)) {
 			if (agentRootId(agents, agent) === id) {
 				delete agents[agent.id];
@@ -390,6 +468,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 		delete threads[id];
 		delete sessionConfigs[id];
+		delete sessionModels[id];
+		delete modelEfforts[id];
 		delete fastSessions[id];
 		persistFastSessions();
 		delete cwds[id];
@@ -408,6 +488,75 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			FAST_SESSIONS_KEY,
 			JSON.stringify(Object.keys(fastSessions).filter((id) => fastSessions[id]))
 		);
+	}
+
+	function persistRunningTasks() {
+		localStorage.setItem(RUNNING_TASKS_KEY, JSON.stringify(runningTasks));
+	}
+
+	function persistInterruptedSessions() {
+		localStorage.setItem(
+			INTERRUPTED_SESSIONS_KEY,
+			JSON.stringify(Object.keys(interruptedSessions).filter((id) => interruptedSessions[id]))
+		);
+	}
+
+	function markTaskStarted(threadId: string) {
+		const agent = agents[threadId];
+		const sessionId = agent ? agentRootId(agents, agent) : threadId;
+		runningTasks[threadId] = sessionId;
+		delete recoveringSessions[sessionId];
+		if (interruptedSessions[sessionId]) {
+			delete interruptedSessions[sessionId];
+			persistInterruptedSessions();
+		}
+		persistRunningTasks();
+	}
+
+	function markTaskCompleted(threadId: string) {
+		const sessionId = runningTasks[threadId];
+		delete runningTasks[threadId];
+		if (sessionId) delete recoveringSessions[sessionId];
+		persistRunningTasks();
+	}
+
+	async function reconcileInterruptedSessions() {
+		const checking = new Set<string>();
+		try {
+			const rawRunning = JSON.parse(localStorage.getItem(RUNNING_TASKS_KEY) ?? '{}');
+			const previouslyRunning = rawRunning && typeof rawRunning === 'object' && !Array.isArray(rawRunning)
+				? rawRunning as Record<string, string>
+				: {};
+			runningTasks = { ...previouslyRunning };
+			const rawInterrupted = JSON.parse(localStorage.getItem(INTERRUPTED_SESSIONS_KEY) ?? '[]');
+			if (Array.isArray(rawInterrupted)) {
+				for (const id of rawInterrupted) if (typeof id === 'string') interruptedSessions[id] = true;
+			}
+			for (const sessionId of Object.values(previouslyRunning)) {
+				if (typeof sessionId === 'string' && !interruptedSessions[sessionId]) {
+					recoveringSessions[sessionId] = true;
+					checking.add(sessionId);
+				}
+			}
+			if (Object.keys(previouslyRunning).length === 0) return;
+			const response = await fetch('/api/threads/loaded');
+			if (!response.ok) return;
+			const data = await response.json();
+			const loaded = new Set<string>(Array.isArray(data.data) ? data.data : []);
+			const stillRunning: Record<string, string> = {};
+			for (const [threadId, sessionId] of Object.entries(previouslyRunning)) {
+				if (loaded.has(threadId)) stillRunning[threadId] = sessionId;
+				else if (typeof sessionId === 'string') interruptedSessions[sessionId] = true;
+			}
+			for (const sessionId of checking) delete recoveringSessions[sessionId];
+			runningTasks = stillRunning;
+			persistRunningTasks();
+			persistInterruptedSessions();
+		} catch {
+			// Keep the saved markers intact if storage or the backend is unavailable.
+		} finally {
+			for (const sessionId of checking) delete recoveringSessions[sessionId];
+		}
 	}
 
 	function setFastSession(id: string, enabled: boolean) {
@@ -481,7 +630,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				// thread/read, the reconciliation source of truth.
 				if (hostStates[host] === 'connected' && previous && previous !== 'connected') {
 					void loadSessions();
-					if (activeId && sessionHost(activeId) === host) void openSession(activeId, false);
+					if (activeId && sessionHost(activeId) === host) {
+						sessionHistoryLoaded[activeId] = false;
+						void openSession(activeId, false);
+					}
 				}
 				break;
 			}
@@ -510,8 +662,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				else void loadSessions();
 				break;
 			}
+			case 'thread/name/updated': {
+				if (tid && typeof p.name === 'string') {
+					sessions = sessions.map((session) => session.id === tid ? { ...session, name: p.name } : session);
+				}
+				break;
+			}
 			case 'turn/started': {
 				if (tid) {
+					markTaskStarted(tid);
 					const t = ensureThread(tid);
 					t.status = 'running';
 					t.turnId = p.turn?.id ?? null;
@@ -522,6 +681,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 			case 'turn/completed': {
 				if (tid) {
+					markTaskCompleted(tid);
 					const t = ensureThread(tid);
 					t.status = 'idle';
 					t.turnId = null;
@@ -688,6 +848,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (isTranscriptAtBottom()) unseenActivity = false;
 	}
 
+	function jumpToTranscriptPoint(index: number) {
+		if (!transcriptEl) return;
+		let offset = 0;
+		for (let i = 0; i < index && i < viewedItems.length; i += 1) {
+			offset += measuredRowHeight(viewedItems[i]);
+		}
+		transcriptEl.scrollTop = offset;
+		updateTranscriptViewport();
+	}
+
 	function measureTranscriptRow(node: HTMLElement, key: string) {
 		const measure = () => {
 			const next = node.getBoundingClientRect().height;
@@ -768,6 +938,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function startCreating() {
 		createError = null;
 		newCwd = '';
+		cwdBrowseOpen = false;
+		cwdBrowsePath = '';
+		cwdBrowseEntries = [];
+		showHiddenDirectories = false;
+		cwdBrowseError = null;
 		newProfile = '';
 		newHost = LOCAL_HOST;
 		creating = true;
@@ -830,11 +1005,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function onWindowKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape' && agentMenuOpen) {
-			event.preventDefault();
-			agentMenuOpen = false;
-			return;
-		}
 		if (!mobileViewport || !mobileSidebarOpen) return;
 		if (event.key === 'Escape') {
 			event.preventDefault();
@@ -899,10 +1069,47 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function onNewHostChange() {
 		createError = null;
 		newProfile = '';
+		cwdBrowseOpen = false;
+		cwdBrowsePath = '';
 		void loadProfileChoices(newHost);
 		if (isRemoteHost(newHost) && hostDefaultCwds[newHost] === undefined) {
 			void loadHostSessions(newHost);
 		}
+	}
+
+	function directoryParent(path: string): string {
+		const normalized = path.replace(/[\\/]+$/, '');
+		const slash = normalized.lastIndexOf('/');
+		if (slash <= 0) return normalized.startsWith('/') ? '/' : normalized;
+		return normalized.slice(0, slash);
+	}
+
+	async function browseDirectories(path?: string) {
+		cwdBrowseOpen = true;
+		cwdBrowseLoading = true;
+		cwdBrowseError = null;
+		try {
+			const params = new URLSearchParams();
+			if (isRemoteHost(newHost)) params.set('host', newHost);
+			const requested = path ?? (newCwd.trim() || (isRemoteHost(newHost) ? hostDefaultCwds[newHost] : defaultCwd));
+			if (requested) params.set('path', requested);
+			const res = await fetch(`/api/directories?${params.toString()}`);
+			const data = await res.json();
+			if (!res.ok) throw new Error(data.error ?? 'Could not list this directory');
+			cwdBrowsePath = data.path ?? '';
+			cwdBrowseEntries = (data.entries ?? []).filter((entry: DirectoryChoice) => entry.kind === 'dir');
+		} catch (error) {
+			cwdBrowseError = error instanceof Error ? error.message : 'Could not list this directory';
+			cwdBrowseEntries = [];
+		} finally {
+			cwdBrowseLoading = false;
+		}
+	}
+
+	function selectBrowseDirectory(path = cwdBrowsePath) {
+		newCwd = path;
+		cwdBrowseOpen = false;
+		cwdInputEl?.focus();
 	}
 
 	async function newSession(cwd?: string) {
@@ -947,13 +1154,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			composerHistories.get(id)?.resetNavigation();
 			slashDismissedToken = null;
 			void loadSessionConfig(id);
-			const t = ensureThread(id);
-			if (t.order.length > 0) {
+			ensureThread(id);
+			if (sessionHistoryLoaded[id] || sessionOpening[id]) {
 				scrollToBottom();
 				return;
 			}
 			openSession(id, false);
 		});
+	});
+
+	$effect(() => {
+		const id = activeId;
+		const host = activeHost;
+		if (!id) return;
+		untrack(() => void loadAccountUsage(host));
 	});
 
 	async function loadSessionConfig(id: string) {
@@ -979,14 +1193,41 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		};
 	}
 
-	/** Cache the reasoning efforts the session's current model accepts. */
+	/** Cache the catalog and reasoning efforts the session's current model accepts. */
 	function rememberEfforts(id: string, settings: ModelState) {
+		sessionModels[id] = settings.models;
 		const choice = settings.models.find((m) => m.id === settings.model);
 		modelEfforts[id] = choice?.efforts ?? [];
 	}
 
 	function effortLabel(effort: string): string {
 		return effort.charAt(0).toUpperCase() + effort.slice(1);
+	}
+
+	/** Composer model picker: the server preserves a compatible effort or uses the model default. */
+	async function setComposerModel(select: HTMLSelectElement) {
+		const id = activeId;
+		const current = id ? sessionConfigs[id]?.model : null;
+		const model = select.value;
+		if (!id || !current || model === current) return;
+		modelPending = true;
+		try {
+			const { ok, data } = await postCmd(id, 'model', { model });
+			if (ok) {
+				const settings = data as ModelState;
+				sessionConfigs[id] = {
+					model: settings.model,
+					effort: settings.effort,
+					profile: sessionConfigs[id]?.profile ?? null
+				};
+				rememberEfforts(id, settings);
+			} else {
+				select.value = current;
+				addLocalNote(id, data.error ?? 'failed to change model', 'err');
+			}
+		} finally {
+			modelPending = false;
+		}
 	}
 
 	/** Composer effort picker: same thread /model call as `/model --effort`. */
@@ -999,11 +1240,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		try {
 			const { ok, data } = await postCmd(id, 'model', { effort });
 			if (ok) {
+				const settings = data as ModelState;
 				sessionConfigs[id] = {
-					model: data.model,
-					effort: data.effort,
+					model: settings.model,
+					effort: settings.effort,
 					profile: sessionConfigs[id]?.profile ?? null
 				};
+				rememberEfforts(id, settings);
 			} else {
 				select.value = current;
 				addLocalNote(id, data.error ?? 'failed to change reasoning effort', 'err');
@@ -1014,7 +1257,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function openSession(id: string, force: boolean) {
-		loadingHistory = true;
+		if (sessionHistoryLoaded[id] || sessionOpening[id]) return;
+		sessionOpening[id] = true;
 		try {
 			const res = await fetch(threadApi(id, '/open'), {
 				method: 'POST',
@@ -1026,15 +1270,32 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				conflict = { id, holders: data.holders ?? [] };
 				return;
 			}
+			if (!res.ok) throw new Error(data.error ?? `Could not load session history (${res.status})`);
 			conflict = null;
 			const thr = data.thread;
 			if (thr?.cwd) cwds[id] = thr.cwd;
 			if ('serviceTier' in data) setFastSession(id, data.serviceTier === 'priority');
+			const runtimeStatus = thr?.status?.type;
+			if (runtimeStatus === 'active') ensureThread(id).status = 'running';
+			else if (runtimeStatus === 'idle' || runtimeStatus === 'notLoaded') ensureThread(id).status = 'idle';
+			if (runtimeStatus === 'notLoaded' && Object.values(runningTasks).includes(id)) {
+				interruptedSessions[id] = true;
+				delete recoveringSessions[id];
+				persistInterruptedSessions();
+			}
 			// Only sync the transcript when the server actually returned history.
 			// A failed open (e.g. a brand-new thread with no rollout yet) must not
 			// wipe locally rendered items — the response can arrive late, after
 			// the user has already run slash commands in this session.
-			if (thr) replaceItems(id, thr.turns ?? []);
+			if (thr) {
+				// Notifications may arrive before thread/read returns. Load the saved
+				// rollout first, then merge those live items back so history is not
+				// replaced by a partial stream snapshot.
+				const liveItems = itemsOf(ensureThread(id));
+				replaceItems(id, thr.turns ?? []);
+				for (const item of liveItems) upsertItem(id, item as ThreadItem & { id: string });
+			}
+			sessionHistoryLoaded[id] = true;
 			// Surface any persisted goal for this session.
 			fetch(threadApi(id, '/goal'))
 				.then((r) => r.json())
@@ -1042,8 +1303,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					ensureThread(id).goal = (g?.goal ?? null) as Goal | null;
 				})
 				.catch(() => {});
+		} catch (error) {
+			addLocalNote(id, error instanceof Error ? error.message : 'Could not load session history', 'err');
 		} finally {
-			loadingHistory = false;
+			delete sessionOpening[id];
 			scrollToBottom();
 		}
 	}
@@ -1079,7 +1342,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	/** Select an agent's transcript; selecting it again returns to the session. */
 	function toggleAgent(agentId: string) {
-		agentMenuOpen = false;
 		goto(agentHref(viewedAgentId === agentId ? null : agentId));
 	}
 
@@ -1148,8 +1410,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	});
 
 	function agentIsRunning(agent: AgentInfo): boolean {
-		if (agent.closed) return false;
-		return threads[agent.id]?.status === 'running' || agent.state === 'running';
+		return isAgentRunning(agent, threads[agent.id]?.status);
 	}
 
 	function agentStateLabel(agent: AgentInfo): string {
@@ -1171,10 +1432,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
 	}
 
-	async function sendMessageRequest(id: string, text: string, images: File[]): Promise<Response> {
+	async function sendMessageRequest(id: string, text: string, images: File[], turnId: string | null): Promise<Response> {
 		if (images.length > 0) {
 			const body = new FormData();
 			body.set('text', text);
+			if (turnId) body.set('turnId', turnId);
 			for (const image of images) body.append('images', image, image.name);
 			return fetch(threadApi(id, '/message'), { method: 'POST', body });
 		}
@@ -1182,14 +1444,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return fetch(threadApi(id, '/message'), {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ text })
+			body: JSON.stringify({ text, ...(turnId ? { turnId } : {}) })
 		});
 	}
 
-	async function sendMessageWithRetries(id: string, text: string, images: File[]): Promise<Response> {
+	async function sendMessageWithRetries(id: string, text: string, images: File[], turnId: string | null = null): Promise<Response> {
 		for (let attempt = 0; ; attempt += 1) {
 			try {
-				return await sendMessageRequest(id, text, images);
+				return await sendMessageRequest(id, text, images, turnId);
 			} catch (err) {
 				if (!isFailedFetch(err) || attempt >= SEND_FETCH_RETRIES) throw err;
 				await retryDelay(attempt);
@@ -1220,7 +1482,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		sendingMessage = true;
 		const echoId = addLocalUserMessage(id, text);
 		try {
-			const res = await sendMessageWithRetries(id, text, images);
+			const res = await sendMessageWithRetries(id, text, images, t.status === 'running' ? t.turnId : null);
 
 			if (!res.ok) {
 				const data = await res.json().catch(() => ({}));
@@ -1277,6 +1539,40 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (mins % 1440 === 0) return `${mins / 1440}d`;
 		if (mins % 60 === 0) return `${mins / 60}h`;
 		return `${mins}m`;
+	}
+
+	function remainingPercent(window: RateLimitWindow): string {
+		const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
+		return Number.isInteger(remaining) ? String(remaining) : remaining.toFixed(1);
+	}
+
+	async function loadAccountUsage(host: string, force = false) {
+		const key = host || LOCAL_HOST;
+		const lastFetched = accountUsageFetchedAt[key] ?? 0;
+		if (accountUsagePending[key] || (!force && Date.now() - lastFetched < 120_000)) return;
+		accountUsagePending[key] = true;
+		try {
+			const res = await fetch(`/api/account${hostQuery(key)}`);
+			if (!res.ok) throw new Error('account rate limits unavailable');
+			const data = await res.json();
+			const windows = Object.values(data.rateLimits ?? {}).filter(
+				(value): value is RateLimitWindow =>
+					Boolean(value) &&
+					typeof value === 'object' &&
+					typeof (value as RateLimitWindow).usedPercent === 'number' &&
+					typeof (value as RateLimitWindow).windowDurationMins === 'number' &&
+					typeof (value as RateLimitWindow).resetsAt === 'number'
+			);
+			accountUsageByHost[key] = {
+				fiveHour: windows.find((window) => window.windowDurationMins === 300) ?? null,
+				sevenDay: windows.find((window) => window.windowDurationMins === 10_080) ?? null
+			};
+			accountUsageFetchedAt[key] = Date.now();
+		} catch {
+			// Keep the last known values if a refresh briefly fails.
+		} finally {
+			accountUsagePending[key] = false;
+		}
 	}
 
 	function fmtTokens(tokens: number): string {
@@ -1658,11 +1954,44 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function interrupt() {
 		if (!activeId) return;
 		const t = threads[activeId];
-		await fetch(threadApi(activeId, '/interrupt'), {
+		const response = await fetch(threadApi(activeId, '/interrupt'), {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ turnId: t?.turnId })
 		});
+		if (response.ok) markTaskCompleted(activeId);
+	}
+
+	async function playInterruptedSession() {
+		const id = activeId;
+		if (!id || !interruptedSessions[id] || sendingMessage) return;
+		const continuation =
+			'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
+		sendingMessage = true;
+		try {
+			await openSession(id, false);
+			if (conflict?.id === id) return;
+			const thread = ensureThread(id);
+			thread.status = 'running';
+			const echoId = addLocalUserMessage(id, continuation);
+			try {
+				const response = await sendMessageWithRetries(id, continuation, []);
+				if (!response.ok) {
+					const data = await response.json().catch(() => ({}));
+					throw new Error(data.error ?? `Could not continue session (${response.status})`);
+				}
+				delete interruptedSessions[id];
+				persistInterruptedSessions();
+			} catch (error) {
+				thread.status = 'idle';
+				removeLocalItem(id, echoId);
+				addLocalNote(id, error instanceof Error ? error.message : 'Could not continue session', 'err');
+			}
+		} catch (error) {
+			addLocalNote(id, error instanceof Error ? error.message : 'Could not reopen session', 'err');
+		} finally {
+			sendingMessage = false;
+		}
 	}
 
 	function showArchiveNotice(notice: ArchiveNotice, duration = 8000) {
@@ -1672,6 +2001,27 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			archiveNotice = null;
 			archiveNoticeTimer = null;
 		}, duration);
+	}
+
+	async function renameSession(id: string) {
+		const session = sessions.find((entry) => entry.id === id);
+		if (!session || isSideChat(session)) return;
+		const name = window.prompt('Rename session', session.name ?? shortLabel(session));
+		if (name === null) return;
+		const trimmed = name.trim();
+		if (!trimmed || trimmed === session.name) return;
+		try {
+			const response = await fetch(threadApi(id, '/name'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name: trimmed })
+			});
+			const data = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(data.error ?? 'Could not rename session');
+			sessions = sessions.map((entry) => entry.id === id ? { ...entry, name: trimmed } : entry);
+		} catch (error) {
+			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not rename session' }, 6000);
+		}
 	}
 
 	async function deleteSession(id: string) {
@@ -1913,7 +2263,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			newSession(newCwd.trim() || undefined);
 		} else if (e.key === 'Escape') {
 			e.preventDefault();
-			cancelCreating();
+			if (cwdBrowseOpen) cwdBrowseOpen = false;
+			else cancelCreating();
 		}
 	}
 
@@ -2178,6 +2529,51 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return 'In progress';
 	}
 
+	function currentWorkDescription(items: ThreadItem[]): string {
+		let latestUserIndex = 0;
+		for (let i = items.length - 1; i >= 0; i -= 1) {
+			if (items[i].type === 'userMessage') {
+				latestUserIndex = i;
+				break;
+			}
+		}
+
+		for (let i = items.length - 1; i >= 0; i -= 1) {
+			if (i < latestUserIndex) break;
+			const item = items[i] as any;
+			if (item.type === 'commandExecution' && item.status === 'inProgress') {
+				return `Running ${truncateText(displayCommand(item.command), 120)}`;
+			}
+			if (item.type === 'collabAgentToolCall' && item.status === 'inProgress') {
+				return `Delegating: ${truncateText(collabSummary(item), 110)}`;
+			}
+			if (item.type === 'mcpToolCall' && item.status === 'inProgress') {
+				const tool = [item.server, item.tool].filter(Boolean).join(' · ');
+				return `Using ${truncateText(tool || 'a connected tool', 120)}`;
+			}
+			if (item.type === 'dynamicToolCall' && item.status === 'inProgress') {
+				return `Using ${truncateText(String(item.tool || 'an app tool'), 120)}`;
+			}
+			if (item.type === 'fileChange' && item.status === 'inProgress') {
+				const paths = (item.changes ?? []).map((change: any) => displayFileChangePath(change)).filter(Boolean);
+				const detail = paths.length > 1 ? `${paths[0]} and ${paths.length - 1} more` : paths[0];
+				return `Editing${detail ? ` ${truncateText(detail, 110)}` : ' files'}`;
+			}
+			if (item.type === 'plan' && Array.isArray(item.plan)) {
+				const step = [...item.plan].reverse().find((entry: any) => entry.status === 'inProgress');
+				if (step?.step) return `Plan step: ${truncateText(step.step, 120)}`;
+			}
+			if (item.type === 'webSearch') {
+				const search = webSearchPresentation(item);
+				return truncateText([search.label, search.detail].filter(Boolean).join(' '), 140);
+			}
+			if (item.type === 'agentMessage' && item.phase === 'commentary' && item.text?.trim()) {
+				return truncateText(item.text.trim(), 140);
+			}
+		}
+		return 'No concrete activity update yet';
+	}
+
 	function commandOutput(item: any): string {
 		return String(item._out || item.aggregatedOutput || '');
 	}
@@ -2200,6 +2596,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		agentRawShown[key] = !agentRawShown[key];
 	}
 
+	async function copyAgentResponse(item: any) {
+		const key = agentRawKey(item);
+		try {
+			await navigator.clipboard.writeText(String(item.text ?? ''));
+			agentCopyStatus[key] = 'copied';
+		} catch {
+			agentCopyStatus[key] = 'failed';
+		}
+		if (agentCopyTimer) clearTimeout(agentCopyTimer);
+		agentCopyTimer = setTimeout(() => {
+			delete agentCopyStatus[key];
+			agentCopyTimer = null;
+		}, 1800);
+	}
+
 	function agentTime(item: any): { label: string; iso: string; full: string } | null {
 		const at = (item as any)._at;
 		if (typeof at !== 'number') return null;
@@ -2218,7 +2629,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function onWindowClick(e: MouseEvent) {
 		const target = e.target as Element | null;
-		if (agentMenuOpen && !target?.closest?.('.agent-overflow')) agentMenuOpen = false;
 		if (hoverPointer || tappedAgentKey === null) return;
 		if (!target?.closest?.('.item.agent')) tappedAgentKey = null;
 	}
@@ -2356,7 +2766,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}));
 	}
 
+	function applyTheme(next: 'light' | 'dark', persist = true) {
+		theme = next;
+		document.documentElement.dataset.theme = next;
+		document
+			.querySelector('meta[name="theme-color"]')
+			?.setAttribute('content', next === 'dark' ? '#25221f' : '#faf8f1');
+		if (persist) localStorage.setItem('yacwu-theme', next);
+	}
+
+	function toggleTheme() {
+		applyTheme(theme === 'dark' ? 'light' : 'dark');
+	}
+
 	onMount(() => {
+		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
 		const mobileQuery = window.matchMedia('(max-width: 59.999rem)');
 		const updateMobileViewport = () => {
 			mobileViewport = mobileQuery.matches;
@@ -2383,7 +2807,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		updateMobileViewport();
 		mobileQuery.addEventListener('change', updateMobileViewport);
 
+		void reconcileInterruptedSessions().finally(() => (startupRecoveryComplete = true));
 		loadSessions();
+		const accountUsageTimer = setInterval(() => {
+			if (activeId) void loadAccountUsage(activeHost, true);
+		}, 5 * 60 * 1000);
 		const es = new EventSource('/api/events');
 		es.onopen = () => (connected = true);
 		es.onerror = () => (connected = false);
@@ -2392,6 +2820,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const msg = JSON.parse(e.data) as JsonRpcNotification;
 				if (msg.method === 'yacwu/connected') {
 					connected = true;
+					void reconcileInterruptedSessions();
 					return;
 				}
 				handleNotification(msg);
@@ -2401,7 +2830,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		};
 		return () => {
 			es.close();
+			clearInterval(accountUsageTimer);
 			if (archiveNoticeTimer) clearTimeout(archiveNoticeTimer);
+			if (agentCopyTimer) clearTimeout(agentCopyTimer);
 			mobileQuery.removeEventListener('change', updateMobileViewport);
 			hoverQuery.removeEventListener('change', updateHoverPointer);
 		};
@@ -2409,6 +2840,27 @@ Do not modify files, source, git state, permissions, configuration, or any other
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} onclick={onWindowClick} />
+
+{#snippet themeToggle(className = '')}
+	<button
+		class={`theme-toggle ${className}`}
+		type="button"
+		onclick={toggleTheme}
+		aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+		title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+	>
+		{#if theme === 'dark'}
+			<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+				<circle cx="12" cy="12" r="4" />
+				<path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41" />
+			</svg>
+		{:else}
+			<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+				<path d="M20.25 15.3A8.5 8.5 0 0 1 8.7 3.75 8.5 8.5 0 1 0 20.25 15.3Z" />
+			</svg>
+		{/if}
+	</button>
+{/snippet}
 
 {#snippet fastMark()}
 	<span class="fast-mark" role="img" aria-label="Fast mode enabled" title="Fast mode enabled">
@@ -2576,6 +3028,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				{/if}
 			</svg>
 		</button>
+		{@render themeToggle('welcome-theme')}
 	{/if}
 	<button
 		class="sidebar-scrim"
@@ -2639,21 +3092,56 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				{/if}
 				<div class="create-row">
 					<label for="new-cwd">Working directory</label>
-					<input
-						id="new-cwd"
-						class="cwd-input"
-						bind:this={cwdInputEl}
-						bind:value={newCwd}
-						onkeydown={onCwdKeydown}
-						placeholder={(isRemoteHost(newHost) ? hostDefaultCwds[newHost] : defaultCwd) ||
-							'/path/to/project'}
-						aria-invalid={Boolean(createError)}
-						aria-describedby="create-helper"
-						spellcheck="false"
-						autocapitalize="off"
-						autocomplete="off"
-					/>
+					<div class="cwd-field">
+						<input
+							id="new-cwd"
+							class="cwd-input"
+							bind:this={cwdInputEl}
+							bind:value={newCwd}
+							onkeydown={onCwdKeydown}
+							placeholder={(isRemoteHost(newHost) ? hostDefaultCwds[newHost] : defaultCwd) ||
+								'/path/to/project'}
+							aria-invalid={Boolean(createError)}
+							aria-describedby="create-helper"
+							spellcheck="false"
+							autocapitalize="off"
+							autocomplete="off"
+						/>
+						<button class="cwd-browse-trigger" type="button" onclick={() => browseDirectories()} aria-expanded={cwdBrowseOpen} aria-controls="cwd-browser">
+							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" /></svg>
+							Browse
+						</button>
+					</div>
 				</div>
+				{#if cwdBrowseOpen}
+					<div class="cwd-browser" id="cwd-browser" aria-label="Choose working directory">
+		<div class="cwd-browser-toolbar">
+							<button class="cwd-up" type="button" onclick={() => browseDirectories(directoryParent(cwdBrowsePath))} disabled={!cwdBrowsePath || directoryParent(cwdBrowsePath) === cwdBrowsePath} aria-label="Go to parent folder" title="Parent folder">↑</button>
+							<span class="cwd-current" title={cwdBrowsePath}>{cwdBrowsePath || 'Choose a folder'}</span>
+			<button class="mini ghost cwd-use" type="button" onclick={() => selectBrowseDirectory()} disabled={!cwdBrowsePath}>Use folder</button>
+		</div>
+		<label class="cwd-hidden-toggle">
+			<input type="checkbox" bind:checked={showHiddenDirectories} />
+			<span>Show hidden folders</span>
+		</label>
+		{#if cwdBrowseLoading}
+							<p class="cwd-browser-message">Loading folders…</p>
+						{:else if cwdBrowseError}
+						<p class="cwd-browser-message error">{cwdBrowseError}</p>
+		{:else if visibleCwdBrowseEntries.length === 0}
+			<p class="cwd-browser-message">No subfolders here.</p>
+		{:else}
+			<div class="cwd-directory-list" role="group" aria-label="Subfolders">
+				{#each visibleCwdBrowseEntries as entry (entry.name)}
+								<button class="cwd-directory" type="button" onclick={() => browseDirectories(`${cwdBrowsePath.replace(/[\\/]+$/, '')}/${entry.name}`)}>
+									<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" /></svg>
+									<span>{entry.name}</span><span aria-hidden="true">›</span>
+								</button>
+							{/each}
+						</div>
+						{/if}
+					</div>
+				{/if}
 				{#if profileChoices.length > 0}
 					<div class="create-row">
 						<label for="new-profile">Profile</label>
@@ -2699,11 +3187,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							class="run-dot"
 							class:running={threads[s.id]?.status === 'running'}
 							class:error={Boolean(threads[s.id]?.error)}
+							class:interrupted={interruptedSessions[s.id]}
 							role="img"
-							aria-label={threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
-							title={threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
+							aria-label={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
+							title={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
 						></span>
-						<span class="label">{#if isSideChat(s)}⎇ {/if}{shortLabel(s)}</span>
+						<span class="label">
+							{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
+							{#if interruptedSessions[s.id]}<span class="session-interrupted">Interrupted</span>
+							{:else if recoveringSessions[s.id]}<span class="session-interrupted checking">Checking…</span>{/if}
+						</span>
 						{#if isRemoteHost(s.host)}
 							<span class="host-badge" title={`Runs on ${s.host}`}>{s.host}</span>
 						{/if}
@@ -2816,7 +3309,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					</svg>
 				</button>
 				<div class="session-heading">
-					<h1>{headerLabel(activeSummary, activeId, cwds[activeId] ?? activeSummary?.cwd)}</h1>
+					<div class="session-title-row">
+						<h1>{headerLabel(activeSummary, activeId, cwds[activeId] ?? activeSummary?.cwd)}</h1>
+						<button class="rename-session" type="button" aria-label="Rename session" title="Rename session" onclick={() => renameSession(activeId)}>
+							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m14 5 5 5M4 20l4.5-1 10.8-10.8a2.1 2.1 0 0 0-3-3L5.5 16 4 20Z" /></svg>
+						</button>
+					</div>
 					<div class="session-meta">
 						{#if activeParent}
 							<span class="tid dim">From {activeParent.id.slice(0, 8)}</span>
@@ -2827,9 +3325,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<span class="meta-sep" aria-hidden="true">·</span>
 							<span class="meta cwd" title={cwds[activeId] ?? activeSummary?.cwd}>{cwds[activeId] ?? activeSummary?.cwd}</span>
 						{/if}
-						{#if activeAgents.length > 0}
-							<nav class="agent-row" aria-label="Agent transcripts">
-								{#each headerAgents.visible as agent (agent.id)}
+		{#if activeAgents.length > 0}
+			<nav class="agent-row" aria-label="Agent transcripts">
+				<button
+					type="button"
+					class="agent-link"
+					class:current={!viewedAgentId}
+					aria-current={!viewedAgentId ? 'page' : undefined}
+					title="Return to the session transcript"
+					onclick={() => goto(agentHref(null))}
+				>
+					Session
+				</button>
+				{#each currentAgents as agent (agent.id)}
 									<button
 										type="button"
 										class="agent-link"
@@ -2842,43 +3350,44 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										<span class="agent-dot" class:running={agentIsRunning(agent)} aria-hidden="true"></span>{agentLabel(agent)}
 									</button>
 								{/each}
-								{#if headerAgents.overflow.length > 0}
-									<div class="agent-overflow">
-										<button
-											type="button"
-											class="agent-link agent-more"
-											aria-haspopup="menu"
-											aria-expanded={agentMenuOpen}
-											aria-label={`Show ${headerAgents.overflow.length} more agents`}
-											onclick={() => (agentMenuOpen = !agentMenuOpen)}
-										>
-											+{headerAgents.overflow.length} more
-										</button>
-										{#if agentMenuOpen}
-											<div class="agent-menu" role="menu" aria-label="More agents">
-												{#each headerAgents.overflow as agent (agent.id)}
-													<button
-														type="button"
-														role="menuitem"
-														class="agent-menu-item"
-														class:current={agent.id === viewedAgentId}
-														class:closed={agent.closed}
-														title={agentTitle(agent)}
-														onclick={() => toggleAgent(agent.id)}
-													>
-														<span class="agent-dot" class:running={agentIsRunning(agent)} aria-hidden="true"></span>
-														<span class="agent-menu-name">{agentLabel(agent)}{#if agent.role}&nbsp;<span class="agent-menu-role">[{agent.role}]</span>{/if}</span>
-														<span class="agent-menu-state">{agentStateLabel(agent)}</span>
-													</button>
-												{/each}
-											</div>
-										{/if}
-									</div>
+								{#if previousAgents.length > 0}
+									<details class="agent-history-group" open={previousAgents.some((agent) => agent.id === viewedAgentId)}>
+										<summary>Previous · {previousAgents.length}</summary>
+										<div class="agent-history-list">
+											{#each previousAgents as agent (agent.id)}
+												<button
+													type="button"
+													class="agent-link"
+													class:current={agent.id === viewedAgentId}
+													class:closed={agent.closed}
+													aria-current={agent.id === viewedAgentId ? 'true' : undefined}
+													title={agentTitle(agent)}
+													onclick={() => toggleAgent(agent.id)}
+												>
+													<span class="agent-dot" aria-hidden="true"></span>{agentLabel(agent)}
+												</button>
+											{/each}
+										</div>
+									</details>
 								{/if}
 							</nav>
 						{/if}
 					</div>
 				</div>
+				{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
+					<div class="usage-limits" aria-label="Codex usage remaining">
+						{#if activeAccountUsage.fiveHour}
+							<span class="usage-window" title={`5-hour limit · resets in ${fmtReset(activeAccountUsage.fiveHour.resetsAt)}`}>
+								<strong>5h</strong> {remainingPercent(activeAccountUsage.fiveHour)}% left
+							</span>
+						{/if}
+						{#if activeAccountUsage.sevenDay}
+							<span class="usage-window" title={`7-day limit · resets in ${fmtReset(activeAccountUsage.sevenDay.resetsAt)}`}>
+								<strong>7d</strong> {remainingPercent(activeAccountUsage.sevenDay)}% left
+							</span>
+						{/if}
+					</div>
+				{/if}
 				<div class="session-facts" aria-label="session configuration">
 					{#if fastSessions[activeId]}{@render fastMark()}{/if}
 					{#if activeRemote}
@@ -2908,6 +3417,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{/if}
 				</div>
 				<div class="session-state">
+					{@render themeToggle()}
 					<button
 						class="files-trigger"
 						type="button"
@@ -2925,8 +3435,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						class="session-info-trigger"
 						type="button"
 						onclick={openSessionInfo}
-						aria-label={`Session details, ${active?.error ? 'error' : active?.status === 'running' ? 'running' : 'idle'}`}
-						title={`Session details · ${active?.error ? 'Error' : active?.status === 'running' ? 'Running' : 'Idle'}`}
+						aria-label={`Session details, ${interruptedSessions[activeId] ? 'interrupted' : active?.error ? 'error' : active?.status === 'running' ? 'running' : 'idle'}`}
+						title={`Session details · ${interruptedSessions[activeId] ? 'Interrupted by restart' : active?.error ? 'Error' : active?.status === 'running' ? 'Running' : 'Idle'}`}
 					>
 						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 							<circle cx="12" cy="12" r="9" />
@@ -2937,6 +3447,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							class="session-state-dot"
 							class:running={active?.status === 'running'}
 							class:error={Boolean(active?.error)}
+							class:interrupted={interruptedSessions[activeId]}
 							aria-hidden="true"
 						></span>
 					</button>
@@ -2946,9 +3457,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								<rect x="7" y="7" width="10" height="10" rx="1" />
 							</svg>
 						</button>
+					{:else if interruptedSessions[activeId]}
+						<button class="stop play" type="button" onclick={playInterruptedSession} disabled={!startupRecoveryComplete || sendingMessage} aria-label="Continue interrupted task" title="Continue interrupted task">
+							<svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 4.8a1 1 0 0 1 1.5-.86l11 7.2a1 1 0 0 1 0 1.72l-11 7.2A1 1 0 0 1 7 19.2z" /></svg>
+						</button>
 					{/if}
 				</div>
 			</header>
+			{#if sessionContextLine}
+				<div class="original-prompt" title={sessionContextTitle} aria-label={`Session: ${sessionContextLine}`}>
+					<span>Session</span>
+					<p>{sessionContextLine}</p>
+				</div>
+			{/if}
 
 			{#if filesOpen}
 				{#key activeId}
@@ -2956,6 +3477,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						threadId={activeId}
 						cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
 						host={activeHost}
+						{theme}
 						reveal={filesReveal}
 						refreshNonce={filesRefresh}
 						onchanges={() => openChangesPanel()}
@@ -2969,6 +3491,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<GitDiffViewer
 						threadId={activeId}
 						cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
+						{theme}
 						reveal={changesReveal}
 						refreshNonce={filesRefresh}
 						onfiles={openFilesPanel}
@@ -3120,8 +3643,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					</div>
 				</div>
 			{:else}
+				<div class="transcript-frame" class:has-position-rail={transcriptJumpPoints.length > 1}>
 				<div class="transcript" bind:this={transcriptEl} onscroll={onTranscriptScroll}>
-					{#if viewedAgentId ? agentHistoryLoading : loadingHistory}
+					{#if viewedAgentId ? agentHistoryLoading : sessionOpening[viewedId ?? '']}
 						<div class="sys">loading history…</div>
 					{:else if viewedItems.length === 0 && viewed?.status !== 'running' && !viewed?.error}
 						{#if viewedAgentId}
@@ -3191,6 +3715,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{#if time}
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
+										<button
+											type="button"
+											class="copy-agent"
+											aria-label={agentCopyStatus[agentRawKey(item)] === 'copied' ? 'Response copied' : agentCopyStatus[agentRawKey(item)] === 'failed' ? 'Could not copy response' : 'Copy response'}
+											title={agentCopyStatus[agentRawKey(item)] === 'copied' ? 'Copied' : agentCopyStatus[agentRawKey(item)] === 'failed' ? 'Copy failed' : 'Copy response'}
+											onclick={() => copyAgentResponse(item)}
+										>
+											<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" /></svg>
+											{agentCopyStatus[agentRawKey(item)] === 'copied' ? 'Copied' : agentCopyStatus[agentRawKey(item)] === 'failed' ? 'Copy failed' : 'Copy'}
+										</button>
 										<button
 											type="button"
 											class="raw-toggle"
@@ -3357,12 +3891,30 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<div class="transcript-spacer" style={`height: ${virtualTranscript.after}px`}></div>
 					{#if viewed?.status === 'running'}
 						<div class="item agent pending">
-							<div class="body">Working…</div>
+							<div class="body">
+								<span class="working-label">Current activity</span>
+								<span class="working-description">{currentWorkDescription(viewedItems)}</span>
+							</div>
 						</div>
 					{/if}
 					{#if viewed?.error}
 						<div class="item err"><span class="gutter">✗</span><div class="body">{viewed.error}</div></div>
 					{/if}
+				</div>
+				{#if transcriptJumpPoints.length > 1}
+					<nav class="transcript-position" aria-label="Jump to a message in this conversation">
+						{#each transcriptJumpPoints as point, index (point.id)}
+							<button
+								type="button"
+								class:active={point.id === activeTranscriptPointId}
+								style={`top: ${point.top}%`}
+								aria-label={`Jump to message ${index + 1}: ${point.label}`}
+								title={point.label}
+								onclick={() => jumpToTranscriptPoint(point.index)}
+							><span></span></button>
+						{/each}
+					</nav>
+				{/if}
 				</div>
 				{#if unseenActivity}
 					<div class="activity-jump">
@@ -3387,9 +3939,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							· read-only
 						</span>
 						<span class="spacer"></span>
-						<button class="mini ghost" type="button" onclick={() => toggleAgent(viewedAgentId!)}>
-							← Back to session
-						</button>
 					</div>
 				{:else}
 				<div class="composer-shell">
@@ -3474,17 +4023,36 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								</svg>
 							</button>
 							<div class="composer-actions-end">
-								{#if activeConfig && activeEfforts.length > 0}
-									<div class="effort">
-										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)}</span>
-										<svg class="effort-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+								{#if activeConfig && activeModels.length > 0}
+									<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}`}>
+										<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
+										<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
 										</svg>
 										<select
-											class="effort-select"
-											aria-label="Reasoning effort"
+											class="composer-select"
+											aria-label="Model"
+											value={activeConfig.model}
+											disabled={modelPending || effortPending}
+											onchange={(event) => setComposerModel(event.currentTarget)}
+										>
+											{#each activeModels as choice (choice.id)}
+												<option value={choice.id}>{choice.displayName || choice.id}</option>
+											{/each}
+										</select>
+									</div>
+								{/if}
+								{#if activeConfig && activeEfforts.length > 0}
+									<div class="effort" title={`Thinking strength: ${effortLabel(activeConfig.effort)}`}>
+										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)}</span>
+										<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+											<path d="m6 9 6 6 6-6" />
+										</svg>
+										<select
+											class="composer-select"
+											aria-label="Thinking strength"
 											value={activeConfig.effort}
-											disabled={effortPending}
+											disabled={modelPending || effortPending}
 											onchange={(event) => setComposerEffort(event.currentTarget)}
 										>
 											{#each activeEfforts as choice (choice)}
@@ -3498,7 +4066,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									type="button"
 									onclick={send}
 									disabled={sendingMessage || (!input.trim() && selectedImages.length === 0)}
-									aria-label={sendingMessage ? 'Sending message' : 'Send message'}
+					aria-label={sendingMessage ? 'Sending message' : activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Steer active task' : 'Send message'}
+					title={activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Send guidance to the active task' : 'Send message'}
 									aria-busy={sendingMessage}
 								>
 									<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -3846,6 +4415,166 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-family: var(--font-outlier);
 	}
 
+	.cwd-field {
+		display: flex;
+		gap: var(--space-3xs);
+		min-width: 0;
+	}
+
+	.cwd-field .cwd-input {
+		flex: 1;
+		width: 1px;
+	}
+
+	.cwd-browse-trigger,
+	.cwd-up {
+		display: inline-flex;
+		flex: none;
+		align-items: center;
+		justify-content: center;
+		gap: var(--space-3xs);
+		min-height: var(--control-height);
+		padding-inline: var(--space-2xs);
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-input);
+		background: var(--color-paper);
+		color: var(--color-neutral);
+		cursor: pointer;
+		font-size: var(--text-xs);
+		font-weight: 600;
+	}
+
+	.cwd-browse-trigger:disabled,
+	.cwd-up:disabled {
+		cursor: default;
+		opacity: 0.48;
+	}
+
+	.cwd-browse-trigger svg,
+	.cwd-directory svg {
+		width: 1rem;
+		height: 1rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.75;
+	}
+
+	.cwd-browser {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		max-height: 17rem;
+		overflow: hidden;
+		border: var(--rule-hair) solid var(--color-rule);
+		border-radius: var(--radius-input);
+		background: var(--color-paper);
+		box-shadow: var(--shadow-card);
+	}
+
+	.cwd-browser-toolbar {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2xs);
+		min-width: 0;
+		padding: var(--space-2xs);
+		border-block-end: var(--rule-hair) solid var(--color-rule);
+	}
+
+	.cwd-up {
+		width: var(--control-height-compact);
+		min-height: var(--control-height-compact);
+		padding: 0;
+		font-size: var(--text-md);
+	}
+
+	.cwd-current {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		color: var(--color-muted);
+		font-family: var(--font-outlier);
+		font-size: 0.68rem;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.cwd-hidden-toggle {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2xs);
+		min-height: var(--control-height-compact);
+		padding-inline: var(--space-xs);
+		border-block-end: var(--rule-hair) solid var(--color-rule);
+		color: var(--color-muted);
+		cursor: pointer;
+		font-size: var(--text-xs);
+	}
+
+	.cwd-hidden-toggle input {
+		width: 1rem;
+		height: 1rem;
+		margin: 0;
+		accent-color: var(--color-accent-active);
+	}
+
+	.cwd-use {
+		min-height: var(--control-height-compact);
+		padding-inline: var(--space-2xs);
+		font-size: var(--text-xs);
+	}
+
+	.cwd-directory-list {
+		min-height: 0;
+		overflow: auto;
+		padding: var(--space-3xs);
+	}
+
+	.cwd-directory {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2xs);
+		width: 100%;
+		min-height: var(--control-height-compact);
+		padding: var(--space-3xs) var(--space-2xs);
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--color-neutral);
+		cursor: pointer;
+		font-size: var(--text-sm);
+		text-align: start;
+	}
+
+	.cwd-directory span:first-of-type {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.cwd-browser-message {
+		margin: 0;
+		padding: var(--space-xs);
+		color: var(--color-muted);
+		font-size: var(--text-xs);
+	}
+
+	.cwd-browser-message.error {
+		color: var(--color-error);
+	}
+
+	@media (hover: hover) and (pointer: fine) {
+		.cwd-browse-trigger:hover,
+		.cwd-up:hover:not(:disabled),
+		.cwd-directory:hover {
+			background: var(--color-paper-3);
+			color: var(--color-ink);
+		}
+	}
+
 	.cwd-input::placeholder,
 	textarea::placeholder {
 		color: var(--color-muted);
@@ -3969,7 +4698,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		animation: none;
 	}
 
+	.run-dot.interrupted {
+		background: var(--color-warning);
+		animation: none;
+	}
+
 	.session .label {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2xs);
 		grid-column: 2;
 		min-width: 0;
 		overflow: hidden;
@@ -3977,6 +4714,27 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: nowrap;
 		font-size: var(--text-sm);
 		font-weight: 500;
+	}
+
+	.session-name {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.session-interrupted {
+		flex: none;
+		padding: 0 var(--space-3xs);
+		border-radius: var(--radius-pill);
+		background: var(--color-warning-soft);
+		color: var(--color-neutral);
+		font-size: var(--text-xs);
+		font-weight: 600;
+	}
+
+	.session-interrupted.checking {
+		background: var(--color-paper-3);
+		color: var(--color-muted);
 	}
 
 	.fast-mark {
@@ -4174,6 +4932,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.topbar {
+		position: relative;
 		display: grid;
 		grid-template-columns: auto minmax(0, 1fr) auto;
 		align-items: center;
@@ -4183,11 +4942,76 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		background: var(--color-paper);
 	}
 
+	.original-prompt {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-xs);
+		min-width: 0;
+		padding: 0.4rem var(--space-sm);
+		border-block-end: var(--rule-hair) solid var(--color-rule);
+		background: var(--color-paper-2);
+	}
+
+	.original-prompt > span {
+		flex: 0 0 auto;
+		color: var(--color-muted);
+		font-family: var(--font-outlier);
+		font-size: var(--text-2xs);
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.original-prompt p {
+		min-width: 0;
+		margin: 0;
+		overflow: hidden;
+		color: var(--color-ink-2);
+		font-size: var(--text-xs);
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.usage-limits {
+		grid-column: 1 / -1;
+		grid-row: 2;
+		justify-self: center;
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-sm);
+		max-width: 100%;
+		padding: 0 var(--space-2xs);
+		color: var(--color-muted);
+		font-family: var(--font-outlier);
+		font-size: var(--text-xs);
+		line-height: 1.35;
+		white-space: nowrap;
+	}
+
+	.usage-window {
+		display: inline-flex;
+		align-items: baseline;
+		gap: var(--space-3xs);
+	}
+
+	.usage-window strong {
+		color: var(--color-ink-2);
+		font-weight: 600;
+	}
+
 	.session-heading {
 		min-width: 0;
 	}
 
+	.session-title-row {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2xs);
+		min-width: 0;
+	}
+
 	.session-heading h1 {
+		flex: 0 1 auto;
 		margin: 0;
 		min-width: 0;
 		overflow: hidden;
@@ -4201,6 +5025,36 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		line-height: 1.25;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.rename-session {
+		display: grid;
+		place-items: center;
+		flex: 0 0 auto;
+		width: var(--control-height-compact);
+		height: var(--control-height-compact);
+		padding: 0;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--color-muted);
+		cursor: pointer;
+	}
+
+	.rename-session:hover,
+	.rename-session:focus-visible {
+		background: var(--color-paper-3);
+		color: var(--color-ink);
+	}
+
+	.rename-session svg {
+		width: var(--space-sm);
+		height: var(--space-sm);
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.75;
 	}
 
 	.session-meta {
@@ -4284,6 +5138,45 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		justify-self: end;
 	}
 
+	.theme-toggle {
+		display: grid;
+		place-items: center;
+		width: var(--control-height);
+		min-width: var(--control-height);
+		height: var(--control-height);
+		padding: 0;
+		border: var(--rule-hair) solid transparent;
+		border-radius: var(--radius-input);
+		background: transparent;
+		color: var(--color-neutral);
+		cursor: pointer;
+		transition:
+			background-color var(--dur-micro) var(--ease-out),
+			color var(--dur-micro) var(--ease-out),
+			transform var(--dur-micro) var(--ease-out);
+	}
+
+	.theme-toggle svg {
+		display: block;
+		width: var(--space-md);
+		height: var(--space-md);
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.75;
+	}
+
+	.welcome-theme {
+		position: fixed;
+		inset-block-start: calc(var(--space-3xs) + env(safe-area-inset-top));
+		inset-inline-end: var(--space-xs);
+		z-index: var(--z-toast);
+		border-color: var(--color-rule);
+		background: var(--color-paper);
+		box-shadow: var(--shadow-card);
+	}
+
 	.files-trigger,
 	.session-info-trigger,
 	.session-info-close {
@@ -4352,6 +5245,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		animation: none;
 	}
 
+	.session-state-dot.interrupted {
+		background: var(--color-warning);
+		animation: none;
+	}
+
 	.stop {
 		display: grid;
 		place-items: center;
@@ -4364,7 +5262,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-error);
 	}
 
+	.stop.play {
+		border-color: var(--color-success);
+		color: var(--color-success);
+	}
+
 	.stop-icon {
+		display: block;
+		width: var(--space-sm);
+		height: var(--space-sm);
+		fill: currentColor;
+	}
+
+	.play-icon {
 		display: block;
 		width: var(--space-sm);
 		height: var(--space-sm);
@@ -4523,6 +5433,39 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-muted);
 	}
 
+	.agent-history-group {
+		position: relative;
+		min-width: 0;
+	}
+
+	.agent-history-group summary {
+		color: var(--color-muted);
+		cursor: pointer;
+		font-family: var(--font-outlier);
+		font-size: var(--text-xs);
+		line-height: 1.45;
+		white-space: nowrap;
+	}
+
+	.agent-history-list {
+		position: absolute;
+		z-index: 5;
+		top: calc(100% + var(--space-2xs));
+		right: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--space-xs);
+		min-width: 10rem;
+		max-height: 16rem;
+		overflow: auto;
+		padding: var(--space-sm);
+		border: 1px solid var(--color-rule-2);
+		border-radius: var(--radius-sm);
+		background: var(--color-surface);
+		box-shadow: var(--shadow-popover);
+	}
+
 	.agent-dot {
 		flex: none;
 		width: var(--space-3xs);
@@ -4536,71 +5479,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		animation: pulse-status 1.8s var(--ease-in-out) infinite;
 	}
 
-	.agent-overflow {
-		position: relative;
-		display: inline-flex;
-	}
-
-	.agent-more {
-		color: var(--color-muted);
-	}
-
-	.agent-menu {
-		position: absolute;
-		inset-block-start: calc(100% + var(--space-3xs));
-		inset-inline-start: 0;
-		z-index: var(--z-dropdown);
-		display: flex;
-		flex-direction: column;
-		min-width: 14rem;
-		max-height: min(16rem, 40dvh);
-		padding: var(--space-3xs);
-		overflow-y: auto;
-		border: var(--rule-hair) solid var(--color-rule-2);
-		border-radius: var(--radius-input);
-		background: var(--color-paper);
-		box-shadow: var(--shadow-float);
-	}
-
-	.agent-menu-item {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) auto;
-		gap: var(--space-2xs);
-		align-items: center;
-		padding: var(--space-2xs) var(--space-xs);
-		border: 0;
-		border-radius: var(--radius-input);
-		background: transparent;
-		color: var(--color-ink-2);
-		cursor: pointer;
-		font-family: var(--font-outlier);
-		font-size: var(--text-xs);
-		text-align: start;
-	}
-
-	.agent-menu-item:hover,
-	.agent-menu-item:focus-visible {
-		background: var(--color-paper-3);
-	}
-
-	.agent-menu-item.current {
-		color: var(--color-accent-active);
-		font-weight: 600;
-	}
-
-	.agent-menu-item.closed {
-		color: var(--color-muted);
-	}
-
-	.agent-menu-name {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.agent-menu-role,
-	.agent-menu-state {
+	.agent-menu-role {
 		color: var(--color-muted);
 		font-weight: 400;
 	}
@@ -4806,6 +5685,63 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		scroll-padding-block-end: var(--space-lg);
 	}
 
+	.transcript-frame {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-height: 0;
+	}
+
+	.transcript-frame.has-position-rail .transcript {
+		padding-inline-end: calc(var(--space-sm) + 1.25rem);
+	}
+
+	.transcript-position {
+		position: absolute;
+		z-index: var(--z-raised);
+		inset-block: var(--space-sm) var(--space-lg);
+		inset-inline-end: 0;
+		width: 1.25rem;
+		pointer-events: none;
+	}
+
+	.transcript-position button {
+		position: absolute;
+		inset-inline-end: 0;
+		display: grid;
+		place-items: center;
+		width: 1.25rem;
+		height: 1rem;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		cursor: pointer;
+		pointer-events: auto;
+		transform: translateY(-50%);
+	}
+
+	.transcript-position button span {
+		display: block;
+		width: 9px;
+		height: 3px;
+		border-radius: var(--radius-pill);
+		background: var(--color-rule-2);
+		transition: width var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out);
+	}
+
+	.transcript-position button:hover span,
+	.transcript-position button:focus-visible span,
+	.transcript-position button.active span {
+		width: 15px;
+		background: var(--color-accent-active);
+	}
+
+	.transcript-position button:focus-visible {
+		outline: 2px solid var(--color-focus);
+		outline-offset: 1px;
+	}
+
 	.activity-jump {
 		position: relative;
 		z-index: var(--z-raised);
@@ -4994,6 +5930,39 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			background-color var(--dur-micro) var(--ease-out),
 			color var(--dur-micro) var(--ease-out),
 			opacity var(--dur-micro) var(--ease-out);
+	}
+
+	.copy-agent {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: var(--space-3xs);
+		min-height: calc(var(--space-sm) + var(--space-3xs));
+		padding: 0 var(--space-2xs);
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--color-muted);
+		cursor: pointer;
+		font: inherit;
+		font-size: var(--text-xs);
+		transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+	}
+
+	.copy-agent:hover,
+	.copy-agent:focus-visible {
+		background: var(--color-paper-3);
+		color: var(--color-ink);
+	}
+
+	.copy-agent svg {
+		width: var(--space-xs);
+		height: var(--space-xs);
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.75;
 	}
 
 	.raw-toggle svg {
@@ -5223,7 +6192,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.item.pending .body {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-3xs) var(--space-2xs);
 		color: var(--color-muted);
+	}
+
+	.working-label {
+		flex: none;
+		font-weight: 600;
+	}
+
+	.working-description {
+		min-width: 0;
+		max-width: 100%;
+		overflow-wrap: anywhere;
+		color: var(--color-neutral);
 	}
 
 	.media-body {
@@ -5784,14 +6769,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-size: var(--text-sm);
 	}
 
-	/* The effort picker reads as a quiet label plus chevron; a transparent
-	   native select sits over it so the platform menu and its accessible name
-	   stay intact while the label keeps the control at its text width. */
+	/* Model and thinking pickers use native selects over compact visible labels. */
+	.model-picker,
 	.effort {
 		position: relative;
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-3xs);
+		min-width: 0;
 		min-height: var(--control-height);
 		padding-inline: var(--space-2xs);
 		border-radius: var(--radius-input);
@@ -5799,12 +6784,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		transition: background-color var(--dur-micro) var(--ease-out);
 	}
 
+	.model-picker {
+		max-width: min(12rem, 36vw);
+	}
+
+	.model-picker:focus-within,
 	.effort:focus-within {
 		outline: var(--rule-fine) solid var(--color-focus);
 		outline-offset: var(--focus-offset);
 	}
 
-	.effort-select {
+	.composer-select {
 		position: absolute;
 		inset: 0;
 		width: 100%;
@@ -5817,15 +6807,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		opacity: 0;
 	}
 
-	.effort-select:disabled {
+	.composer-select:disabled {
 		cursor: progress;
 	}
 
+	.model-picker-label,
 	.effort-label {
 		font-size: var(--text-base);
 	}
 
-	.effort-chevron {
+	.model-picker-label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.composer-select-chevron {
 		flex: none;
 		width: var(--space-xs);
 		height: var(--space-xs);
@@ -6015,12 +7012,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 		.mini.ghost:hover,
 		.attach:hover,
+		.model-picker:hover,
 		.effort:hover,
 		.stop:hover,
 		.raw-toggle:hover,
+		.copy-agent:hover,
 		.files-trigger:hover,
 		.session-info-trigger:hover,
 		.session-info-close:hover,
+		.rename-session:hover,
+		.theme-toggle:hover,
 		.delete-session:hover,
 		.new-activity:hover,
 		.archive-toast button:hover {
@@ -6058,6 +7059,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.files-trigger:active,
 	.session-info-trigger:active,
 	.session-info-close:active,
+	.theme-toggle:active,
 	.attach:active,
 	.send:active,
 	.welcome-action:active,
@@ -6208,11 +7210,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.files-trigger,
 		.session-info-trigger,
 		.session-info-close,
+		.rename-session,
+		.theme-toggle,
 		.attach,
 		.send,
 		.attachment,
 		.cwd-input,
 		.profile-input,
+		.model-picker,
 		.effort,
 		textarea {
 			min-height: var(--control-height-compact);
@@ -6224,6 +7229,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.stop,
 		.files-trigger,
 		.session-info-trigger,
+		.theme-toggle,
 		.session-info-close {
 			width: var(--control-height-compact);
 			min-width: var(--control-height-compact);
@@ -6262,7 +7268,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.files-trigger,
 		.session-info-trigger,
 		.session-info-close,
+		.theme-toggle,
 		.attach,
+		.model-picker,
 		.effort,
 		.send,
 		.welcome-action,
@@ -6270,6 +7278,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.attachment,
 		.new-activity,
 		.archive-toast button,
+		.copy-agent,
 		.slash-option,
 		.raw-toggle,
 		.session {

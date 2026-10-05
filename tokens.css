@@ -5,10 +5,7 @@
  * responsive: pass (34, 49) · icons: pass (30) · mobile: pass (34, 49, 50–57)
  */
 :root {
-	/* The canvas is always light (design.md light-mode policy). "only light"
-	   additionally opts out of Android Chrome's auto-dark page inversion,
-	   which otherwise renders the cream palette as a muddy dark theme. */
-	color-scheme: only light;
+	color-scheme: light;
 
 	--color-paper: oklch(98% 0.007 88);
 	--color-paper-2: oklch(96% 0.014 82);
@@ -109,4 +106,46 @@
 	--z-modal: 400;
 	--z-toast: 500;
 	--z-tooltip: 600;
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+
+	--color-paper: oklch(20% 0.012 65);
+	--color-paper-2: oklch(23% 0.014 65);
+	--color-paper-3: oklch(27% 0.016 65);
+	--color-paper-strong: oklch(32% 0.018 65);
+	--color-rule: oklch(34% 0.017 65);
+	--color-rule-2: oklch(48% 0.019 65);
+	--color-muted: oklch(69% 0.018 73);
+	--color-neutral: oklch(79% 0.014 76);
+	--color-ink-2: oklch(87% 0.011 80);
+	--color-ink: oklch(94% 0.009 84);
+	--color-accent: oklch(66% 0.14 42);
+	--color-accent-active: oklch(73% 0.13 45);
+	--color-accent-soft: oklch(31% 0.06 42);
+	--color-accent-ink: oklch(18% 0.012 55);
+	--color-focus: oklch(73% 0.14 44);
+	--color-success: oklch(70% 0.12 145);
+	--color-success-soft: oklch(29% 0.045 145);
+	--color-warning: oklch(75% 0.13 78);
+	--color-warning-soft: oklch(30% 0.05 78);
+	--color-error: oklch(70% 0.16 28);
+	--color-error-soft: oklch(30% 0.055 28);
+	--color-code-surface: oklch(16% 0.01 65);
+	--color-code-surface-2: oklch(20% 0.012 65);
+	--color-code-rule: oklch(33% 0.014 65);
+	--color-code-ink: oklch(92% 0.009 84);
+	--color-code-muted: oklch(68% 0.014 75);
+	--color-code-success: oklch(74% 0.12 145);
+	--color-overlay: oklch(8% 0.008 65 / 0.58);
+
+	--shadow-card: 0 1px 3px oklch(8% 0.008 65 / 0.28);
+	--shadow-float:
+		0 1px 2px oklch(8% 0.008 65 / 0.22),
+		0 4px 14px oklch(8% 0.008 65 / 0.3);
+	--shadow-float-raised:
+		0 1px 2px oklch(8% 0.008 65 / 0.26),
+		0 6px 20px oklch(8% 0.008 65 / 0.38);
+	--shadow-drawer: 1rem 0 2.5rem oklch(8% 0.008 65 / 0.42);
 }

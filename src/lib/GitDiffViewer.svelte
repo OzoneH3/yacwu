@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy, tick, untrack } from 'svelte';
-	import { loadMonaco, type Monaco } from '$lib/monaco';
+	import { loadMonaco, monacoTheme, type Monaco } from '$lib/monaco';
 
 	type Scope = 'all' | 'staged' | 'unstaged';
 
@@ -27,6 +27,7 @@
 	let {
 		threadId,
 		cwd,
+		theme = 'light',
 		reveal = null,
 		refreshNonce = 0,
 		onfiles,
@@ -35,6 +36,7 @@
 	}: {
 		threadId: string;
 		cwd: string;
+		theme?: 'light' | 'dark';
 		reveal?: { path: string; nonce: number } | null;
 		refreshNonce?: number;
 		onfiles: () => void;
@@ -168,8 +170,12 @@
 			monacoLoading = true;
 			try {
 				monacoRef = await loadMonaco();
-			} catch {
-				if (render === monacoRender) viewerError = 'The Monaco diff viewer could not be loaded.';
+			} catch (error) {
+				if (render === monacoRender) {
+					viewerError = error instanceof Error
+						? `The Monaco diff viewer could not be loaded: ${error.message}`
+						: 'The Monaco diff viewer could not be loaded.';
+				}
 				return;
 			} finally {
 				if (render === monacoRender) monacoLoading = false;
@@ -185,7 +191,7 @@
 				readOnly: true,
 				originalEditable: false,
 				domReadOnly: true,
-				theme: 'yacwu-paper',
+				theme: monacoTheme(theme),
 				automaticLayout: true,
 				renderSideBySide: false,
 				diffAlgorithm: 'advanced',
@@ -256,6 +262,11 @@
 		if (!request || request.nonce === lastRevealNonce) return;
 		lastRevealNonce = request.nonce;
 		untrack(() => void loadChanges(request.path));
+	});
+
+	$effect(() => {
+		const selectedTheme = theme;
+		if (monacoRef) monacoRef.editor.setTheme(monacoTheme(selectedTheme));
 	});
 
 	$effect(() => {

@@ -60,13 +60,29 @@ test.afterEach(async ({ request }) => {
 test('loads warm light editorial UI', async ({ page }) => {
 	await page.goto('/');
 	await expect(page.locator('.brand')).toContainText('yacwu');
-	// The app is light-only and anchored on the warm cream canvas.
+	// The default light theme is anchored on the warm cream canvas.
 	const bg = await page.evaluate(() =>
 		getComputedStyle(document.body).backgroundColor
 	);
 	expect(bg).toBe('oklch(0.98 0.007 88)');
 	// Connection indicator turns on (SSE established).
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
+});
+
+test('dark mode is accessible and persists across reloads', async ({ page }) => {
+	await page.goto('/');
+	const toggle = page.locator('.theme-toggle');
+	await expect(toggle).toHaveAttribute('aria-label', 'Switch to dark mode');
+	await toggle.click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+	expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+		'oklch(0.2 0.012 65)'
+	);
+	expect(await page.evaluate(() => localStorage.getItem('yacwu-theme'))).toBe('dark');
+
+	await page.reload();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+	await expect(page.locator('.theme-toggle')).toHaveAttribute('aria-label', 'Switch to light mode');
 });
 
 test('mobile drawer, compact header, composer growth, and archive undo remain usable', async ({ page }) => {
@@ -342,6 +358,7 @@ test('web search activity renders its action, query, and result count', async ({
 			json: {
 				thread: {
 					id,
+					status: { type: 'active' },
 					turns: [
 						{
 							id: 'turn-web-search',
@@ -389,15 +406,32 @@ test('Codex messages use the full row without a logo', async ({ page }) => {
 			json: {
 				thread: {
 					id,
+					status: { type: 'active' },
 					turns: [
 						{
 							id: 'turn-agent-layout',
-							status: 'completed',
+							status: 'inProgress',
 							items: [
+								{
+									type: 'userMessage',
+									id: 'user-layout-first',
+									content: [{ type: 'text', text: 'First navigation point' }]
+								},
 								{
 									type: 'agentMessage',
 									id: 'agent-layout',
 									text: 'A full-width Codex response.'
+								},
+								{
+									type: 'userMessage',
+									id: 'user-layout-second',
+									content: [{ type: 'text', text: 'Second navigation point' }]
+								},
+								{
+									type: 'commandExecution',
+									id: 'command-layout-running',
+									command: 'npm run test',
+									status: 'inProgress'
 								}
 							]
 						}
@@ -408,13 +442,23 @@ test('Codex messages use the full row without a logo', async ({ page }) => {
 	});
 
 	await page.goto('/');
+	await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 	await page.locator('button.new').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 
 	const message = page.locator('.item.agent').first();
+	await expect(page.locator('.original-prompt')).toContainText('First navigation point');
+	await expect(page.locator('.original-prompt p')).toHaveCSS('white-space', 'nowrap');
 	await expect(message).toContainText('A full-width Codex response.');
 	await expect(message.locator('.codex-mark')).toHaveCount(0);
+	await expect(page.locator('.item.agent.pending')).toContainText('Running npm run test');
+	const positionRail = page.getByRole('navigation', { name: 'Jump to a message in this conversation' });
+	await expect(positionRail.getByRole('button')).toHaveCount(2);
+	await positionRail.getByRole('button', { name: /Second navigation point/ }).click();
+	await message.getByRole('button', { name: 'Copy response' }).click();
+	await expect(message.getByRole('button', { name: 'Response copied' })).toBeVisible();
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('A full-width Codex response.');
 	const geometry = await message.evaluate((element) => {
 		const body = element.querySelector('.body')!;
 		const rowRect = element.getBoundingClientRect();
@@ -525,6 +569,36 @@ test('new session can target a specific working directory', async ({ page }) => 
 	await expect(page.locator('.create-err')).toContainText('does not exist', {
 		timeout: 15_000
 	});
+});
+
+test('new session folder picker navigates into and selects directories', async ({ page }) => {
+	await page.route('**/api/directories**', async (route) => {
+		const url = new URL(route.request().url());
+		const path = url.searchParams.get('path') || '/workspace';
+		await route.fulfill({
+			json: {
+				path,
+				entries: path === '/workspace'
+					? [
+							{ name: '.private', kind: 'dir', symlink: false },
+							{ name: 'project', kind: 'dir', symlink: false }
+						]
+					: []
+			}
+		});
+	});
+	await page.goto('/');
+	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
+	await page.locator('button.new').click();
+	await page.locator('.cwd-browse-trigger').click();
+	await expect(page.locator('.cwd-current')).toHaveText('/workspace');
+	await expect(page.locator('.cwd-directory')).toHaveCount(1);
+	await page.getByLabel('Show hidden folders').check();
+	await expect(page.locator('.cwd-directory')).toHaveCount(2);
+	await page.getByRole('button', { name: /project/ }).click();
+	await expect(page.locator('.cwd-current')).toHaveText('/workspace/project');
+	await page.getByRole('button', { name: 'Use folder' }).click();
+	await expect(page.locator('.cwd-input')).toHaveValue('/workspace/project');
 });
 
 test('Git changes viewer filters and renders a responsive Monaco diff', async ({ page }) => {
@@ -754,7 +828,7 @@ test('slash command: /status reports account, limits & session info', async ({ p
 				account: { type: 'chatgpt', email: 'dev@example.com', planType: 'pro' },
 				rateLimits: {
 					primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 9999999999 },
-					secondary: { usedPercent: 7, windowDurationMins: 10080, resetsAt: 9999999999 },
+					secondary: { usedPercent: 7.6, windowDurationMins: 10080, resetsAt: 9999999999 },
 					credits: { unlimited: false, balance: '0' }
 				}
 			}
@@ -782,6 +856,8 @@ test('slash command: /status reports account, limits & session info', async ({ p
 	await page.locator('button.new').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
+	await expect(page.locator('.usage-limits')).toContainText('5h 58% left');
+	await expect(page.locator('.usage-limits')).toContainText('7d 92.4% left');
 
 	await page.locator('.composer textarea').fill('/status');
 	await page.locator('button.send').click();
@@ -858,18 +934,29 @@ test('slash command: /model lists and changes model settings', async ({ page }) 
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 
+	const modelSelect = page.locator('select[aria-label="Model"]');
+	const thinkingSelect = page.locator('select[aria-label="Thinking strength"]');
+	await expect(modelSelect).toHaveValue('gpt-5.4');
+	await expect(thinkingSelect).toHaveValue('medium');
+	await modelSelect.selectOption('gpt-5.4-mini');
+	await expect(modelSelect).toHaveValue('gpt-5.4-mini');
+	expect(posted).toEqual({ model: 'gpt-5.4-mini' });
+	await thinkingSelect.selectOption('low');
+	await expect(thinkingSelect).toHaveValue('low');
+	expect(posted).toEqual({ effort: 'low' });
+
 	const textarea = page.locator('.composer textarea');
 	await textarea.fill('/model');
 	await page.locator('button.send').click();
-	await expect(page.locator('.item.note .body').last()).toContainText('model: gpt-5.4');
+	await expect(page.locator('.item.note .body').last()).toContainText('model: gpt-5.4-mini');
 	await expect(page.locator('.item.note .body').last()).toContainText('gpt-5.4-mini');
 
-	await textarea.fill('/model gpt-5.4-mini high');
+	await textarea.fill('/model gpt-5.4 high');
 	await page.locator('button.send').click();
 	await expect(page.locator('.item.note .body').last()).toContainText(
-		'model set: gpt-5.4-mini · effort high'
+		'model set: gpt-5.4 · effort high'
 	);
-	expect(posted).toEqual({ model: 'gpt-5.4-mini', effort: 'high' });
+	expect(posted).toEqual({ model: 'gpt-5.4', effort: 'high' });
 });
 
 test('new transcript output preserves scroll when not at the bottom', async ({ page }) => {

@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test';
 import {
 	agentLabel,
 	agentRootId,
+	isAgentRunning,
 	agentsForSession,
 	isSubAgentThread,
 	mergeAgentThreadMeta,
@@ -35,6 +36,15 @@ test('spawnAgent registers receivers under the sender, running once completed', 
 	trackAgentItem(registry, SESSION, spawn([AGENT_A], 'completed'));
 	expect(registry[AGENT_A].state).toBe('running');
 	expect(registry[AGENT_A].closed).toBe(false);
+});
+
+test('finished thread lifecycle overrides stale running collaboration metadata', () => {
+	const registry: AgentRegistry = {};
+	trackAgentItem(registry, SESSION, spawn([AGENT_A]));
+	const agent = registry[AGENT_A];
+	expect(isAgentRunning(agent)).toBe(true);
+	expect(isAgentRunning(agent, 'idle')).toBe(false);
+	expect(isAgentRunning(agent, 'running')).toBe(true);
 });
 
 test('closeAgent marks receivers closed; resumeAgent reopens them', () => {
@@ -92,7 +102,24 @@ test('subAgentActivity registers the agent thread with its path', () => {
 	});
 	expect(registry[AGENT_A].path).toBe('root/worker-1');
 	expect(registry[AGENT_A].state).toBe('running');
-	expect(agentLabel(registry[AGENT_A])).toBe('worker-1');
+	expect(agentLabel(registry[AGENT_A])).toBe('worker 1');
+});
+
+test('the agent tab prefers its canonical path over a different nickname', () => {
+	const registry: AgentRegistry = {};
+	trackAgentItem(registry, SESSION, {
+		type: 'subAgentActivity',
+		id: 'item-5b',
+		kind: 'started',
+		agentThreadId: AGENT_A,
+		agentPath: 'root/agent-F'
+	});
+	mergeAgentThreadMeta(registry, {
+		id: AGENT_A,
+		parentThreadId: SESSION,
+		agentNickname: 'Researcher'
+	});
+	expect(agentLabel(registry[AGENT_A])).toBe('agent F');
 });
 
 test('unrelated items and self-references are ignored', () => {
@@ -112,6 +139,21 @@ test('nested agents chain to the root session and list in spawn order', () => {
 	expect(agentRootId(registry, registry[AGENT_B])).toBe(SESSION);
 	expect(agentsForSession(registry, SESSION).map((a) => a.id)).toEqual([AGENT_A, AGENT_B]);
 	expect(agentsForSession(registry, 'other')).toEqual([]);
+});
+
+test('the session root is not listed as its own agent tab', () => {
+	const registry: AgentRegistry = {};
+	trackAgentItem(registry, SESSION, spawn([AGENT_A]));
+	registry[SESSION] = {
+		id: SESSION,
+		parentId: SESSION,
+		nickname: 'root',
+		role: 'coordinator',
+		path: 'root',
+		state: 'running',
+		closed: false
+	};
+	expect(agentsForSession(registry, SESSION).map((agent) => agent.id)).toEqual([AGENT_A]);
 });
 
 test('thread metadata merges nickname, role, and closed state', () => {

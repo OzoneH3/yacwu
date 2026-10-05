@@ -15,7 +15,10 @@ export default defineConfig({
 	use: {
 		baseURL,
 		trace: 'off',
-		screenshot: 'only-on-failure'
+		screenshot: 'only-on-failure',
+		...(process.env.YACWU_CHROMIUM_EXECUTABLE
+			? { launchOptions: { executablePath: process.env.YACWU_CHROMIUM_EXECUTABLE } }
+			: {})
 	},
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 	webServer: {

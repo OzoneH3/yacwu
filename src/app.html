@@ -3,9 +3,20 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-		<!-- "only light" opts out of Android Chrome's auto-dark inversion. -->
-		<meta name="color-scheme" content="only light" />
+		<meta name="color-scheme" content="light dark" />
 		<meta name="theme-color" content="#faf8f1" />
+		<script>
+			(function () {
+				const saved = localStorage.getItem('yacwu-theme');
+				const theme = saved === 'light' || saved === 'dark'
+					? saved
+					: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				document.documentElement.dataset.theme = theme;
+				document.querySelector('meta[name="theme-color"]')?.setAttribute(
+					'content', theme === 'dark' ? '#25221f' : '#faf8f1'
+				);
+			})();
+		</script>
 		<meta name="description" content="A focused web workspace for Codex sessions." />
 		<title>yacwu — Codex workspace</title>
 		%sveltekit.head%

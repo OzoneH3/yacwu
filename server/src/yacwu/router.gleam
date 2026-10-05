@@ -421,6 +421,10 @@ fn dispatch(
       use host, cx <- with_codex(ctx, req, None)
       list_profiles(host, cx)
     }
+    ["api", "directories"], Get -> {
+      use host, cx <- with_codex(ctx, req, None)
+      list_directories(host, cx, req)
+    }
     ["api", "threads", id, "profile"], Get -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       get_profile(ctx, host, cx, id)
@@ -428,6 +432,10 @@ fn dispatch(
     ["api", "threads", id, "profile"], Post -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       post_profile(ctx, host, cx, req, id)
+    }
+    ["api", "threads", id, "name"], Post -> {
+      use _, cx <- with_codex(ctx, req, Some(id))
+      set_thread_name(cx, req, id)
     }
     ["api", "threads"], Get -> list_threads(ctx, req)
     ["api", "threads"], Post -> create_thread(ctx, req)
@@ -863,6 +871,33 @@ fn query_rel_path(req: Request(Connection)) -> Result(String, Nil) {
   |> list.key_find("path")
   |> result.unwrap("")
   |> files.sanitize
+}
+
+/// List directories for the new-session picker, rooted at the host's normal
+/// working directory and allowed to navigate the host filesystem.
+fn list_directories(
+  host: String,
+  cx: Codex,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  let requested = query_value(req, "path")
+  let path = case requested, hosts.is_local(host) {
+    "", True -> codex.default_cwd()
+    "", False -> codex.info(cx).home
+    path, True -> resolve_cwd(path)
+    path, False -> resolve_cwd_against(path, codex.info(cx).home)
+  }
+  case workspace.list_directory(ws_for(host, cx), path) {
+    Error(message) -> json_response(404, error_body(message))
+    Ok(entries) ->
+      json_response(
+        200,
+        json.object([
+          #("path", json.string(path)),
+          #("entries", files.entries_to_json(entries)),
+        ]),
+      )
+  }
 }
 
 fn list_files(
@@ -1425,6 +1460,32 @@ fn read_thread(
   )
 }
 
+/// Set a user-facing name for a persisted thread.
+fn set_thread_name(
+  cx: Codex,
+  req: Request(Connection),
+  thread_id: String,
+) -> Response(ResponseData) {
+  let body = read_json_body(req)
+  case jsonx.field_string(body, ["name"]) {
+    Ok(name) -> {
+      let name = string.trim(name)
+      case name {
+        "" -> json_response(400, error_body("Session name cannot be empty"))
+        _ -> rpc(
+          cx,
+          "thread/name/set",
+          json.object([
+            #("threadId", json.string(thread_id)),
+            #("name", json.string(name)),
+          ]),
+        )
+      }
+    }
+    _ -> json_response(400, error_body("Session name cannot be empty"))
+  }
+}
+
 /// Create a new thread (session), optionally in a specific working directory
 /// and on a specific host (`host` in the body; default local).
 fn create_thread(
@@ -1902,6 +1963,13 @@ fn message(
         list.filter(parts, fn(part) {
           part.name == "images" && part.data != <<>>
         })
+      let turn_id =
+        list.find(parts, fn(part) { part.name == "turnId" })
+        |> result.try(fn(part) {
+          bit_array.to_string(part.data) |> result.replace_error(Nil)
+        })
+        |> result.map(Some)
+        |> result.unwrap(None)
       list.try_fold(images, [], fn(acc, part) {
         stage_image(host, cx, part)
         |> result.map(fn(path) {
@@ -1915,33 +1983,42 @@ fn message(
         })
       })
       |> result.map(fn(image_inputs) {
-        list.append(text_input, list.reverse(image_inputs))
+        #(list.append(text_input, list.reverse(image_inputs)), turn_id)
       })
     }
     False -> {
       let body = read_json_body(req)
       let text = jsonx.field_string(body, ["text"]) |> result.unwrap("")
+      let turn_id =
+        jsonx.field_string(body, ["turnId"]) |> result.map(Some) |> result.unwrap(None)
       case string.trim(text) {
-        "" -> Ok([])
+      "" -> Ok(#([], turn_id))
         _ ->
-          Ok([
+          Ok(#([
             json.object([
               #("type", json.string("text")),
               #("text", json.string(text)),
             ]),
-          ])
+          ], turn_id))
       }
     }
   }
 
   case input {
     Error(message) -> json_response(400, error_body(message))
-    Ok([]) -> json_response(400, error_body("empty message"))
-    Ok(input) -> {
+    Ok(#([], _)) -> json_response(400, error_body("empty message"))
+    Ok(#(input, turn_id)) -> {
       let params = [
         #("threadId", json.string(thread_id)),
         #("input", json.preprocessed_array(input)),
       ]
+      let method = case turn_id {
+        Some(turn_id) -> {
+          #(list.append(params, [#("expectedTurnId", json.string(turn_id))]), "turn/steer")
+        }
+        None -> #(params, "turn/start")
+      }
+      let #(params, method) = method
       // An explicit /model override wins; otherwise the session's selected
       // profile supplies model/effort. (turn/start has no `config` param, so
       // only these two profile keys can apply at turn level — the full
@@ -1983,7 +2060,16 @@ fn message(
             }
           }
       }
-      rpc(cx, "turn/start", json.object(params))
+      // turn/steer only accepts threadId, input, and expectedTurnId.
+      let params = case turn_id {
+        Some(_) -> list.filter(params, fn(entry) {
+          case entry {
+            #(key, _) -> key != "model" && key != "effort"
+          }
+        })
+        None -> params
+      }
+      rpc(cx, method, json.object(params))
     }
   }
 }

@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
 	import { onDestroy, tick, untrack } from 'svelte';
-	import { loadMonaco, type Monaco } from '$lib/monaco';
+	import { loadMonaco, monacoTheme, type Monaco } from '$lib/monaco';
 
 	interface FileEntry {
 		name: string;
@@ -30,6 +30,7 @@
 		threadId,
 		cwd,
 		host = '',
+		theme = 'light',
 		reveal = null,
 		refreshNonce = 0,
 		onchanges,
@@ -39,6 +40,7 @@
 		cwd: string;
 		/** Remote host serving this session's files ('' or 'local' for this machine). */
 		host?: string;
+		theme?: 'light' | 'dark';
 		reveal?: { path: string; line?: number | null; nonce: number } | null;
 		refreshNonce?: number;
 		onchanges: () => void;
@@ -187,6 +189,11 @@
 	});
 
 	$effect(() => {
+		const selectedTheme = theme;
+		if (monacoRef) monacoRef.editor.setTheme(monacoTheme(selectedTheme));
+	});
+
+	$effect(() => {
 		const current = file;
 		const el = viewerEl;
 		if (!el || !current || current.status !== 'ready' || current.kind !== 'text') return;
@@ -215,7 +222,7 @@
 			editor = monacoRef.editor.create(el, {
 				readOnly: true,
 				domReadOnly: true,
-				theme: 'yacwu-paper',
+				theme: monacoTheme(theme),
 				automaticLayout: true,
 				minimap: { enabled: false },
 				scrollBeyondLastLine: false,

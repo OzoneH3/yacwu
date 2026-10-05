@@ -23,6 +23,16 @@ export interface AgentInfo {
 	closed: boolean;
 }
 
+/** Prefer the live thread lifecycle when available; collab tool metadata can lag. */
+export function isAgentRunning(
+	agent: AgentInfo,
+	threadStatus?: 'idle' | 'running'
+): boolean {
+	if (agent.closed) return false;
+	if (threadStatus !== undefined) return threadStatus === 'running';
+	return agent.state === 'running';
+}
+
 /** Keyed by agent thread id. Insertion order is the display order. */
 export type AgentRegistry = Record<string, AgentInfo>;
 
@@ -153,14 +163,14 @@ export function agentRootId(registry: AgentRegistry, agent: AgentInfo): string {
 /** All agents descending from `sessionId`, in registration (spawn) order. */
 export function agentsForSession(registry: AgentRegistry, sessionId: string): AgentInfo[] {
 	return Object.values(registry).filter(
-		(agent) => agentRootId(registry, agent) === sessionId
+		(agent) => agent.id !== sessionId && agentRootId(registry, agent) === sessionId
 	);
 }
 
-/** Short display label: nickname, else the agent path's last segment, else id. */
+/** Prefer the collaboration path so the tab matches names used by the coordinator. */
 export function agentLabel(agent: AgentInfo): string {
-	if (agent.nickname) return agent.nickname;
 	const tail = agent.path?.split('/').filter(Boolean).pop();
-	if (tail) return tail;
+	if (tail) return tail.replace(/[-_]+/g, ' ');
+	if (agent.nickname) return agent.nickname;
 	return agent.id.slice(0, 8);
 }
