@@ -3225,7 +3225,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function copyAgentResponse(item: any) {
 		const key = agentRawKey(item);
 		try {
-			await navigator.clipboard.writeText(String(item.text ?? ''));
+			await navigator.clipboard.writeText(stripTaskProgressMarkers(String(item.text ?? '')));
 			agentCopyStatus[key] = 'copied';
 		} catch {
 			agentCopyStatus[key] = 'failed';
@@ -4598,10 +4598,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{/each}
 									</div>
 								</div>
-							{:else if item.type === 'agentMessage'}
-								{@const rawShown = Boolean(agentRawShown[agentRawKey(item)])}
-								{@const time = agentTime(item)}
-								{@const turnDuration = (item as any)._turnDurationMs}
+			{:else if item.type === 'agentMessage'}
+				{@const rawShown = Boolean(agentRawShown[agentRawKey(item)])}
+				{@const time = agentTime(item)}
+				{@const turnDuration = (item as any)._turnDurationMs}
+				{@const taskProgress = parseTaskProgress(String((item as any).text ?? ''))}
 								<!-- The tap handler is a touch-only hover surrogate; keyboard
 								     users reach the toggle directly via focus. -->
 								<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -4625,8 +4626,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											{/if}
 										{/each}
 									{/if}
-									</div>
-									<div class="agent-meta">
+					</div>
+					{#if taskProgress}
+						<div class="message-progress" role="status" aria-label={`Task progress ${taskProgress.percent} percent, ${taskProgress.percent >= 100 ? 'complete' : formatEstimatedRemaining(taskProgress.remainingMinutes)}`}>
+							<span class="message-progress-label">Progress</span>
+							<span class="message-progress-meter" aria-hidden="true"><span style={`width: ${taskProgress.percent}%`}></span></span>
+							<strong>{taskProgress.percent}%</strong>
+							<span>{taskProgress.percent >= 100 ? 'Complete' : formatEstimatedRemaining(taskProgress.remainingMinutes)}</span>
+						</div>
+					{/if}
+					<div class="agent-meta">
 										{#if time}
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
@@ -7153,6 +7162,48 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		gap: var(--space-2xs);
 		justify-self: start;
 		min-height: calc(var(--space-sm) + var(--space-3xs));
+	}
+
+	.message-progress {
+		display: flex;
+		align-items: center;
+		gap: var(--space-xs);
+		width: fit-content;
+		max-width: 100%;
+		margin-block-start: var(--space-xs);
+		padding: var(--space-3xs) var(--space-xs);
+		border: var(--rule-hair) solid var(--color-rule);
+		border-radius: var(--radius-pill);
+		background: var(--color-paper-2);
+		color: var(--color-muted);
+		font-size: var(--text-2xs);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	.message-progress-label {
+		font-weight: 600;
+	}
+
+	.message-progress strong {
+		color: var(--color-ink-2);
+		font-weight: 600;
+	}
+
+	.message-progress-meter {
+		width: 3rem;
+		height: 0.3rem;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--color-rule);
+	}
+
+	.message-progress-meter > span {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--color-accent);
+		transition: width 180ms ease;
 	}
 
 	.agent-time {

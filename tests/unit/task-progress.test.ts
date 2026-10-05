@@ -24,5 +24,7 @@ describe('task progress reporting', () => {
 	test('removes protocol markers from displayed assistant text', () => {
 		expect(stripTaskProgressMarkers('Working\n[[YACWU_PROGRESS percent=25 remaining_minutes=12]]\nstill working'))
 			.toBe('Working\nstill working');
+		expect(stripTaskProgressMarkers('Working [[YACWU_PROGRESS percent=100 remaining_minutes=0]] complete'))
+			.toBe('Working complete');
 	});
 });

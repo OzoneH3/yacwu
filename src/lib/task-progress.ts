@@ -32,6 +32,8 @@ export function parseTaskProgress(text: string): TaskProgressEstimate | null {
 export function stripTaskProgressMarkers(text: string): string {
 	return text
 		.replace(/(^|\n)[ \t]*\[\[YACWU_PROGRESS percent=\d{1,3} remaining_minutes=(?:\d{1,4}|unknown)\]\][ \t]*(?:\r?\n|$)/gm, '$1')
+		.replace(/[ \t]*\[\[YACWU_PROGRESS percent=\d{1,3} remaining_minutes=(?:\d{1,4}|unknown)\]\][ \t]*/g, ' ')
+		.replace(/(^|\n) +/g, '$1')
 		.replace(/[ \t]+\n/g, '\n')
 		.replace(/\n{3,}/g, '\n\n')
 		.trim();
