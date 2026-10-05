@@ -28,8 +28,8 @@ import simplifile
 import yacwu/auth
 import yacwu/backends
 import yacwu/codex.{type Codex}
-import yacwu/diagnostics
 import yacwu/defaults
+import yacwu/diagnostics
 import yacwu/files
 import yacwu/git
 import yacwu/hosts
@@ -1532,14 +1532,15 @@ fn set_thread_name(
       let name = string.trim(name)
       case name {
         "" -> json_response(400, error_body("Session name cannot be empty"))
-        _ -> rpc(
-          cx,
-          "thread/name/set",
-          json.object([
-            #("threadId", json.string(thread_id)),
-            #("name", json.string(name)),
-          ]),
-        )
+        _ ->
+          rpc(
+            cx,
+            "thread/name/set",
+            json.object([
+              #("threadId", json.string(thread_id)),
+              #("name", json.string(name)),
+            ]),
+          )
       }
     }
     _ -> json_response(400, error_body("Session name cannot be empty"))
@@ -1651,15 +1652,16 @@ fn create_thread_on(
                     Ok(effort) if effort != "" -> effort
                     _ -> defaults.new_session_effort
                   }
-                  let _ = model_state.set_thread_model_state(
-                    cx,
-                    ctx.store,
-                    thread_id,
-                    Some(model),
-                    Some(effort),
-                    profile: model_state.Persisted(model: None, effort: None),
-                    read_rollout: fn(_) { Error(Nil) },
-                  )
+                  let _ =
+                    model_state.set_thread_model_state(
+                      cx,
+                      ctx.store,
+                      thread_id,
+                      Some(model),
+                      Some(effort),
+                      profile: model_state.Persisted(model: None, effort: None),
+                      read_rollout: fn(_) { Error(Nil) },
+                    )
                   Nil
                 }
               }
@@ -2016,6 +2018,68 @@ fn stage_image(host: String, cx: Codex, part: Part) -> Result(String, String) {
   }
 }
 
+const prompt_file_extensions = [
+  "pdf", "txt", "text", "md", "markdown", "rst", "log", "csv", "tsv", "json",
+  "jsonl", "yaml", "yml", "toml", "xml", "html", "htm", "css", "scss", "sass",
+  "less", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "pyw", "go", "rs",
+  "java", "kt", "c", "h", "cc", "hh", "cpp", "hpp", "cs", "fs", "rb", "php",
+  "pl", "pm", "sh", "bash", "zsh", "fish", "sql", "diff", "patch", "ini", "conf",
+  "cfg", "properties", "proto", "graphql", "gql", "ex", "exs", "gleam", "erl",
+  "hrl", "swift", "m", "mm", "r", "lua", "ps1", "bat", "dockerfile", "makefile",
+  "gitignore", "env",
+]
+
+fn prompt_file_extension(filename: String) -> String {
+  case string.lowercase(filename) {
+    "dockerfile" -> "dockerfile"
+    "makefile" -> "makefile"
+    _ -> extension_of(filename)
+  }
+}
+
+/// Store non-image prompt files in a readable temp/cache location and pass
+/// their paths in prompt text; app-server turn inputs have no generic file item.
+fn stage_prompt_file(
+  host: String,
+  cx: Codex,
+  part: Part,
+) -> Result(String, String) {
+  let filename = option.unwrap(part.filename, "attachment")
+  let extension = prompt_file_extension(filename)
+  case list.contains(prompt_file_extensions, extension) {
+    False ->
+      Error(
+        filename <> " is not a supported prompt file (PDF or text/code format)",
+      )
+    True -> {
+      let name =
+        "yacwu-"
+        <> string.lowercase(
+          bit_array.base16_encode(crypto.strong_random_bytes(16)),
+        )
+        <> "."
+        <> extension
+      use dir <- result.try(case hosts.is_local(host) {
+        True -> Ok(envoy.get("TMPDIR") |> result.unwrap("/tmp"))
+        False ->
+          case codex.info(cx).home {
+            "" -> Error("remote home directory unknown; reconnect and retry")
+            home -> {
+              let dir = home <> "/.cache/yacwu/uploads"
+              workspace.create_directory(ws_for(host, cx), dir)
+              |> result.replace(dir)
+            }
+          }
+      })
+      let path = filepath.join(dir, name)
+      case workspace.write_file(ws_for(host, cx), path, part.data) {
+        Ok(_) -> Ok(path)
+        Error(_) -> Error("failed to store " <> filename)
+      }
+    }
+  }
+}
+
 /// Send user input, starting a new turn on the thread.
 fn message(
   ctx: Context,
@@ -2045,6 +2109,32 @@ fn message(
           bit_array.to_string(part.data) |> result.replace_error(Nil)
         })
         |> result.unwrap("")
+      let images =
+        list.filter(parts, fn(part) {
+          part.name == "images" && part.data != <<>>
+        })
+      let files =
+        list.filter(parts, fn(part) {
+          part.name == "files" && part.data != <<>>
+        })
+      use staged_files <- result.try(
+        list.try_fold(files, [], fn(acc, part) {
+          stage_prompt_file(host, cx, part)
+          |> result.map(fn(path) { [path, ..acc] })
+        }),
+      )
+      let file_context = case list.reverse(staged_files) {
+        [] -> ""
+        staged -> {
+          let paths = list.map(staged, fn(path) { "- " <> path })
+          "\n\nThe user attached these files for reference. Read them to answer the request; do not modify them:\n"
+          <> string.join(paths, "\n")
+        }
+      }
+      let text = case string.trim(text) {
+        "" -> string.trim(file_context)
+        _ -> text <> file_context
+      }
       let text_input = case string.trim(text) {
         "" -> []
         _ -> [
@@ -2054,10 +2144,6 @@ fn message(
           ]),
         ]
       }
-      let images =
-        list.filter(parts, fn(part) {
-          part.name == "images" && part.data != <<>>
-        })
       let turn_id =
         list.find(parts, fn(part) { part.name == "turnId" })
         |> result.try(fn(part) {
@@ -2085,16 +2171,21 @@ fn message(
       let body = read_json_body(req)
       let text = jsonx.field_string(body, ["text"]) |> result.unwrap("")
       let turn_id =
-        jsonx.field_string(body, ["turnId"]) |> result.map(Some) |> result.unwrap(None)
+        jsonx.field_string(body, ["turnId"])
+        |> result.map(Some)
+        |> result.unwrap(None)
       case string.trim(text) {
-      "" -> Ok(#([], turn_id))
+        "" -> Ok(#([], turn_id))
         _ ->
-          Ok(#([
-            json.object([
-              #("type", json.string("text")),
-              #("text", json.string(text)),
-            ]),
-          ], turn_id))
+          Ok(#(
+            [
+              json.object([
+                #("type", json.string("text")),
+                #("text", json.string(text)),
+              ]),
+            ],
+            turn_id,
+          ))
       }
     }
   }
@@ -2109,7 +2200,10 @@ fn message(
       ]
       let method = case turn_id {
         Some(turn_id) -> {
-          #(list.append(params, [#("expectedTurnId", json.string(turn_id))]), "turn/steer")
+          #(
+            list.append(params, [#("expectedTurnId", json.string(turn_id))]),
+            "turn/steer",
+          )
         }
         None -> #(params, "turn/start")
       }
@@ -2157,11 +2251,12 @@ fn message(
       }
       // turn/steer only accepts threadId, input, and expectedTurnId.
       let params = case turn_id {
-        Some(_) -> list.filter(params, fn(entry) {
-          case entry {
-            #(key, _) -> key != "model" && key != "effort"
-          }
-        })
+        Some(_) ->
+          list.filter(params, fn(entry) {
+            case entry {
+              #(key, _) -> key != "model" && key != "effort"
+            }
+          })
         None -> params
       }
       rpc(cx, method, json.object(params))

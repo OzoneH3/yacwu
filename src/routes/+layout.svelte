@@ -60,11 +60,12 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 		turnStartedAt: number | null;
 	}
 
-	interface SelectedImage {
+	interface SelectedAttachment {
 		id: string;
 		file: File;
 		name: string;
-		previewUrl: string;
+		kind: 'image' | 'file';
+		previewUrl: string | null;
 	}
 
 	interface ArchivedSessionSnapshot {
@@ -179,7 +180,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	let input = $state('');
 	let promptDrafts = $state<Record<string, string>>({});
 	let promptDraftSessionId = $state<string | null>(null);
-	let selectedImages = $state<SelectedImage[]>([]);
+	let selectedAttachments = $state<SelectedAttachment[]>([]);
 	let sendingMessage = $state(false);
 	let connected = $state(false);
 	let cwds = $state<Record<string, string>>({});
@@ -1010,11 +1011,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	    Not every backend echoes a userMessage item back through the live
 	    stream (claude-codex keeps it on the turn record only), so the sent
 	    message would otherwise never appear until a reload. */
-	function addLocalUserMessage(id: string, text: string): string {
+	function addLocalUserMessage(id: string, text: string, attachments: SelectedAttachment[] = []): string {
 		const itemId = `local-user-${++localCounter}`;
+		const attachmentNames = attachments.filter((item) => item.kind === 'file').map((item) => item.name);
+		const displayText = attachmentNames.length
+			? `${text}${text ? '\n\n' : ''}Attached files: ${attachmentNames.join(', ')}`
+			: text;
 		upsertItem(
 			id,
-			{ type: 'userMessage', id: itemId, content: [{ type: 'text', text }] } as any,
+			{ type: 'userMessage', id: itemId, content: [{ type: 'text', text: displayText }] } as any,
 			true
 		);
 		(pendingUserEchoes[id] ??= []).push({ id: itemId, text });
@@ -1042,7 +1047,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			.map((c: any) => (typeof c?.text === 'string' ? visibleUserText(c.text) : ''))
 			.join('');
 		const match = queue.find((entry) => entry.text === text);
-		if (match) removeLocalItem(id, match.id);
+		if (match && (match.text === text || text.startsWith(match.text))) removeLocalItem(id, match.id);
 	}
 
 	/** Append a client-side note (slash-command echo / help / errors). */
@@ -1890,13 +1895,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
 	}
 
-	async function sendMessageRequest(id: string, text: string, images: File[], turnId: string | null): Promise<Response> {
+	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
 		const messageText = withTaskProgressInstructions(addSharedChannelContext(id, text));
-		if (images.length > 0) {
+		if (attachments.length > 0) {
 			const body = new FormData();
 			body.set('text', messageText);
 			if (turnId) body.set('turnId', turnId);
-			for (const image of images) body.append('images', image, image.name);
+			for (const attachment of attachments) {
+				body.append(attachment.kind === 'image' ? 'images' : 'files', attachment.file, attachment.name);
+			}
 			return fetch(threadApi(id, '/message'), { method: 'POST', body });
 		}
 
@@ -1907,10 +1914,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		});
 	}
 
-	async function sendMessageWithRetries(id: string, text: string, images: File[], turnId: string | null = null): Promise<Response> {
+	async function sendMessageWithRetries(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null = null): Promise<Response> {
 		for (let attempt = 0; ; attempt += 1) {
 			try {
-				return await sendMessageRequest(id, text, images, turnId);
+				return await sendMessageRequest(id, text, attachments, turnId);
 			} catch (err) {
 				if (!isFailedFetch(err) || attempt >= SEND_FETCH_RETRIES) throw err;
 				await retryDelay(attempt);
@@ -1933,15 +1940,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function send() {
 		if (sendingMessage) return;
 		const draftInput = input;
-		const draftImages = selectedImages;
+		const draftAttachments = selectedAttachments;
 		const text = draftInput.trim();
-		if ((!text && selectedImages.length === 0) || !activeId) return;
+		if ((!text && selectedAttachments.length === 0) || !activeId) return;
 		const id = activeId;
-		const images = draftImages.map((img) => img.file);
 
 		// Slash commands are handled client-side and dispatched to dedicated RPCs,
 		// mirroring the Codex TUI. Everything else is a normal model turn.
-		if (text.startsWith('/') && images.length === 0) {
+		if (text.startsWith('/') && draftAttachments.length === 0) {
 			input = '';
 			promptDrafts[id] = '';
 			composerHistoryOf(id).record(text);
@@ -1953,9 +1959,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		t.status = 'running';
 		t.error = null;
 		sendingMessage = true;
-		const echoId = addLocalUserMessage(id, text);
+		const echoId = addLocalUserMessage(id, text, draftAttachments);
 		try {
-			const res = await sendMessageWithRetries(id, text, images, t.status === 'running' ? t.turnId : null);
+			const res = await sendMessageWithRetries(id, text, draftAttachments, t.status === 'running' ? t.turnId : null);
 
 			if (!res.ok) {
 				const data = await res.json().catch(() => ({}));
@@ -1964,9 +1970,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 			if (input === draftInput) input = '';
 			if (input === '') promptDrafts[id] = '';
-			if (selectedImages === draftImages) {
-				for (const image of draftImages) URL.revokeObjectURL(image.previewUrl);
-				selectedImages = [];
+			if (selectedAttachments === draftAttachments) {
+				for (const attachment of draftAttachments) {
+					if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+				}
+				selectedAttachments = [];
 			}
 			composerHistoryOf(id).record(text);
 		} catch (err) {
@@ -2910,7 +2918,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return remainder ? `~${hours}h ${remainder}m left` : `~${hours}h left`;
 	}
 
-	function chooseImages() {
+	function chooseAttachments() {
 		imageInputEl?.click();
 	}
 
@@ -2930,52 +2938,70 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return inferredMime ? new File([file], file.name, { type: inferredMime, lastModified: file.lastModified }) : null;
 	}
 
-	function onImagesSelected(e: Event) {
+	const promptFileExtensions = new Set([
+		'pdf', 'txt', 'text', 'md', 'markdown', 'rst', 'log', 'csv', 'tsv', 'json', 'jsonl',
+		'yaml', 'yml', 'toml', 'xml', 'html', 'htm', 'css', 'scss', 'sass', 'less',
+		'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'pyw', 'go', 'rs', 'java', 'kt',
+		'c', 'h', 'cc', 'hh', 'cpp', 'hpp', 'cs', 'fs', 'rb', 'php', 'pl', 'pm', 'sh',
+		'bash', 'zsh', 'fish', 'sql', 'diff', 'patch', 'ini', 'conf', 'cfg', 'properties',
+		'proto', 'graphql', 'gql', 'ex', 'exs', 'gleam', 'erl', 'hrl', 'swift', 'm', 'mm',
+		'r', 'lua', 'ps1', 'bat', 'dockerfile', 'makefile', 'gitignore', 'env'
+	]);
+
+	function supportedPromptAttachment(file: File): SelectedAttachment | null {
+		const image = supportedPromptImage(file);
+		if (image) return { id: '', file: image, name: image.name || 'Pasted image', kind: 'image', previewUrl: null };
+		const extension = file.name.split('.').at(-1)?.toLowerCase() ?? '';
+		const specialName = file.name.toLowerCase();
+		if (!promptFileExtensions.has(extension) && !['dockerfile', 'makefile', '.env', '.gitignore'].includes(specialName)) return null;
+		return { id: '', file, name: file.name || 'Pasted file', kind: 'file', previewUrl: null };
+	}
+
+	function onAttachmentsSelected(e: Event) {
 		const files = Array.from((e.currentTarget as HTMLInputElement).files ?? []);
-		const accepted = files.map(supportedPromptImage).filter((file): file is File => file !== null);
+		const accepted = files.map(supportedPromptAttachment).filter((item): item is SelectedAttachment => item !== null);
 		if (accepted.length !== files.length) {
-			showArchiveNotice({ tone: 'error', message: 'Codex accepts PNG, JPEG, WebP, and non-animated GIF images here.' }, 4500);
+			showArchiveNotice({ tone: 'error', message: 'Supported attachments: PNG, JPEG, WebP, non-animated GIF, PDF, and common text/code files.' }, 5000);
 		}
-		addPromptImages(accepted);
+		addPromptAttachments(accepted);
 		if (imageInputEl) imageInputEl.value = '';
 	}
 
-	function addPromptImages(files: File[]) {
-		selectedImages = [
-			...selectedImages,
-			...files.map((file) => {
-				const extension = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
-				const name = file.name || `pasted-image-${Date.now()}.${extension}`;
+	function addPromptAttachments(items: SelectedAttachment[]) {
+		selectedAttachments = [
+			...selectedAttachments,
+			...items.map((item) => {
+				const name = item.name || `pasted-image-${Date.now()}.png`;
 				return {
-					id: `${name}-${file.size}-${file.lastModified}-${Math.random()}`,
-					file,
+					...item,
+					id: `${name}-${item.file.size}-${item.file.lastModified}-${Math.random()}`,
 					name,
-					previewUrl: URL.createObjectURL(file)
+					previewUrl: item.kind === 'image' ? URL.createObjectURL(item.file) : null
 				};
 			})
 		];
 	}
 
 	function onComposerPaste(event: ClipboardEvent) {
-		const imageItems = Array.from(event.clipboardData?.items ?? [])
-			.filter((item) => item.type.startsWith('image/'));
-		if (!imageItems.length) return;
-		const files = imageItems
-			.map((item) => item.getAsFile())
-			.filter((file): file is File => file !== null);
-		const accepted = files.map(supportedPromptImage).filter((file): file is File => file !== null);
+		const clipboardItems = Array.from(event.clipboardData?.items ?? [])
+			.filter((item) => item.kind === 'file');
+		const files = [
+			...clipboardItems.map((item) => item.getAsFile()).filter((file): file is File => file !== null),
+			...Array.from(event.clipboardData?.files ?? [])
+		].filter((file, index, all) => all.findIndex((other) => other.name === file.name && other.size === file.size && other.type === file.type) === index);
+		if (!files.length) return;
+		const accepted = files.map(supportedPromptAttachment).filter((item): item is SelectedAttachment => item !== null);
 		if (accepted.length !== files.length) {
-			showArchiveNotice({ tone: 'error', message: 'Paste a PNG, JPEG, WebP, or non-animated GIF image.' }, 4500);
+			showArchiveNotice({ tone: 'error', message: 'That file type cannot be attached. Try a PDF, text/code file, or supported image.' }, 5000);
 		}
-		addPromptImages(accepted);
-		// Preserve normal text pasting if the clipboard provides both text and an image.
-		if (!event.clipboardData?.getData('text/plain')) event.preventDefault();
+		addPromptAttachments(accepted);
+		if (accepted.length > 0 && !event.clipboardData?.getData('text/plain')) event.preventDefault();
 	}
 
-	function removeSelectedImage(id: string) {
-		const removed = selectedImages.find((img) => img.id === id);
-		if (removed) URL.revokeObjectURL(removed.previewUrl);
-		selectedImages = selectedImages.filter((img) => img.id !== id);
+	function removeSelectedAttachment(id: string) {
+		const removed = selectedAttachments.find((item) => item.id === id);
+		if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+		selectedAttachments = selectedAttachments.filter((item) => item.id !== id);
 	}
 
 	async function openSessionInfo() {
@@ -4973,20 +4999,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				{:else}
 				<div class="composer-shell">
 					<span class="composer-state" aria-live="polite">
-						{selectedImages.length > 0 ? `${selectedImages.length} image${selectedImages.length === 1 ? '' : 's'} attached` : ''}
+						{selectedAttachments.length > 0 ? `${selectedAttachments.length} attachment${selectedAttachments.length === 1 ? '' : 's'} ready` : ''}
 					</span>
-					{#if selectedImages.length > 0}
-						<div class="attachments" aria-label="Attached images">
-							{#each selectedImages as image (image.id)}
+					{#if selectedAttachments.length > 0}
+						<div class="attachments" aria-label="Attached files">
+							{#each selectedAttachments as attachment (attachment.id)}
 								<button
 									class="attachment"
 									type="button"
-									onclick={() => removeSelectedImage(image.id)}
-									aria-label={`Remove ${image.name}`}
-									title={`Remove ${image.name}`}
+									onclick={() => removeSelectedAttachment(attachment.id)}
+									aria-label={`Remove ${attachment.name}`}
+									title={`Remove ${attachment.name}`}
 								>
-									<img class="attachment-preview" src={image.previewUrl} alt="" />
-									<span>{image.name}</span>
+									{#if attachment.previewUrl}
+										<img class="attachment-preview" src={attachment.previewUrl} alt="" />
+									{:else}
+										<span class="attachment-file-icon" aria-hidden="true">{attachment.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'FILE'}</span>
+									{/if}
+									<span>{attachment.name}</span>
 									<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
 										<path d="M4 4l8 8M12 4l-8 8" />
 									</svg>
@@ -5022,9 +5052,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							bind:this={imageInputEl}
 							class="image-input"
 							type="file"
-							accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"
+							accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/*,.pdf,.txt,.text,.md,.markdown,.rst,.log,.csv,.tsv,.json,.jsonl,.yaml,.yml,.toml,.xml,.html,.htm,.css,.scss,.sass,.less,.js,.mjs,.cjs,.ts,.tsx,.jsx,.py,.pyw,.go,.rs,.java,.kt,.c,.h,.cc,.hh,.cpp,.hpp,.cs,.fs,.rb,.php,.pl,.pm,.sh,.bash,.zsh,.fish,.sql,.diff,.patch,.ini,.conf,.cfg,.properties,.proto,.graphql,.gql,.ex,.exs,.gleam,.erl,.hrl,.swift,.m,.mm,.r,.lua,.ps1,.bat,.dockerfile,.makefile,.gitignore,.env"
 							multiple
-							onchange={onImagesSelected}
+							onchange={onAttachmentsSelected}
 						/>
 						<textarea
 							bind:this={composerTextareaEl}
@@ -5049,7 +5079,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								: undefined}
 						></textarea>
 						<div class="composer-actions">
-							<button class="attach" type="button" onclick={chooseImages} title="Attach PNG, JPEG, WebP, or non-animated GIF images, or paste one into the prompt" aria-label="Attach supported images or paste from clipboard">
+							<button class="attach" type="button" onclick={chooseAttachments} title="Attach an image, PDF, text, or code file, or paste a file into the prompt" aria-label="Attach a supported file or paste from clipboard">
 								<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 									<path d="M12 5v14M5 12h14" />
 								</svg>
@@ -5102,7 +5132,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									class="send"
 									type="button"
 									onclick={send}
-									disabled={sendingMessage || (!input.trim() && selectedImages.length === 0)}
+										disabled={sendingMessage || (!input.trim() && selectedAttachments.length === 0)}
 					aria-label={sendingMessage ? 'Sending message' : activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Steer active task' : 'Send message'}
 					title={activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Send guidance to the active task' : 'Send message'}
 									aria-busy={sendingMessage}
@@ -8397,10 +8427,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: nowrap;
 	}
 
-	.attachment span:first-child {
+	.attachment > span:not(.attachment-file-icon) {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.attachment .attachment-file-icon {
+		display: grid;
+		flex: 0 0 auto;
+		place-items: center;
+		width: 2.25rem;
+		height: 2.25rem;
+		border: var(--rule-hair) solid var(--color-rule);
+		border-radius: var(--radius-input);
+		background: var(--color-paper-2);
+		color: var(--color-muted);
+		font-family: var(--font-outlier);
+		font-size: 0.55rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
 	}
 
 	.attachment .attachment-preview {

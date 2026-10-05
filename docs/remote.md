@@ -109,10 +109,11 @@ link — no extra ssh round-trips:
   `command/exec` in the session cwd; parsing, scopes, untracked `--no-index`
   diffs, and Monaco original/modified contents are shared with the local
   path (`git.Repo` abstracts the executor and file reader).
-- **Image attachments** — uploads are staged into
-  `~/.cache/yacwu/uploads/` on the remote machine via `fs/writeFile`, so
-  codex reads them by path as usual; transcript images are served back
-  through `fs/readFile` (10 MB cap).
+- **Prompt attachments** — images and common files (including PDFs and
+  text/code) are staged into `~/.cache/yacwu/uploads/` on the remote machine
+  via `fs/writeFile`; images use native image inputs and other files are
+  referenced by path in the prompt. Transcript images are served back through
+  `fs/readFile` (10 MB cap).
 - **Profiles** — `$CODEX_HOME/<name>.config.toml` files on the *session's*
   machine (the bootstrap reports the remote codex home), listed and parsed
   over the link; selection, layering on start/resume, and model inference

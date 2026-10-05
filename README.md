@@ -40,9 +40,9 @@ state lives entirely in Codex's own persistent sessions, read back via
 - ± Git changes inspector with All, Staged, and Unstaged scopes, added/removed
   line counts in both the inspector and transcript file-change entries, lazy
   unified diffs, and a resizable split view
-- 🖼️ Add PNG, JPEG, WebP, and non-animated GIF images to prompts with the
-  attach button or clipboard paste, preview them before sending, and view
-  image attachments and generated images inline in messages
+- 🖼️ Attach images (PNG, JPEG, WebP, non-animated GIF), PDFs, and common
+  text/code files through the picker or clipboard paste; image previews appear
+  inline, while other files are staged temporarily and passed to Codex by path
 - 🧭 Transcript position rail for jumping between messages in long sessions
 - ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
   prompt history with the Codex TUI's shell-style recall semantics

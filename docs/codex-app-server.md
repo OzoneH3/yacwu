@@ -713,6 +713,11 @@ The `input` field accepts a list of items:
 - `{ "type": "image", "url": "https://.../design.png" }`
 - `{ "type": "localImage", "path": "/tmp/screenshot.png" }`
 
+The app-server turn input has no generic file item. Yacwu's HTTP composer
+supports PDF and common text/code attachments by staging them temporarily and
+adding their paths to the prompt as reference files; image attachments use
+the native image items above.
+
 You can override configuration settings per turn (model, effort, personality, `cwd`, sandbox policy, summary). When specified, these settings become the defaults for later turns on the same thread. `outputSchema` applies only to the current turn. For `sandboxPolicy.type = "externalSandbox"`, set `networkAccess` to `restricted` or `enabled`; for `workspaceWrite`, `networkAccess` remains a boolean.
 
 For `turn/start.collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode" rather than clearing mode instructions.
