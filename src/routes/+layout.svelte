@@ -145,6 +145,8 @@
 	let sessionConfigs = $state<Record<string, { model: string; effort: string; profile: string | null }>>({});
 	let fastSessions = $state<Record<string, boolean>>({});
 	let input = $state('');
+	let promptDrafts = $state<Record<string, string>>({});
+	let promptDraftSessionId = $state<string | null>(null);
 	let selectedImages = $state<SelectedImage[]>([]);
 	let sendingMessage = $state(false);
 	let connected = $state(false);
@@ -259,7 +261,9 @@
 	const activeAgents = $derived(activeId ? agentsForSession(agents, activeId) : []);
 	const activeWorkOrderId = $derived(activeId ? latestWorkOrderBySession[activeId] ?? null : null);
 	const currentAgents = $derived(
-		activeAgents.filter((agent) => activeWorkOrderId ? agent.workOrderId === activeWorkOrderId : agentIsRunning(agent))
+		activeAgents.filter(
+			(agent) => agentIsRunning(agent) || Boolean(activeWorkOrderId && agent.workOrderId === activeWorkOrderId)
+		)
 	);
 	const previousAgents = $derived(activeAgents.filter((agent) => !currentAgents.includes(agent)));
 	const viewedAgentId = $derived(activeId ? page.url.searchParams.get('agent') : null);
@@ -379,6 +383,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 		return threads[id];
 	}
+
+	// Keep unsent text with the session it belongs to; a route change saves the
+	// old draft and restores the destination session's draft.
+	$effect(() => {
+		const id = activeId;
+		untrack(() => {
+			if (promptDraftSessionId === id) {
+				if (id) promptDrafts[id] = input;
+				return;
+			}
+			if (promptDraftSessionId) promptDrafts[promptDraftSessionId] = input;
+			input = id ? (promptDrafts[id] ?? '') : '';
+			promptDraftSessionId = id;
+		});
+	});
 
 	function modelDisplayProfile(choice: ModelChoice | null): ModelDisplayProfile | null {
 		if (!choice) return null;
@@ -1526,6 +1545,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// mirroring the Codex TUI. Everything else is a normal model turn.
 		if (text.startsWith('/') && images.length === 0) {
 			input = '';
+			promptDrafts[id] = '';
 			composerHistoryOf(id).record(text);
 			await handleSlash(id, text);
 			return;
@@ -1545,6 +1565,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 
 			if (input === draftInput) input = '';
+			if (input === '') promptDrafts[id] = '';
 			if (selectedImages === draftImages) selectedImages = [];
 			composerHistoryOf(id).record(text);
 		} catch (err) {

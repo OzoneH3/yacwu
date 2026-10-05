@@ -163,6 +163,8 @@ test('nested agents chain to the root session and list in spawn order', () => {
 test('the session root is not listed as its own agent tab', () => {
 	const registry: AgentRegistry = {};
 	trackAgentItem(registry, SESSION, spawn([AGENT_A]));
+	// The first worker remains listed even before root-thread metadata arrives.
+	expect(agentsForSession(registry, SESSION).map((agent) => agent.id)).toEqual([AGENT_A]);
 	registry[SESSION] = {
 		id: SESSION,
 		parentId: SESSION,
