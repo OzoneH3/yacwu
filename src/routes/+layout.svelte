@@ -92,7 +92,7 @@
 		provider: string;
 		capability: number;
 		efficiency: string;
-		valueRating: string;
+		valueRating: number;
 	}
 
 	interface TodoQueue {
@@ -546,13 +546,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (!choice) return null;
 		const name = `${choice.displayName} ${choice.id}`.toLowerCase().replace(/[\s_-]+/g, ' ');
 		const profiles: Array<[RegExp, ModelDisplayProfile]> = [
-			[/gpt 6(?:\.0)? luna/, { provider: 'OpenAI', capability: 70, efficiency: 'Exceptional', valueRating: '★★★★★' }],
-			[/gpt 5\.6 luna/, { provider: 'OpenAI', capability: 60, efficiency: 'Exceptional', valueRating: '★★★★★' }],
-			[/gpt 6\.1 sol/, { provider: 'OpenAI', capability: 93, efficiency: 'Excellent', valueRating: '★★★★★' }],
-			[/gpt 5\.6 terra/, { provider: 'OpenAI', capability: 72, efficiency: 'Very good', valueRating: '★★★★½' }],
-			[/gpt 6(?:\.0)? sol/, { provider: 'OpenAI', capability: 84, efficiency: 'Very good', valueRating: '★★★★½' }],
-			[/gpt 5\.6 sol/, { provider: 'OpenAI', capability: 79, efficiency: 'Good', valueRating: '★★★½' }],
-			[/gpt 6(?:\.0)? astra/, { provider: 'OpenAI', capability: 100, efficiency: 'Moderate/low', valueRating: '★★★½' }]
+			[/gpt 6(?:\.0)? luna/, { provider: 'OpenAI', capability: 70, efficiency: 'Exceptional', valueRating: 5 }],
+			[/gpt 5\.6 luna/, { provider: 'OpenAI', capability: 60, efficiency: 'Exceptional', valueRating: 5 }],
+			[/gpt 6\.1 sol/, { provider: 'OpenAI', capability: 93, efficiency: 'Excellent', valueRating: 5 }],
+			[/gpt 5\.6 terra/, { provider: 'OpenAI', capability: 72, efficiency: 'Very good', valueRating: 4.5 }],
+			[/gpt 6(?:\.0)? sol/, { provider: 'OpenAI', capability: 84, efficiency: 'Very good', valueRating: 4.5 }],
+			[/gpt 5\.6 sol/, { provider: 'OpenAI', capability: 79, efficiency: 'Good', valueRating: 3.5 }],
+			[/gpt 6(?:\.0)? astra/, { provider: 'OpenAI', capability: 100, efficiency: 'Moderate/low', valueRating: 3.5 }]
 		];
 		return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 	}
@@ -4975,7 +4975,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{#each activeModels as choice (choice.id)}
 								{@const profile = modelDisplayProfile(choice)}
 								<option value={choice.id}>
-									{choice.displayName || choice.id}{profile ? ` · ${profile.provider} · ~${profile.capability}/100 · ${profile.efficiency} efficiency · ${profile.valueRating}` : ''}
+									{choice.displayName || choice.id}{profile ? ` · ${profile.provider} · Cap ~${profile.capability} · Eff ${profile.efficiency} · ${profile.valueRating.toFixed(1)}` : ''}
 								</option>
 							{/each}
 										</select>
