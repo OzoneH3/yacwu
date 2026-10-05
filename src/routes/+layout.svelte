@@ -4166,20 +4166,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{/if}
 					</div>
 				</div>
-				{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
-					<div class="usage-limits" aria-label="Codex usage remaining">
-						{#if activeAccountUsage.fiveHour}
-							<span class="usage-window" title={`5-hour limit · resets in ${fmtReset(activeAccountUsage.fiveHour.resetsAt)}`}>
-								<strong>5h</strong> {remainingPercent(activeAccountUsage.fiveHour)}% left
-							</span>
-						{/if}
-						{#if activeAccountUsage.sevenDay}
-							<span class="usage-window" title={`7-day limit · resets in ${fmtReset(activeAccountUsage.sevenDay.resetsAt)}`}>
-								<strong>7d</strong> {remainingPercent(activeAccountUsage.sevenDay)}% left
-							</span>
-						{/if}
-					</div>
-				{/if}
 				<div class="session-facts" aria-label="session configuration">
 					{#if fastSessions[activeId]}{@render fastMark()}{/if}
 					{#if activeRemote}
@@ -4256,22 +4242,38 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{/if}
 				</div>
 			</header>
-			{#if sessionContextLine}
-				<div class="original-prompt" title={sessionContextTitle} aria-label={`Session: ${sessionContextLine}`}>
+			{#if sessionContextLine || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
+				<div class="original-prompt" title={sessionContextTitle} aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
 					<span>Session</span>
 					{#if activeTodoQueue?.currentTask}<span class="todo-position">[{activeTodoQueue.startedCount}/{activeTodoQueue.tasks.length}]</span>{/if}
 					<p>{sessionContextLine}</p>
-					{#if active?.status === 'running' && !viewedAgentId}
-						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
-							{#if activeTaskProgress}
-								<span class="session-progress-meter" aria-hidden="true"><span style={`width: ${activeTaskProgress.percent}%`}></span></span>
-								<span>{activeTaskProgress.percent}% est.</span>
-								<span>{formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}</span>
-							{:else}
-								<span>Estimating…</span>
-							{/if}
-						</div>
-					{/if}
+					<div class="session-bar-right">
+						{#if active?.status === 'running' && !viewedAgentId}
+							<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
+								{#if activeTaskProgress}
+									<span class="session-progress-meter" aria-hidden="true"><span style={`width: ${activeTaskProgress.percent}%`}></span></span>
+									<span>{activeTaskProgress.percent}% est.</span>
+									<span>{formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}</span>
+								{:else}
+									<span>Estimating…</span>
+								{/if}
+							</div>
+						{/if}
+						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
+							<div class="usage-limits" aria-label="Codex usage remaining">
+								{#if activeAccountUsage.fiveHour}
+									<span class="usage-window" title={`5-hour limit · resets in ${fmtReset(activeAccountUsage.fiveHour.resetsAt)}`}>
+										<strong>5h</strong> {remainingPercent(activeAccountUsage.fiveHour)}% left
+									</span>
+								{/if}
+								{#if activeAccountUsage.sevenDay}
+									<span class="usage-window" title={`7-day limit · resets in ${fmtReset(activeAccountUsage.sevenDay.resetsAt)}`}>
+										<strong>7d</strong> {remainingPercent(activeAccountUsage.sevenDay)}% left
+									</span>
+								{/if}
+							</div>
+						{/if}
+					</div>
 				</div>
 			{/if}
 
@@ -6047,7 +6049,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: nowrap;
 	}
 
-	.original-prompt .session-progress { margin-inline-start: auto; }
+	.session-bar-right {
+		flex: 0 0 auto;
+		display: inline-flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: var(--space-sm);
+		min-width: 0;
+		margin-inline-start: auto;
+	}
 
 	.session-progress {
 		flex: 0 0 auto;
@@ -6077,17 +6087,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.usage-limits {
-		grid-column: 1 / -1;
-		grid-row: 2;
-		justify-self: center;
 		display: inline-flex;
 		align-items: center;
-		gap: var(--space-sm);
+		gap: var(--space-xs);
 		max-width: 100%;
-		padding: 0 var(--space-2xs);
 		color: var(--color-muted);
 		font-family: var(--font-outlier);
-		font-size: var(--text-xs);
+		font-size: var(--text-2xs);
 		line-height: 1.35;
 		white-space: nowrap;
 	}
@@ -8562,6 +8568,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 		.raw-toggle {
 			width: var(--control-height);
+		}
+	}
+
+	@media (max-width: 36rem) {
+		.original-prompt {
+			flex-wrap: wrap;
+		}
+
+		.original-prompt p {
+			flex: 1 1 50%;
+		}
+
+		.session-bar-right {
+			flex: 1 0 100%;
+			flex-wrap: wrap;
 		}
 	}
 
