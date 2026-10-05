@@ -1550,7 +1550,23 @@ fn create_thread_on(
     Ok(params), Ok(profile) -> {
       let params = case profile {
         Some(profile) -> [#("config", profiles.config_json(profile)), ..params]
-        None -> params
+        None -> {
+          let params = case jsonx.field_string(body, ["model"]) {
+            Ok(model) if model != "" -> params
+            _ -> [#("model", json.string(defaults.new_session_model)), ..params]
+          }
+          let effort = case jsonx.field_string(body, ["effort"]) {
+            Ok(effort) if effort != "" -> effort
+            _ -> defaults.new_session_effort
+          }
+          [
+            #(
+              "config",
+              json.object([#("model_reasoning_effort", json.string(effort))]),
+            ),
+            ..params
+          ]
+        }
       }
       case codex.request(cx, "thread/start", json.object(params)) {
         Error(message) -> json_response(500, error_body(message))
@@ -1566,7 +1582,26 @@ fn create_thread_on(
                     thread_id,
                     Some(profile.name),
                   )
-                None -> Nil
+                None -> {
+                  let model = case jsonx.field_string(body, ["model"]) {
+                    Ok(model) if model != "" -> model
+                    _ -> defaults.new_session_model
+                  }
+                  let effort = case jsonx.field_string(body, ["effort"]) {
+                    Ok(effort) if effort != "" -> effort
+                    _ -> defaults.new_session_effort
+                  }
+                  let _ = model_state.set_thread_model_state(
+                    cx,
+                    ctx.store,
+                    thread_id,
+                    Some(model),
+                    Some(effort),
+                    profile: model_state.Persisted(model: None, effort: None),
+                    read_rollout: fn(_) { Error(Nil) },
+                  )
+                  Nil
+                }
               }
             }
             Error(_) -> Nil
