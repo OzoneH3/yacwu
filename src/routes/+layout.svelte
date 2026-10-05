@@ -519,15 +519,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function modelDisplayProfile(choice: ModelChoice | null): ModelDisplayProfile | null {
 		if (!choice) return null;
-		const name = `${choice.displayName} ${choice.id}`.toLowerCase().replace(/\s+/g, ' ');
+		const name = `${choice.displayName} ${choice.id}`.toLowerCase().replace(/[\s_-]+/g, ' ');
 		const profiles: Array<[RegExp, ModelDisplayProfile]> = [
-			[/gpt-6(?:\.0)? luna/, { provider: 'OpenAI', capability: 70, efficiency: 'Exceptional', valueRating: '★★★★★' }],
-			[/gpt-5\.6 luna/, { provider: 'OpenAI', capability: 60, efficiency: 'Exceptional', valueRating: '★★★★★' }],
-			[/gpt-6\.1 sol/, { provider: 'OpenAI', capability: 93, efficiency: 'Excellent', valueRating: '★★★★★' }],
-			[/gpt-5\.6 terra/, { provider: 'OpenAI', capability: 72, efficiency: 'Very good', valueRating: '★★★★½' }],
-			[/gpt-6(?:\.0)? sol/, { provider: 'OpenAI', capability: 84, efficiency: 'Very good', valueRating: '★★★★½' }],
-			[/gpt-5\.6 sol/, { provider: 'OpenAI', capability: 79, efficiency: 'Good', valueRating: '★★★½' }],
-			[/gpt-6(?:\.0)? astra/, { provider: 'OpenAI', capability: 100, efficiency: 'Moderate/low', valueRating: '★★★½' }]
+			[/gpt 6(?:\.0)? luna/, { provider: 'OpenAI', capability: 70, efficiency: 'Exceptional', valueRating: '★★★★★' }],
+			[/gpt 5\.6 luna/, { provider: 'OpenAI', capability: 60, efficiency: 'Exceptional', valueRating: '★★★★★' }],
+			[/gpt 6\.1 sol/, { provider: 'OpenAI', capability: 93, efficiency: 'Excellent', valueRating: '★★★★★' }],
+			[/gpt 5\.6 terra/, { provider: 'OpenAI', capability: 72, efficiency: 'Very good', valueRating: '★★★★½' }],
+			[/gpt 6(?:\.0)? sol/, { provider: 'OpenAI', capability: 84, efficiency: 'Very good', valueRating: '★★★★½' }],
+			[/gpt 5\.6 sol/, { provider: 'OpenAI', capability: 79, efficiency: 'Good', valueRating: '★★★½' }],
+			[/gpt 6(?:\.0)? astra/, { provider: 'OpenAI', capability: 100, efficiency: 'Moderate/low', valueRating: '★★★½' }]
 		];
 		return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 	}
@@ -4734,11 +4734,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</button>
 							<div class="composer-actions-end">
 				{#if activeConfig && activeModels.length > 0}
-					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${activeModelProfile ? ` · approximately ${activeModelProfile.capability}/100 capability · ${activeModelProfile.efficiency} usage efficiency` : ''}`}>
-						<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
-						{#if activeModelProfile}
-						<span class="model-profile-indicator" aria-hidden="true">{activeModelProfile.provider} · ~{activeModelProfile.capability} · {activeModelProfile.efficiency} · {activeModelProfile.valueRating}</span>
-						{/if}
+					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${activeModelProfile ? ` · ${activeModelProfile.provider} · approximately ${activeModelProfile.capability}/100 capability · ${activeModelProfile.efficiency} usage efficiency · ${activeModelProfile.valueRating}` : ''}`}>
+						<span class="model-picker-copy">
+							<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
+							{#if activeModelProfile}
+								<span class="model-profile-indicator" aria-hidden="true">{activeModelProfile.provider} · ~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} efficiency · {activeModelProfile.valueRating}</span>
+							{/if}
+						</span>
 						<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
 										</svg>
@@ -7840,7 +7842,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.model-picker {
-		max-width: min(17rem, 48vw);
+		max-width: min(21rem, 58vw);
 	}
 
 	.model-picker:focus-within,
@@ -7866,6 +7868,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		cursor: progress;
 	}
 
+	.model-picker-copy { display: flex; flex: 1 1 auto; flex-direction: column; justify-content: center; min-width: 0; gap: 0.05rem; line-height: 1.15; }
 	.model-picker-label,
 	.effort-label {
 		font-size: var(--text-base);
@@ -7879,10 +7882,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.model-profile-indicator {
-		flex: none;
+		min-width: 0;
 		color: var(--color-muted);
-		font-size: var(--text-xs);
-		white-space: nowrap;
+		font-size: var(--text-2xs);
+		line-height: 1.2;
+		white-space: normal;
 	}
 
 	.composer-select-chevron {
