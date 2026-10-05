@@ -214,6 +214,7 @@
 	// Sub-agent threads spawned by sessions (multi-agent collaboration).
 	let agents = $state<AgentRegistry>({});
 	let activeTurnBySession = $state<Record<string, string>>({});
+	let stoppingSessions = $state<Record<string, boolean>>({});
 	let latestWorkOrderBySession = $state<Record<string, string>>({});
 	let agentHistoryLoading = $state(false);
 	// Agent threads whose metadata (nickname/role) was already requested.
@@ -563,6 +564,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					: activeTurnBySession[rootId] ?? latestWorkOrderBySession[rootId] ?? null;
 			trackAgentItem(agents, id, next, workOrderId);
 			if (workOrderId) latestWorkOrderBySession[rootId] = workOrderId;
+		}
+	}
+
+	function syncThreadRuntime(id: string, thread: { status?: { type: string }; turns?: Turn[] }) {
+		const t = ensureThread(id);
+		const runtimeStatus = thread.status?.type;
+		if (runtimeStatus === 'active') {
+			t.status = 'running';
+			const turn = thread.turns?.findLast((turn) => turn.status === 'inProgress');
+			if (turn?.id) {
+				t.turnId = turn.id;
+				activeTurnBySession[id] = turn.id;
+			}
+		} else if (runtimeStatus === 'idle' || runtimeStatus === 'notLoaded') {
+			t.status = 'idle';
+			t.turnId = null;
+			delete activeTurnBySession[id];
+			markTaskCompleted(id);
 		}
 	}
 
@@ -1575,9 +1594,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (thr?.cwd) cwds[id] = thr.cwd;
 			if ('serviceTier' in data) setFastSession(id, data.serviceTier === 'priority');
 			const runtimeStatus = thr?.status?.type;
-			if (runtimeStatus === 'active') ensureThread(id).status = 'running';
-			else if (runtimeStatus === 'idle' || runtimeStatus === 'notLoaded') ensureThread(id).status = 'idle';
-			if (runtimeStatus === 'notLoaded' && Object.values(runningTasks).includes(id)) {
+			const wasRunning = Object.values(runningTasks).includes(id);
+			if (thr) syncThreadRuntime(id, thr);
+			if (runtimeStatus === 'notLoaded' && wasRunning) {
 				interruptedSessions[id] = true;
 				delete recoveringSessions[id];
 				persistInterruptedSessions();
@@ -2290,20 +2309,50 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function interrupt() {
 		const id = activeId;
-		if (!id) return;
-		const t = threads[id];
+		if (!id || stoppingSessions[id]) return;
+		stoppingSessions[id] = true;
 		reportDiagnostics(id, 'stop_requested');
 		try {
+			// Re-read the live turn: restored history or a missed SSE event can
+			// leave the UI's turn ID missing or out of date.
+			const url = new URL(threadApi(id), window.location.origin);
+			url.searchParams.set('turns', '1');
+			const read = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+			const data = await read.json();
+			if (!read.ok) throw new Error(data.error ?? `Could not check current turn (${read.status})`);
+			const thread = data.thread;
+			if (!thread) throw new Error('Could not check current turn: no thread returned');
+			syncThreadRuntime(id, thread);
+			if (thread.status?.type === 'idle' || thread.status?.type === 'notLoaded') {
+				reportDiagnostics(id, 'stop_succeeded');
+				return;
+			}
+			const turnId = thread.turns?.findLast((turn: Turn) => turn.status === 'inProgress')?.id;
+			if (!turnId) throw new Error('Could not find the running turn. Try Stop again.');
 			const response = await fetch(threadApi(id, '/interrupt'), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ turnId: t?.turnId })
+				body: JSON.stringify({ turnId }),
+				signal: AbortSignal.timeout(15_000)
 			});
-			reportDiagnostics(id, response.ok ? 'stop_succeeded' : 'stop_failed');
-			if (response.ok) markTaskCompleted(id);
+			if (!response.ok) {
+				const error = await response.json().catch(() => ({}));
+				throw new Error(error.error ?? `Stop failed (${response.status})`);
+			}
+			reportDiagnostics(id, 'stop_succeeded');
+			// A new turn may have started while the cancellation was in flight.
+			const t = ensureThread(id);
+			if (t.turnId === turnId) {
+				t.status = 'idle';
+				t.turnId = null;
+				delete activeTurnBySession[id];
+				markTaskCompleted(id);
+			}
 		} catch (error) {
 			reportDiagnostics(id, 'stop_failed');
-			throw error;
+			addLocalNote(id, `Could not stop task: ${error instanceof Error ? error.message : String(error)}`, 'err');
+		} finally {
+			delete stoppingSessions[id];
 		}
 	}
 
@@ -3998,7 +4047,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						></span>
 					</button>
 					{#if active?.status === 'running'}
-						<button class="stop" type="button" onclick={interrupt} aria-label="Stop current turn" title="Stop current turn">
+						<button class="stop" type="button" onclick={interrupt} disabled={stoppingSessions[activeId]} aria-label="Stop current turn" title="Stop current turn">
 							<svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 								<rect x="7" y="7" width="10" height="10" rx="1" />
 							</svg>
