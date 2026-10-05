@@ -4630,8 +4630,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if taskProgress}
 						<div class="message-progress" role="status" aria-label={`Task progress ${taskProgress.percent} percent, ${taskProgress.percent >= 100 ? 'complete' : formatEstimatedRemaining(taskProgress.remainingMinutes)}`}>
 							<span class="message-progress-label">Progress</span>
-							<span class="message-progress-meter" aria-hidden="true"><span style={`width: ${taskProgress.percent}%`}></span></span>
+							<span aria-hidden="true">·</span>
 							<strong>{taskProgress.percent}%</strong>
+							<span class="message-progress-meter" aria-hidden="true"><span style={`width: ${taskProgress.percent}%`}></span></span>
+							<span aria-hidden="true">·</span>
 							<span>{taskProgress.percent >= 100 ? 'Complete' : formatEstimatedRemaining(taskProgress.remainingMinutes)}</span>
 						</div>
 					{/if}
@@ -7167,32 +7169,28 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.message-progress {
 		display: flex;
 		align-items: center;
-		gap: var(--space-xs);
+		gap: var(--space-2xs);
 		width: fit-content;
 		max-width: 100%;
 		margin-block-start: var(--space-xs);
-		padding: var(--space-3xs) var(--space-xs);
-		border: var(--rule-hair) solid var(--color-rule);
-		border-radius: var(--radius-pill);
-		background: var(--color-paper-2);
 		color: var(--color-muted);
-		font-size: var(--text-2xs);
+		font-size: var(--text-xs);
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
 	}
 
 	.message-progress-label {
-		font-weight: 600;
+		font-weight: 500;
 	}
 
 	.message-progress strong {
 		color: var(--color-ink-2);
-		font-weight: 600;
+		font-weight: 500;
 	}
 
 	.message-progress-meter {
-		width: 3rem;
-		height: 0.3rem;
+		width: 2rem;
+		height: 0.22rem;
 		overflow: hidden;
 		border-radius: 999px;
 		background: var(--color-rule);
