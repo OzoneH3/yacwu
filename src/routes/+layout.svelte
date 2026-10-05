@@ -316,6 +316,24 @@
 	// ?agent= query param) shows its transcript read-only; the session itself
 	// stays the URL's identity, so the rail selection never moves.
 	const activeAgents = $derived(activeId ? agentsForSession(agents, activeId) : []);
+	function threadNeedsInput(threadId: string): boolean {
+		const items = itemsOf(threads[threadId] ?? null);
+		for (let index = items.length - 1; index >= 0; index--) {
+			const item = items[index] as any;
+			if (item.type === 'userMessage') return false;
+			if (item.type === 'agentMessage') return Boolean(parseInteractiveChoice(String(item.text ?? '')));
+		}
+		return false;
+	}
+	const sessionsNeedingInput = $derived.by(() => {
+		const result = new Set<string>();
+		for (const session of sessions) {
+			if (threadNeedsInput(session.id) || agentsForSession(agents, session.id).some((agent) => threadNeedsInput(agent.id))) {
+				result.add(session.id);
+			}
+		}
+		return result;
+	});
 	const activeWorkOrderId = $derived(activeId ? latestWorkOrderBySession[activeId] ?? null : null);
 	const currentAgents = $derived(
 		activeAgents.filter(
@@ -3432,8 +3450,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							aria-label={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
 							title={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
 						></span>
-						<span class="label">
-							{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
+		<span class="label">
+			{#if sessionsNeedingInput.has(s.id)}<span class="needs-input-indicator" role="img" aria-label="Codex needs your input" title="Codex needs your input">!</span>{/if}
+			{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
 							{#if interruptedSessions[s.id]}<span class="session-interrupted">Interrupted</span>
 							{:else if recoveringSessions[s.id]}<span class="session-interrupted checking">Checking…</span>{/if}
 						</span>
@@ -3471,7 +3490,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								aria-label={threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle'}
 								title={threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle'}
 							></span>
-							<span class="label">⎇ {shortLabel(side)}</span>
+							<span class="label">
+								{#if sessionsNeedingInput.has(side.id)}<span class="needs-input-indicator" role="img" aria-label="Codex needs your input" title="Codex needs your input">!</span>{/if}
+								⎇ {shortLabel(side)}
+							</span>
 							{#if fastSessions[side.id]}{@render fastMark()}{/if}
 						</a>
 						<button
@@ -5065,6 +5087,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: nowrap;
 		font-size: var(--text-sm);
 		font-weight: 500;
+	}
+
+	.needs-input-indicator {
+		display: inline-grid;
+		place-items: center;
+		flex: none;
+		width: var(--space-sm);
+		height: var(--space-sm);
+		border-radius: var(--radius-pill);
+		background: var(--color-error);
+		color: var(--color-paper);
+		font-size: var(--text-xs);
+		font-weight: 800;
+		line-height: 1;
 	}
 
 	.session-name {
