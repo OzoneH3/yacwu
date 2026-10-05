@@ -328,7 +328,6 @@
 	const activeModelChoice = $derived(
 		activeConfig ? (activeModels.find((choice) => choice.id === activeConfig.model) ?? null) : null
 	);
-	const activeModelProfile = $derived(modelDisplayProfile(activeModelChoice));
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
 	const activeAccountUsage = $derived(accountUsageByHost[activeHost] ?? null);
@@ -4387,9 +4386,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<dt>Model</dt>
 							<dd>
 								{activeModelChoice?.displayName ?? activeConfig?.model ?? '—'}
-								{#if activeModelProfile}
-									<span class="model-profile-detail">{activeModelProfile.provider} · ~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} usage efficiency · {activeModelProfile.valueRating}</span>
-								{/if}
 							</dd>
 						</div>
 						<div>
@@ -4953,12 +4949,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</button>
 							<div class="composer-actions-end">
 				{#if activeConfig && activeModels.length > 0}
-					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${activeModelProfile ? ` · ${activeModelProfile.provider} · approximately ${activeModelProfile.capability}/100 capability · ${activeModelProfile.efficiency} usage efficiency · ${activeModelProfile.valueRating}` : ''}`}>
+					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}`}>
 						<span class="model-picker-copy">
 							<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
-							{#if activeModelProfile}
-								<span class="model-profile-indicator" aria-hidden="true">{activeModelProfile.provider} · ~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} efficiency · {activeModelProfile.valueRating}</span>
-							{/if}
 						</span>
 						<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
@@ -6587,13 +6580,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-family: var(--font-outlier);
 	}
 
-	.model-profile-detail {
-		display: block;
-		color: var(--color-muted);
-		font-family: var(--font-body);
-		font-size: var(--text-xs);
-	}
-
 	.side-banner,
 	.goal-tracker {
 		display: flex;
@@ -8131,14 +8117,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-
-	.model-profile-indicator {
-		min-width: 0;
-		color: var(--color-muted);
-		font-size: var(--text-2xs);
-		line-height: 1.2;
-		white-space: normal;
 	}
 
 	.composer-select-chevron {
