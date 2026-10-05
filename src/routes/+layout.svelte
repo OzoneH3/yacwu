@@ -84,6 +84,11 @@
 		efforts: string[];
 	}
 
+	interface ModelDisplayProfile {
+		capability: number;
+		efficiency: string;
+	}
+
 	interface ModelState {
 		model: string;
 		effort: string;
@@ -195,6 +200,7 @@
 	const VIRTUAL_OVERSCAN_PX = 700;
 	const COMMAND_OUTPUT_COLLAPSE_LINES = 10;
 	const COMMAND_OUTPUT_COLLAPSE_CHARS = 1200;
+	const MODEL_CAPACITY_ERROR = 'Selected model is at capacity. Please try a different model.';
 	const FAST_SESSIONS_KEY = 'yacwu-fast-sessions';
 	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
@@ -226,6 +232,7 @@
 	const activeModelChoice = $derived(
 		activeConfig ? (activeModels.find((choice) => choice.id === activeConfig.model) ?? null) : null
 	);
+	const activeModelProfile = $derived(modelDisplayProfile(activeModelChoice));
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
 	const activeAccountUsage = $derived(accountUsageByHost[activeHost] ?? null);
@@ -366,6 +373,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			};
 		}
 		return threads[id];
+	}
+
+	function modelDisplayProfile(choice: ModelChoice | null): ModelDisplayProfile | null {
+		if (!choice) return null;
+		const name = `${choice.displayName} ${choice.id}`.toLowerCase().replace(/\s+/g, ' ');
+		const profiles: Array<[RegExp, ModelDisplayProfile]> = [
+			[/gpt-6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional' }],
+			[/gpt-5\.6 luna/, { capability: 60, efficiency: 'Exceptional' }],
+			[/gpt-6\.1 sol/, { capability: 93, efficiency: 'Excellent' }],
+			[/gpt-5\.6 terra/, { capability: 72, efficiency: 'Very good' }],
+			[/gpt-6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good' }],
+			[/gpt-5\.6 sol/, { capability: 79, efficiency: 'Good' }],
+			[/gpt-6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low' }]
+		];
+		return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 	}
 
 	function upsertItem(id: string, item: ThreadItem & { id: string }, stampTime = false) {
@@ -1459,6 +1481,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	function retryLastPrompt() {
+		if (!activeId || viewedAgentId || sendingMessage) return;
+		const lastUserMessage = [...itemsOf(viewed)].reverse().find((item) => item.type === 'userMessage') as any;
+		const text = (lastUserMessage?.content ?? [])
+			.map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+			.join('')
+			.trim();
+		if (!text) return;
+		input = text;
+		void send();
+	}
+
 	async function send() {
 		if (sendingMessage) return;
 		const draftInput = input;
@@ -1479,6 +1513,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 		const t = ensureThread(id);
 		t.status = 'running';
+		t.error = null;
 		sendingMessage = true;
 		const echoId = addLocalUserMessage(id, text);
 		try {
@@ -3534,7 +3569,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</div>
 						<div>
 							<dt>Model</dt>
-							<dd>{activeConfig?.model ?? '—'}</dd>
+							<dd>
+								{activeModelChoice?.displayName ?? activeConfig?.model ?? '—'}
+								{#if activeModelProfile}
+									<span class="model-profile-detail">~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} usage efficiency</span>
+								{/if}
+							</dd>
 						</div>
 						<div>
 							<dt>Reasoning</dt>
@@ -3898,7 +3938,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</div>
 					{/if}
 					{#if viewed?.error}
-						<div class="item err"><span class="gutter">✗</span><div class="body">{viewed.error}</div></div>
+						<div class="item err">
+							<span class="gutter">✗</span>
+							<div class="body">{viewed.error}</div>
+							{#if viewed.error === MODEL_CAPACITY_ERROR && !viewedAgentId}
+								<button class="retry-capacity" type="button" onclick={retryLastPrompt} disabled={sendingMessage}>
+									{sendingMessage ? 'Retrying…' : 'Retry'}
+								</button>
+							{/if}
+						</div>
 					{/if}
 				</div>
 				{#if transcriptJumpPoints.length > 1}
@@ -4023,10 +4071,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								</svg>
 							</button>
 							<div class="composer-actions-end">
-								{#if activeConfig && activeModels.length > 0}
-									<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}`}>
-										<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
-										<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+				{#if activeConfig && activeModels.length > 0}
+					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${activeModelProfile ? ` · approximately ${activeModelProfile.capability}/100 capability · ${activeModelProfile.efficiency} usage efficiency` : ''}`}>
+						<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
+						{#if activeModelProfile}
+							<span class="model-profile-indicator" aria-hidden="true">~{activeModelProfile.capability} · {activeModelProfile.efficiency}</span>
+						{/if}
+						<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
 										</svg>
 										<select
@@ -4035,10 +4086,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											value={activeConfig.model}
 											disabled={modelPending || effortPending}
 											onchange={(event) => setComposerModel(event.currentTarget)}
-										>
-											{#each activeModels as choice (choice.id)}
-												<option value={choice.id}>{choice.displayName || choice.id}</option>
-											{/each}
+						>
+							{#each activeModels as choice (choice.id)}
+								{@const profile = modelDisplayProfile(choice)}
+								<option value={choice.id}>
+									{choice.displayName || choice.id}{profile ? ` · ~${profile.capability}/100 · ${profile.efficiency} efficiency` : ''}
+								</option>
+							{/each}
 										</select>
 									</div>
 								{/if}
@@ -5360,6 +5414,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-family: var(--font-outlier);
 	}
 
+	.model-profile-detail {
+		display: block;
+		color: var(--color-muted);
+		font-family: var(--font-body);
+		font-size: var(--text-xs);
+	}
+
 	.side-banner,
 	.goal-tracker {
 		display: flex;
@@ -6577,6 +6638,31 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-error);
 	}
 
+	.retry-capacity {
+		flex: none;
+		margin-inline-start: auto;
+		padding: var(--space-3xs) var(--space-xs);
+		border: var(--rule-hair) solid currentColor;
+		border-radius: var(--radius-input);
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+		font: inherit;
+		font-size: var(--text-xs);
+	}
+
+	.retry-capacity:hover:not(:disabled),
+	.retry-capacity:focus-visible {
+		background: var(--color-error-soft);
+		outline: var(--rule-fine) solid var(--color-focus);
+		outline-offset: var(--focus-offset);
+	}
+
+	.retry-capacity:disabled {
+		cursor: progress;
+		opacity: 0.7;
+	}
+
 	.item.review {
 		color: var(--color-ink);
 	}
@@ -6785,7 +6871,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.model-picker {
-		max-width: min(12rem, 36vw);
+		max-width: min(17rem, 48vw);
 	}
 
 	.model-picker:focus-within,
@@ -6817,8 +6903,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.model-picker-label {
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.model-profile-indicator {
+		flex: none;
+		color: var(--color-muted);
+		font-size: var(--text-xs);
 		white-space: nowrap;
 	}
 
