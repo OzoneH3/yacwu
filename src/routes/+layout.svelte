@@ -5537,14 +5537,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		flex-direction: column;
 		align-items: flex-start;
 		gap: var(--space-xs);
-		min-width: 10rem;
-		max-height: 16rem;
-		overflow: auto;
+		min-width: 12rem;
+		max-width: min(20rem, calc(100vw - 2rem));
+		max-height: min(24rem, 65vh);
+		overflow-x: hidden;
+		overflow-y: auto;
+		overscroll-behavior: contain;
 		padding: var(--space-sm);
 		border: 1px solid var(--color-rule-2);
 		border-radius: var(--radius-sm);
 		background: var(--color-surface);
 		box-shadow: var(--shadow-popover);
+	}
+
+	.agent-history-list .agent-link {
+		flex: 0 0 auto;
+		width: 100%;
+		max-width: none;
+		min-height: var(--control-height-compact);
 	}
 
 	.agent-dot {
