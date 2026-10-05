@@ -3,6 +3,8 @@ export interface InteractiveChoice {
 	options: string[];
 }
 
+export type PromptKind = 'choice' | 'unknown' | null;
+
 /** Recognize an explicit assistant question followed by a Markdown option list. */
 export function parseInteractiveChoice(text: string): InteractiveChoice | null {
 	const lines = text.trim().split(/\r?\n/);
@@ -26,4 +28,10 @@ export function parseInteractiveChoice(text: string): InteractiveChoice | null {
 	const question = context.slice(questionStart, questionEnd + 1).trim();
 	if (!question) return null;
 	return { question, options };
+}
+
+export function detectPromptKind(text: string): PromptKind {
+	if (parseInteractiveChoice(text)) return 'choice';
+	const finalText = text.trim().replace(/[\*_`~]+\s*$/, '').trim();
+	return finalText.endsWith('?') ? 'unknown' : null;
 }

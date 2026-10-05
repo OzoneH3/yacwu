@@ -33,7 +33,7 @@
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
-	import { parseInteractiveChoice } from '$lib/interactive-choice';
+	import { detectPromptKind, parseInteractiveChoice } from '$lib/interactive-choice';
 
 	let { children } = $props();
 
@@ -316,21 +316,26 @@
 	// ?agent= query param) shows its transcript read-only; the session itself
 	// stays the URL's identity, so the rail selection never moves.
 	const activeAgents = $derived(activeId ? agentsForSession(agents, activeId) : []);
-	function threadNeedsInput(threadId: string): boolean {
+	function threadAttention(threadId: string): 'choice' | 'alert' | null {
+		if (threads[threadId]?.error) return 'alert';
 		const items = itemsOf(threads[threadId] ?? null);
 		for (let index = items.length - 1; index >= 0; index--) {
 			const item = items[index] as any;
-			if (item.type === 'userMessage') return false;
-			if (item.type === 'agentMessage') return Boolean(parseInteractiveChoice(String(item.text ?? '')));
-		}
-		return false;
-	}
-	const sessionsNeedingInput = $derived.by(() => {
-		const result = new Set<string>();
-		for (const session of sessions) {
-			if (threadNeedsInput(session.id) || agentsForSession(agents, session.id).some((agent) => threadNeedsInput(agent.id))) {
-				result.add(session.id);
+			if (item.type === 'userMessage') return null;
+			if (item.type === 'agentMessage') {
+				const kind = detectPromptKind(String(item.text ?? ''));
+				return kind === 'choice' ? 'choice' : kind === 'unknown' ? 'alert' : null;
 			}
+		}
+		return null;
+	}
+	const sessionAttentionById = $derived.by(() => {
+		const result: Record<string, 'choice' | 'alert'> = {};
+		for (const session of sessions) {
+			const attention = [session.id, ...agentsForSession(agents, session.id).map((agent) => agent.id)]
+				.map(threadAttention);
+			if (attention.includes('alert')) result[session.id] = 'alert';
+			else if (attention.includes('choice')) result[session.id] = 'choice';
 		}
 		return result;
 	});
@@ -3451,7 +3456,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							title={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
 						></span>
 		<span class="label">
-			{#if sessionsNeedingInput.has(s.id)}<span class="needs-input-indicator" role="img" aria-label="Codex needs your input" title="Codex needs your input">!</span>{/if}
+							{#if sessionAttentionById[s.id]}
+								<span
+									class="needs-input-indicator"
+									class:choice={sessionAttentionById[s.id] === 'choice'}
+									role="img"
+									aria-label={sessionAttentionById[s.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
+									title={sessionAttentionById[s.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
+								>{sessionAttentionById[s.id] === 'choice' ? '?' : '!'}</span>
+							{/if}
 			{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
 							{#if interruptedSessions[s.id]}<span class="session-interrupted">Interrupted</span>
 							{:else if recoveringSessions[s.id]}<span class="session-interrupted checking">Checking…</span>{/if}
@@ -3491,7 +3504,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								title={threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle'}
 							></span>
 							<span class="label">
-								{#if sessionsNeedingInput.has(side.id)}<span class="needs-input-indicator" role="img" aria-label="Codex needs your input" title="Codex needs your input">!</span>{/if}
+								{#if sessionAttentionById[side.id]}
+									<span
+										class="needs-input-indicator"
+										class:choice={sessionAttentionById[side.id] === 'choice'}
+										role="img"
+										aria-label={sessionAttentionById[side.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
+										title={sessionAttentionById[side.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
+									>{sessionAttentionById[side.id] === 'choice' ? '?' : '!'}</span>
+								{/if}
 								⎇ {shortLabel(side)}
 							</span>
 							{#if fastSessions[side.id]}{@render fastMark()}{/if}
@@ -5101,6 +5122,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-size: var(--text-xs);
 		font-weight: 800;
 		line-height: 1;
+	}
+
+	.needs-input-indicator.choice {
+		background: var(--color-warning);
+		color: var(--color-paper);
 	}
 
 	.session-name {
