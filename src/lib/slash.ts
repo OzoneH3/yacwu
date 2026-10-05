@@ -10,6 +10,9 @@ export type SlashCommand =
 	| { kind: 'goal-show' }
 	| { kind: 'goal-clear' }
 	| { kind: 'goal-set'; objective: string; tokenBudget?: number }
+	| { kind: 'todo-show' }
+	| { kind: 'todo-add'; task: string }
+	| { kind: 'todo-clear' }
 	| { kind: 'compact' }
 	| { kind: 'review'; instructions?: string }
 	| { kind: 'shell'; command: string }
@@ -32,6 +35,9 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
 	['/goal --budget N <goal>', 'set the goal with a token budget'],
 	['/goal', 'show the current goal'],
 	['/goal clear', 'clear the goal'],
+	['/todo <task>', 'queue a task to start after the current task'],
+	['/todo', 'show queued tasks'],
+	['/todo clear', 'clear tasks that have not started'],
 	['/compact', 'compact conversation history'],
 	['/review [notes]', 'review uncommitted changes (or custom notes)'],
 	['/shell <command>', 'run a shell command in the thread'],
@@ -150,6 +156,10 @@ export function parseSlash(text: string): SlashCommand {
 		}
 		case '/goal':
 			return parseGoal(arg);
+		case '/todo':
+			if (!arg) return { kind: 'todo-show' };
+			if (arg.toLowerCase() === 'clear') return { kind: 'todo-clear' };
+			return { kind: 'todo-add', task: arg };
 		case '/compact':
 			return arg ? { kind: 'unknown', command: cmd } : { kind: 'compact' };
 		case '/review':

@@ -51,6 +51,12 @@ test('/profile clear (or default) reverts to the base config', () => {
 	expect(parseSlash('/profile DEFAULT')).toEqual({ kind: 'profile-clear' });
 });
 
+test('/todo queues a task, shows the queue, or clears pending tasks', () => {
+	expect(parseSlash('/todo')).toEqual({ kind: 'todo-show' });
+	expect(parseSlash('/todo clear')).toEqual({ kind: 'todo-clear' });
+	expect(parseSlash('/todo fix session restore')).toEqual({ kind: 'todo-add', task: 'fix session restore' });
+});
+
 test('/btw starts an empty side conversation without arguments', () => {
 	expect(parseSlash('/btw')).toEqual({ kind: 'btw' });
 });

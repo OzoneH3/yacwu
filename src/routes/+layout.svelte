@@ -56,6 +56,7 @@
 		contextWindow: number | null;
 		error: string | null;
 		goal: Goal | null;
+		turnStartedAt: number | null;
 	}
 
 	interface SelectedImage {
@@ -92,6 +93,12 @@
 		capability: number;
 		efficiency: string;
 		valueRating: string;
+	}
+
+	interface TodoQueue {
+		tasks: string[];
+		startedCount: number;
+		currentTask: string | null;
 	}
 
 	interface ModelState {
@@ -193,6 +200,7 @@
 	// Read-only file browser (FileBrowser.svelte), rooted at the session cwd.
 	let filesOpen = $state(false);
 	let filesReveal = $state<{ path: string; line: number | null; nonce: number } | null>(null);
+	let fileChangeLineStats = $state<Record<string, { additions: number | null; deletions: number | null }>>({});
 	let fileLinkPreview = $state<{ path: string; content: string } | null>(null);
 	let copiedFileLink = $state<string | null>(null);
 	let filesRefresh = $state(0);
@@ -242,9 +250,11 @@
 	const FAST_SESSIONS_KEY = 'yacwu-fast-sessions';
 	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
+	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
 	const RESTART_CONTINUATION_PROMPT =
 		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
 	let runningTasks: Record<string, string> = {};
+	let todoQueues = $state<Record<string, TodoQueue>>({});
 	let archiveNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// The active session is whatever is in the URL (/s/<id>); / shows the welcome.
@@ -264,9 +274,11 @@
 	);
 	const originalPrompt = $derived(userPrompts[0] ?? '');
 	const latestPrompt = $derived(userPrompts.at(-1) ?? '');
-	const sessionContextLine = $derived(latestPrompt || activeSummary?.name?.trim() || '');
+	const activeTodoQueue = $derived(activeId ? todoQueues[activeId] ?? null : null);
+	const sessionContextLine = $derived(activeTodoQueue?.currentTask || latestPrompt || activeSummary?.name?.trim() || '');
 	const sessionContextTitle = $derived.by(() => {
 		const lines = [];
+		if (activeTodoQueue?.currentTask) lines.push(`Current todo [${activeTodoQueue.startedCount}/${activeTodoQueue.tasks.length}]: ${activeTodoQueue.currentTask}`);
 		if (activeSummary?.name?.trim()) lines.push(`Session: ${activeSummary.name.trim()}`);
 		if (latestPrompt) lines.push(`Latest prompt: ${latestPrompt}`);
 		if (originalPrompt && originalPrompt !== latestPrompt) lines.push(`Original prompt: ${originalPrompt}`);
@@ -496,7 +508,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				tokens: null,
 				contextWindow: null,
 				error: null,
-				goal: null
+				goal: null,
+				turnStartedAt: null
 			};
 		}
 		return threads[id];
@@ -572,6 +585,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const runtimeStatus = thread.status?.type;
 		if (runtimeStatus === 'active') {
 			t.status = 'running';
+			if (t.turnStartedAt === null) t.turnStartedAt = Date.now();
 			const turn = thread.turns?.findLast((turn) => turn.status === 'inProgress');
 			if (turn?.id) {
 				t.turnId = turn.id;
@@ -579,6 +593,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		} else if (runtimeStatus === 'idle' || runtimeStatus === 'notLoaded') {
 			t.status = 'idle';
+			t.turnStartedAt = null;
 			t.turnId = null;
 			delete activeTurnBySession[id];
 			markTaskCompleted(id);
@@ -767,6 +782,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
 		delete activeTurnBySession[id];
 		delete latestWorkOrderBySession[id];
+		delete todoQueues[id];
+		persistTodoQueues();
 		if (interruptedSessions[id]) {
 			delete interruptedSessions[id];
 			persistInterruptedSessions();
@@ -829,6 +846,96 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		delete runningTasks[threadId];
 		if (sessionId) delete recoveringSessions[sessionId];
 		persistRunningTasks();
+	}
+
+	function stampTurnDuration(threadId: string, durationMs: number) {
+		const thread = ensureThread(threadId);
+		for (let i = thread.order.length - 1; i >= 0; i -= 1) {
+			const item = thread.byId[thread.order[i]] as any;
+			if (item?.type === 'agentMessage' && item.phase !== 'commentary' && item.text?.trim()) {
+				item._turnDurationMs = durationMs;
+				return;
+			}
+		}
+	}
+
+	function formatDuration(durationMs: number): string {
+		const totalSeconds = Math.floor(durationMs / 1000);
+		const minutes = Math.floor(totalSeconds / 60);
+		const seconds = totalSeconds % 60;
+		if (minutes >= 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+		if (minutes > 0) return `${minutes}m ${seconds}s`;
+		return `${seconds}s`;
+	}
+
+	let activityClock = $state(Date.now());
+	$effect(() => {
+		if (viewed?.status !== 'running') return;
+		const timer = window.setInterval(() => activityClock = Date.now(), 1000);
+		return () => window.clearInterval(timer);
+	});
+
+	const viewedTurnElapsed = $derived.by(() => {
+		activityClock;
+		const started = viewed?.turnStartedAt;
+		return viewed?.status === 'running' && started !== null && started !== undefined
+			? formatDuration(Math.max(0, activityClock - started))
+			: null;
+	});
+
+	function persistTodoQueues() {
+		localStorage.setItem(TODO_QUEUES_KEY, JSON.stringify(todoQueues));
+	}
+
+	function queueTodo(id: string, task: string) {
+		const queue = todoQueues[id] ?? { tasks: [], startedCount: 0, currentTask: null };
+		queue.tasks = [...queue.tasks, task];
+		todoQueues[id] = queue;
+		persistTodoQueues();
+		addLocalNote(id, `Queued todo (${queue.tasks.length} total): ${task}`, 'info');
+		if (threads[id]?.status !== 'running') advanceTodoQueue(id);
+	}
+
+	function advanceTodoQueue(id: string) {
+		const queue = todoQueues[id];
+		if (!queue) return;
+		queue.currentTask = null;
+		if (queue.startedCount >= queue.tasks.length) {
+			delete todoQueues[id];
+			persistTodoQueues();
+			return;
+		}
+		const task = queue.tasks[queue.startedCount];
+		queue.startedCount += 1;
+		queue.currentTask = task;
+		todoQueues[id] = queue;
+		persistTodoQueues();
+		void startQueuedTodo(id, task, queue);
+	}
+
+	async function startQueuedTodo(id: string, task: string, queue: TodoQueue) {
+		const thread = ensureThread(id);
+		thread.status = 'running';
+		thread.turnStartedAt = Date.now();
+		thread.turnId = null;
+		thread.error = null;
+		const echoId = addLocalUserMessage(id, task);
+		try {
+			const response = await sendMessageWithRetries(id, task, []);
+			if (!response.ok) {
+				const data = await response.json().catch(() => ({}));
+				throw new Error(data.error ?? `failed to start todo (${response.status})`);
+			}
+		} catch (error) {
+			thread.status = 'idle';
+			thread.turnStartedAt = null;
+			removeLocalItem(id, echoId);
+			queue.startedCount = Math.max(0, queue.startedCount - 1);
+			queue.currentTask = null;
+			if (queue.startedCount >= queue.tasks.length) delete todoQueues[id];
+			persistTodoQueues();
+			addLocalNote(id, `Could not start queued todo: ${error instanceof Error ? error.message : String(error)}`, 'err');
+		}
 	}
 
 	async function reconcileInterruptedSessions() {
@@ -984,6 +1091,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					markTaskStarted(tid);
 					const t = ensureThread(tid);
 					t.status = 'running';
+					t.turnStartedAt = typeof p.turn?.startedAt === 'string' ? Date.parse(p.turn.startedAt) : Date.now();
+					if (!Number.isFinite(t.turnStartedAt)) t.turnStartedAt = Date.now();
 				t.turnId = p.turn?.id ?? null;
 				if (p.turn?.id) activeTurnBySession[tid] = p.turn.id;
 					t.error = null;
@@ -996,12 +1105,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					markTaskCompleted(tid);
 					const t = ensureThread(tid);
 					t.status = 'idle';
+					const duration = t.turnStartedAt === null ? null : Math.max(0, Date.now() - t.turnStartedAt);
+					t.turnStartedAt = null;
 				t.turnId = null;
 				delete activeTurnBySession[tid];
 					touchSession(tid, p.turn?.completedAt);
 					if (p.turn?.status === 'failed' && p.turn?.error?.message) {
 						t.error = p.turn.error.message;
 					}
+					if (duration !== null) stampTurnDuration(tid, duration);
+					void refreshFileChangeLineStats(tid);
+					if (tid === activeId) filesRefresh += 1;
+					advanceTodoQueue(tid);
 				}
 				break;
 			}
@@ -2174,6 +2289,41 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 
+			case 'todo-add':
+				queueTodo(id, parsed.task);
+				break;
+
+			case 'todo-show': {
+				const queue = todoQueues[id];
+				if (!queue?.tasks.length) addLocalNote(id, 'no queued todos');
+				else {
+					const lines = queue.tasks.map((task, index) => {
+						const position = index + 1;
+						const state = index < queue.startedCount
+							? index === queue.startedCount - 1 && queue.currentTask ? 'current' : 'done'
+							: 'queued';
+						return `[${position}/${queue.tasks.length}] ${state} · ${task}`;
+					});
+					addLocalNote(id, lines.join('\n'));
+				}
+				break;
+			}
+
+			case 'todo-clear': {
+				const queue = todoQueues[id];
+				if (!queue) addLocalNote(id, 'no queued todos');
+				else if (queue.currentTask) {
+					queue.tasks = queue.tasks.slice(0, queue.startedCount);
+					persistTodoQueues();
+					addLocalNote(id, 'cleared pending todos; current todo will finish', 'info');
+				} else {
+					delete todoQueues[id];
+					persistTodoQueues();
+					addLocalNote(id, 'cleared queued todos', 'info');
+				}
+				break;
+			}
+
 			case 'compact': {
 				const t = ensureThread(id);
 				t.status = 'running';
@@ -2939,6 +3089,31 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
 	}
 
+	async function refreshFileChangeLineStats(id: string) {
+		try {
+			const res = await fetch(threadApi(id, '/git/changes?scope=all'));
+			const data = await res.json();
+			if (!res.ok || !Array.isArray(data.files)) return;
+			fileChangeLineStats = Object.fromEntries(data.files.map((file: any) => [String(file.path), {
+				additions: typeof file.additions === 'number' ? file.additions : null,
+				deletions: typeof file.deletions === 'number' ? file.deletions : null
+			}]));
+		} catch {
+			// Keep transcript rendering available if Git stats cannot be read.
+		}
+	}
+
+	function fileChangeStats(ch: any) {
+		return fileChangeLineStats[displayFileChangePath(ch)] ?? null;
+	}
+
+	$effect(() => {
+		const id = activeId;
+		filesRefresh;
+		if (id) untrack(() => void refreshFileChangeLineStats(id));
+		else fileChangeLineStats = {};
+	});
+
 	function displayCommand(command: unknown): string {
 		const text = String(command ?? '');
 		const wrapped = text.match(/^(?:\/bin\/)?(?:ba|z|fi)?sh\s+-lc\s+([\s\S]+)$/);
@@ -3314,6 +3489,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		window.addEventListener('focusout', onTooltipFocusOut);
 		window.addEventListener('scroll', dismissTooltipOnViewportChange, true);
 		window.addEventListener('resize', dismissTooltipOnViewportChange);
+		try {
+			const savedTodos = JSON.parse(localStorage.getItem(TODO_QUEUES_KEY) ?? '{}');
+			if (savedTodos && typeof savedTodos === 'object' && !Array.isArray(savedTodos)) {
+				todoQueues = Object.fromEntries(Object.entries(savedTodos).flatMap(([id, value]) => {
+					if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+					const queue = value as Partial<TodoQueue>;
+					if (!Array.isArray(queue.tasks) || !queue.tasks.every((task) => typeof task === 'string')) return [];
+					const startedCount = Number(queue.startedCount);
+					if (!Number.isInteger(startedCount) || startedCount < 0 || startedCount > queue.tasks.length) return [];
+					if (queue.currentTask !== null && typeof queue.currentTask !== 'string') return [];
+					return [[id, { tasks: queue.tasks, startedCount, currentTask: queue.currentTask ?? null }]];
+				}));
+			}
+		} catch {
+			todoQueues = {};
+		}
 		try {
 			const savedOrder = JSON.parse(localStorage.getItem(SESSION_ORDER_KEY) ?? '[]');
 			if (Array.isArray(savedOrder)) sessionOrder = savedOrder.filter((id): id is string => typeof id === 'string');
@@ -4062,6 +4253,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			{#if sessionContextLine}
 				<div class="original-prompt" title={sessionContextTitle} aria-label={`Session: ${sessionContextLine}`}>
 					<span>Session</span>
+					{#if activeTodoQueue?.currentTask}<span class="todo-position">[{activeTodoQueue.startedCount}/{activeTodoQueue.tasks.length}]</span>{/if}
 					<p>{sessionContextLine}</p>
 					{#if active?.status === 'running' && !viewedAgentId}
 						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
@@ -4388,6 +4580,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else if item.type === 'agentMessage'}
 								{@const rawShown = Boolean(agentRawShown[agentRawKey(item)])}
 								{@const time = agentTime(item)}
+								{@const turnDuration = (item as any)._turnDurationMs}
 								<!-- The tap handler is a touch-only hover surrogate; keyboard
 								     users reach the toggle directly via focus. -->
 								<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -4397,8 +4590,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									onclick={() => onAgentMessageTap(item)}
 								>
 									<div class="body media-body">
-									{#if rawShown}
-										<pre class="agent-raw">{(item as any).text ?? ''}</pre>
+										{#if rawShown}
+										<pre class="agent-raw">{stripTaskProgressMarkers((item as any).text ?? '')}</pre>
 									{:else}
 										{#each agentParts((item as any).text ?? '') as part}
 											{#if part.type === 'text'}
@@ -4416,6 +4609,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{#if time}
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
+										{#if typeof turnDuration === 'number'}<span class="agent-duration" title="Time taken for this task">{formatDuration(turnDuration)}</span>{/if}
 										<button
 											type="button"
 											class="copy-agent"
@@ -4488,21 +4682,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else if item.type === 'fileChange'}
 								<div class="item file">
 									<div class="body">
-										{#each (item as any).changes ?? [] as ch}
-											{@const rel = displayFileChangePath(ch)}
-											<div class="fc">
-												<span class="kind {fileChangeClass(ch)}" aria-label={fileChangeKind(ch)} title={fileChangeKind(ch)}>{fileChangeSymbol(ch)}</span>
-												{#if !rel.startsWith('/')}
-													<button
-														type="button"
-														class="path path-link"
-														title="Review current diff"
-														onclick={() => openChangesPanel(rel)}
-													>{rel}</button>
-												{:else}
-													<span class="path">{rel}</span>
-												{/if}
-											</div>
+						{#each (item as any).changes ?? [] as ch}
+							{@const rel = displayFileChangePath(ch)}
+							{@const lineStats = fileChangeStats(ch)}
+							<div class="fc">
+								<span class="kind {fileChangeClass(ch)}" aria-label={fileChangeKind(ch)} title={fileChangeKind(ch)}>{fileChangeSymbol(ch)}</span>
+								{#if !rel.startsWith('/')}
+									<button type="button" class="path path-link" title="Review current diff" onclick={() => openChangesPanel(rel)}>{rel}</button>
+								{:else}
+									<span class="path">{rel}</span>
+								{/if}
+								{#if lineStats && lineStats.additions !== null && lineStats.deletions !== null}
+									<span class="fc-line-stats" aria-label={`${lineStats.additions} lines added, ${lineStats.deletions} lines removed`}><span>+{lineStats.additions}</span><span>−{lineStats.deletions}</span></span>
+								{/if}
+							</div>
 										{/each}
 									</div>
 								</div>
@@ -4595,6 +4788,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<div class="body">
 								<span class="working-label">Current activity</span>
 								<span class="activity-spinner" role="img" aria-label="Working" title="Working"></span>
+								{#if viewedTurnElapsed}<span class="working-duration" title="Time this task has been running">{viewedTurnElapsed}</span>{/if}
 								<span class="working-description">{currentWorkDescription(viewedItems)}</span>
 							</div>
 						</div>
@@ -5820,6 +6014,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		text-transform: uppercase;
 	}
 
+	.todo-position {
+		flex: 0 0 auto;
+		color: var(--color-accent-active);
+		font-family: var(--font-outlier);
+		font-size: var(--text-2xs);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.agent-duration,
+	.working-duration {
+		color: var(--color-muted);
+		font-size: var(--text-2xs);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
 	.original-prompt p {
 		flex: 1 1 auto;
 		min-width: 0;
@@ -5830,6 +6040,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+
+	.original-prompt .session-progress { margin-inline-start: auto; }
 
 	.session-progress {
 		flex: 0 0 auto;
@@ -7527,7 +7739,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.fc {
 		display: grid;
-		grid-template-columns: max-content minmax(0, 1fr);
+		grid-template-columns: max-content minmax(0, 1fr) auto;
 		gap: var(--space-2xs);
 		align-items: baseline;
 		font-family: var(--font-outlier);
@@ -7545,6 +7757,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-size: var(--text-sm);
 		font-weight: 500;
 	}
+
+	.fc-line-stats { display: inline-flex; gap: var(--space-2xs); color: var(--color-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+	.fc-line-stats span:first-child { color: var(--color-success); }
+	.fc-line-stats span:last-child { color: var(--color-error); }
 
 	.fc .path {
 		min-width: 0;
