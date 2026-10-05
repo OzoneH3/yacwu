@@ -782,7 +782,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
 		delete activeTurnBySession[id];
 		delete latestWorkOrderBySession[id];
-		delete todoQueues[id];
+		const { [id]: _removedTodoQueue, ...remainingTodoQueues } = todoQueues;
+		todoQueues = remainingTodoQueues;
 		persistTodoQueues();
 		if (interruptedSessions[id]) {
 			delete interruptedSessions[id];
@@ -888,29 +889,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function queueTodo(id: string, task: string) {
-		const queue = todoQueues[id] ?? { tasks: [], startedCount: 0, currentTask: null };
-		queue.tasks = [...queue.tasks, task];
-		todoQueues[id] = queue;
+		const existing = todoQueues[id] ?? { tasks: [], startedCount: 0, currentTask: null };
+		const queue = { ...existing, tasks: [...existing.tasks, task] };
+		todoQueues = { ...todoQueues, [id]: queue };
 		persistTodoQueues();
 		addLocalNote(id, `Queued todo (${queue.tasks.length} total): ${task}`, 'info');
-		if (threads[id]?.status !== 'running') advanceTodoQueue(id);
+		if (sessionHistoryLoaded[id] && threads[id]?.status !== 'running') advanceTodoQueue(id);
 	}
 
 	function advanceTodoQueue(id: string) {
-		const queue = todoQueues[id];
-		if (!queue) return;
-		queue.currentTask = null;
-		if (queue.startedCount >= queue.tasks.length) {
-			delete todoQueues[id];
+		const existing = todoQueues[id];
+		if (!existing) return;
+		if (existing.startedCount >= existing.tasks.length) {
+			const { [id]: _finished, ...remaining } = todoQueues;
+			todoQueues = remaining;
 			persistTodoQueues();
 			return;
 		}
-		const task = queue.tasks[queue.startedCount];
-		queue.startedCount += 1;
-		queue.currentTask = task;
-		todoQueues[id] = queue;
+		const task = existing.tasks[existing.startedCount];
+		const queue = { ...existing, startedCount: existing.startedCount + 1, currentTask: task };
+		todoQueues = { ...todoQueues, [id]: queue };
 		persistTodoQueues();
 		void startQueuedTodo(id, task, queue);
+	}
+
+	function reconcileTodoQueue(id: string, runtimeStatus: string | undefined) {
+		if (!todoQueues[id] || runtimeStatus === 'active' || runtimeStatus === 'notLoaded') return;
+		if (runtimeStatus === 'idle') advanceTodoQueue(id);
 	}
 
 	async function startQueuedTodo(id: string, task: string, queue: TodoQueue) {
@@ -930,9 +935,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			thread.status = 'idle';
 			thread.turnStartedAt = null;
 			removeLocalItem(id, echoId);
-			queue.startedCount = Math.max(0, queue.startedCount - 1);
-			queue.currentTask = null;
-			if (queue.startedCount >= queue.tasks.length) delete todoQueues[id];
+			const retryable = { ...queue, startedCount: Math.max(0, queue.startedCount - 1), currentTask: null };
+			todoQueues = { ...todoQueues, [id]: retryable };
 			persistTodoQueues();
 			addLocalNote(id, `Could not start queued todo: ${error instanceof Error ? error.message : String(error)}`, 'err');
 		}
@@ -1729,6 +1733,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				for (const item of liveItems) upsertItem(id, item as ThreadItem & { id: string });
 			}
 			sessionHistoryLoaded[id] = true;
+			reconcileTodoQueue(id, runtimeStatus);
 			// Surface any persisted goal for this session.
 			fetch(threadApi(id, '/goal'))
 				.then((r) => r.json())
@@ -2312,12 +2317,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			case 'todo-clear': {
 				const queue = todoQueues[id];
 				if (!queue) addLocalNote(id, 'no queued todos');
-				else if (queue.currentTask) {
-					queue.tasks = queue.tasks.slice(0, queue.startedCount);
+				else if (queue.currentTask && threads[id]?.status === 'running') {
+					todoQueues = { ...todoQueues, [id]: { ...queue, tasks: queue.tasks.slice(0, queue.startedCount) } };
 					persistTodoQueues();
 					addLocalNote(id, 'cleared pending todos; current todo will finish', 'info');
 				} else {
-					delete todoQueues[id];
+					const { [id]: _cleared, ...remaining } = todoQueues;
+					todoQueues = remaining;
 					persistTodoQueues();
 					addLocalNote(id, 'cleared queued todos', 'info');
 				}
