@@ -4244,21 +4244,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			</header>
 			{#if sessionContextLine || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
 				<div class="original-prompt" title={sessionContextTitle} aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
+					{#if active?.status === 'running' && !viewedAgentId}
+						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
+							{#if activeTaskProgress}
+								<span class="session-progress-meter" aria-hidden="true"><span style={`width: ${activeTaskProgress.percent}%`}></span></span>
+								<span>{activeTaskProgress.percent}% est.</span>
+								<span>{formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}</span>
+							{:else}
+								<span>Estimating…</span>
+							{/if}
+						</div>
+					{/if}
 					<span>Session</span>
 					{#if activeTodoQueue?.currentTask}<span class="todo-position">[{activeTodoQueue.startedCount}/{activeTodoQueue.tasks.length}]</span>{/if}
 					<p>{sessionContextLine}</p>
 					<div class="session-bar-right">
-						{#if active?.status === 'running' && !viewedAgentId}
-							<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
-								{#if activeTaskProgress}
-									<span class="session-progress-meter" aria-hidden="true"><span style={`width: ${activeTaskProgress.percent}%`}></span></span>
-									<span>{activeTaskProgress.percent}% est.</span>
-									<span>{formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}</span>
-								{:else}
-									<span>Estimating…</span>
-								{/if}
-							</div>
-						{/if}
 						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
 							<div class="usage-limits" aria-label="Codex usage remaining">
 								{#if activeAccountUsage.fiveHour}
