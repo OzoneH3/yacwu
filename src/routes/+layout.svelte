@@ -88,6 +88,7 @@
 	}
 
 	interface ModelDisplayProfile {
+		provider: string;
 		capability: number;
 		efficiency: string;
 		valueRating: string;
@@ -519,13 +520,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (!choice) return null;
 		const name = `${choice.displayName} ${choice.id}`.toLowerCase().replace(/\s+/g, ' ');
 		const profiles: Array<[RegExp, ModelDisplayProfile]> = [
-			[/gpt-6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional', valueRating: '★★★★★' }],
-			[/gpt-5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: '★★★★★' }],
-			[/gpt-6\.1 sol/, { capability: 93, efficiency: 'Excellent', valueRating: '★★★★★' }],
-			[/gpt-5\.6 terra/, { capability: 72, efficiency: 'Very good', valueRating: '★★★★½' }],
-			[/gpt-6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good', valueRating: '★★★★½' }],
-			[/gpt-5\.6 sol/, { capability: 79, efficiency: 'Good', valueRating: '★★★½' }],
-			[/gpt-6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low', valueRating: '★★★½' }]
+			[/gpt-6(?:\.0)? luna/, { provider: 'OpenAI', capability: 70, efficiency: 'Exceptional', valueRating: '★★★★★' }],
+			[/gpt-5\.6 luna/, { provider: 'OpenAI', capability: 60, efficiency: 'Exceptional', valueRating: '★★★★★' }],
+			[/gpt-6\.1 sol/, { provider: 'OpenAI', capability: 93, efficiency: 'Excellent', valueRating: '★★★★★' }],
+			[/gpt-5\.6 terra/, { provider: 'OpenAI', capability: 72, efficiency: 'Very good', valueRating: '★★★★½' }],
+			[/gpt-6(?:\.0)? sol/, { provider: 'OpenAI', capability: 84, efficiency: 'Very good', valueRating: '★★★★½' }],
+			[/gpt-5\.6 sol/, { provider: 'OpenAI', capability: 79, efficiency: 'Good', valueRating: '★★★½' }],
+			[/gpt-6(?:\.0)? astra/, { provider: 'OpenAI', capability: 100, efficiency: 'Moderate/low', valueRating: '★★★½' }]
 		];
 		return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 	}
@@ -4097,7 +4098,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<dd>
 								{activeModelChoice?.displayName ?? activeConfig?.model ?? '—'}
 								{#if activeModelProfile}
-									<span class="model-profile-detail">~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} usage efficiency · {activeModelProfile.valueRating}</span>
+									<span class="model-profile-detail">{activeModelProfile.provider} · ~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} usage efficiency · {activeModelProfile.valueRating}</span>
 								{/if}
 							</dd>
 						</div>
@@ -4663,7 +4664,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${activeModelProfile ? ` · approximately ${activeModelProfile.capability}/100 capability · ${activeModelProfile.efficiency} usage efficiency` : ''}`}>
 						<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
 						{#if activeModelProfile}
-						<span class="model-profile-indicator" aria-hidden="true">~{activeModelProfile.capability} · {activeModelProfile.efficiency} · {activeModelProfile.valueRating}</span>
+						<span class="model-profile-indicator" aria-hidden="true">{activeModelProfile.provider} · ~{activeModelProfile.capability} · {activeModelProfile.efficiency} · {activeModelProfile.valueRating}</span>
 						{/if}
 						<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
@@ -4678,7 +4679,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{#each activeModels as choice (choice.id)}
 								{@const profile = modelDisplayProfile(choice)}
 								<option value={choice.id}>
-									{choice.displayName || choice.id}{profile ? ` · ~${profile.capability}/100 · ${profile.efficiency} efficiency · ${profile.valueRating}` : ''}
+									{choice.displayName || choice.id}{profile ? ` · ${profile.provider} · ~${profile.capability}/100 · ${profile.efficiency} efficiency · ${profile.valueRating}` : ''}
 								</option>
 							{/each}
 										</select>
