@@ -11,25 +11,38 @@ state lives entirely in Codex's own persistent sessions, read back via
 
 ## Features
 
-- 🖥️ Warm, light-only workspace with readable conversation and tool-output surfaces
-- 🧵 Multi-session: list, create (in a chosen working directory), switch, and resume Codex threads
-- 🔒 In-use detection: warns before opening a session another codex instance
-  already has loaded (so two processes don't corrupt one conversation)
-- ⚡ Live streaming of agent messages, reasoning, command runs, file changes & plans
-- 🤝 Multi-agent visibility: sub-agents spawned by a session appear as
-  link-style buttons in the header (max 5, more behind a menu; inside
-  Session details on mobile), each opening that agent's live transcript
-  read-only
-- ⌨️ Slash commands mirroring the Codex TUI (see below)
-- ⌨️ Up/Down message history in the composer, with the Codex TUI's shell-style
-  recall semantics (a resumed thread seeds history from its prior prompts)
-- 📁 Read-only file browser rooted at the session's working directory, with a
-  Monaco viewer (lazy-loaded from jsDelivr, never vendored) and clickable
-  file-change paths in the transcript
-- ± Read-only Git changes inspector with All, Staged, and Unstaged scopes,
-  lazy unified diffs, and responsive file-to-diff navigation
+- 🖥️ Light and dark themes, with a responsive workspace for desktop and mobile
+- 🧵 Multi-session workspace: create sessions in chosen folders, rename and
+  reorder them, switch between them, and resume interrupted work
+- 🔒 In-use detection warns before opening a session another Codex process has
+  loaded, helping prevent two processes from modifying the same conversation
+- ⚡ Live streaming of assistant messages, reasoning, commands, plans, file
+  changes, and current activity; send steering instructions while a turn runs,
+  or stop and resume it later
+- ⏱️ A Session bar keeps the current prompt visible and shows model-reported
+  task progress estimates; elapsed time appears while work runs and on its
+  completed response
+- 🤝 Multi-agent visibility: switch between the session and spawned agents,
+  see which agents are active, and browse finished agents in a separate
+  Previous group; agent transcripts are read-only
+- 🧠 Choose a model and reasoning effort per session. The model picker also
+  shows approximate capability and usage-efficiency indicators (these are
+  Yacwu display estimates, not official benchmark scores)
+- 📊 See remaining 5-hour and 7-day Codex usage in the top bar
+- 💬 Interactive answers: when Codex asks a question with listed options,
+  choose one in a prompt dialog or enter a custom response
+- 📁 Workspace browser rooted at the session folder, with a Monaco text editor
+  (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
+  links in assistant messages
+- ± Git changes inspector with All, Staged, and Unstaged scopes, added/removed
+  line counts, lazy unified diffs, and a resizable split view
+- 🧭 Transcript position rail for jumping between messages in long sessions
+- ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
+  prompt history with the Codex TUI's shell-style recall semantics
 - 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when
   creating a session (or with `/profile`)
+- 🧾 Queue follow-up work with `/todo <task>`; queued tasks start one at a time
+  after the current turn, and `/todo` shows the queue
 - 🔁 Alternative backends: `YACWU_BACKENDS` registers other local app-server
   commands (e.g. [claude-codex](https://github.com/fuergaosi233/claude-codex))
   that appear in the host picker alongside the default local codex
@@ -57,6 +70,9 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/profile <name>` / `/profile clear` | switch this session to a profile / back to the base config |
 | `/goal <objective>` | set the thread goal (`--budget N` to add a token budget) |
 | `/goal` / `/goal clear` | show / clear the current goal |
+| `/todo <task>` | queue a follow-up task to start after the current task |
+| `/todo` | show queued tasks and their status |
+| `/todo clear` | clear queued tasks that have not started |
 | `/compact` | compact conversation history |
 | `/review [notes]` | review uncommitted changes (or run a custom review) |
 | `/shell <command>` | run a user-initiated shell command in the thread |
