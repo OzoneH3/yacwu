@@ -141,6 +141,7 @@
 	let dismissedGoalBySession = $state<Record<string, string>>({});
 	let draggingSessionId = $state<string | null>(null);
 	let dragOverSessionId = $state<string | null>(null);
+	let suppressSessionClickId: string | null = null;
 	let pointerSessionDrag = $state<{
 		id: string;
 		pointerId: number;
@@ -640,6 +641,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function startSessionDrag(event: PointerEvent, id: string) {
 		if (event.button !== 0) return;
+		suppressSessionClickId = null;
 		pointerSessionDrag = {
 			id,
 			pointerId: event.pointerId,
@@ -701,10 +703,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const drag = pointerSessionDrag;
 		if (drag && drag.pointerId === event.pointerId && drag.active && drag.targetId) {
 			reorderSession(drag.id, drag.targetId);
+			suppressSessionClickId = drag.id;
 		}
 		pointerSessionDrag = null;
 		draggingSessionId = null;
 		dragOverSessionId = null;
+	}
+
+	function activateSessionLink(event: MouseEvent, id: string) {
+		if (suppressSessionClickId === id) {
+			event.preventDefault();
+			suppressSessionClickId = null;
+			return;
+		}
+		closeSidebar(false);
 	}
 
 	function removeSession(id: string) {
@@ -3599,7 +3611,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			</div>
 		{/if}
 		<nav class="sessions" data-loaded={sessionsLoaded}>
-			{#each topSessions as s, sessionIndex (s.id)}
+			{#each topSessions as s (s.id)}
 				<div
 					class="session-row"
 					data-session-row-id={s.id}
@@ -3628,9 +3640,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<a
 						class="session"
 						class:active={s.id === activeId}
+						class:dragging={draggingSessionId === s.id}
 						data-id={s.id}
 						href={`/s/${s.id}${hostQuery(s.host)}`}
-						onclick={() => closeSidebar(false)}
+						onpointerdown={(event) => startSessionDrag(event, s.id)}
+						onpointermove={moveSessionDrag}
+						onpointerup={finishSessionDrag}
+						onpointercancel={finishSessionDrag}
+						ondragstart={(event) => event.preventDefault()}
+						onclick={(event) => activateSessionLink(event, s.id)}
 					>
 						<span
 							class="run-dot"
@@ -3660,39 +3678,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{/if}
 						{#if fastSessions[s.id]}{@render fastMark()}{/if}
 					</a>
-					<div class="session-actions">
-						<button
-							class="move-session"
-							type="button"
-							aria-label={`Move ${shortLabel(s)} up`}
-							title="Move up"
-							disabled={sessionIndex === 0}
-							onclick={() => moveSessionByKeyboard(s.id, -1)}
-						>
-							<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 9.5 4.5-4 4.5 4" /></svg>
-						</button>
-						<button
-							class="move-session"
-							type="button"
-							aria-label={`Move ${shortLabel(s)} down`}
-							title="Move down"
-							disabled={sessionIndex === topSessions.length - 1}
-							onclick={() => moveSessionByKeyboard(s.id, 1)}
-						>
-							<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6.5 4.5 4 4.5-4" /></svg>
-						</button>
-						<button
-							class="delete-session"
-							type="button"
-							aria-label={`delete session ${shortLabel(s)}`}
-							title="Delete session"
-							onclick={() => deleteSession(s.id)}
-						>
-							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-								<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
-							</svg>
-						</button>
-					</div>
+					<button
+						class="delete-session"
+						type="button"
+						aria-label={`delete session ${shortLabel(s)}`}
+						title="Delete session"
+						onclick={() => deleteSession(s.id)}
+					>
+						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+							<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+						</svg>
+					</button>
 				</div>
 				{#each sideChatsOf(s.id) as side (side.id)}
 					<div class="session-row side-row">
@@ -5343,8 +5339,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		text-align: start;
 		text-decoration: none;
 		white-space: nowrap;
+		cursor: grab;
+		user-select: none;
 		transition: background-color var(--dur-micro) var(--ease-out);
 	}
+
+	.session.dragging { cursor: grabbing; }
 
 	.session.active {
 		border-color: var(--color-rule);
@@ -5461,48 +5461,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.session-row.side-row {
 		padding-inline-start: var(--space-md);
 		grid-template-columns: minmax(0, 1fr) auto;
-	}
-
-	.session-actions {
-		display: flex;
-		align-items: center;
-		gap: 1px;
-	}
-
-	.move-session {
-		display: grid;
-		place-items: center;
-		width: 1.1rem;
-		height: var(--control-height-compact);
-		padding: 0;
-		border: 0;
-		border-radius: var(--radius-sm);
-		background: transparent;
-		color: var(--color-muted);
-		cursor: pointer;
-	}
-
-	.move-session svg {
-		width: 13px;
-		height: 13px;
-		fill: none;
-		stroke: currentColor;
-		stroke-linecap: round;
-		stroke-linejoin: round;
-		stroke-width: 1.7;
-	}
-
-	.move-session:disabled {
-		color: var(--color-faint);
-		cursor: default;
-		opacity: 0.45;
-	}
-
-	.move-session:not(:disabled):hover,
-	.move-session:not(:disabled):focus-visible {
-		background: var(--color-paper-3);
-		color: var(--color-ink);
-		outline: none;
 	}
 
 	.session.side .label {
@@ -7966,16 +7924,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			color: var(--color-ink);
 		}
 
-		.delete-session,
-		.session-actions .move-session {
+		.delete-session {
 			opacity: 0;
 			pointer-events: none;
 		}
 
 		.session-row:hover .delete-session,
-		.session-row:focus-within .delete-session,
-		.session-row:hover .move-session,
-		.session-row:focus-within .move-session {
+		.session-row:focus-within .delete-session {
 			opacity: 1;
 			pointer-events: auto;
 		}

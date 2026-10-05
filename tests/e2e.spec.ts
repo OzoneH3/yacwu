@@ -280,7 +280,13 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 	await expect(page.locator('.item.agent')).toHaveCount(0);
 	const primarySessionRows = page.locator('nav.sessions > .session-row:not(.side-row)');
 	const orderBeforeMove = await primarySessionRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-session-row-id')));
-	await primarySessionRows.nth(1).locator('.move-session').first().click();
+	const dragSource = await primarySessionRows.nth(1).locator('.session').boundingBox();
+	const dragTarget = await primarySessionRows.nth(0).locator('.session').boundingBox();
+	if (!dragSource || !dragTarget) throw new Error('session rows are not laid out');
+	await page.mouse.move(dragSource.x + dragSource.width / 2, dragSource.y + dragSource.height / 2);
+	await page.mouse.down();
+	await page.mouse.move(dragTarget.x + dragTarget.width / 2, dragTarget.y + dragTarget.height / 2, { steps: 8 });
+	await page.mouse.up();
 	const orderAfterMove = await primarySessionRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-session-row-id')));
 	expect(orderAfterMove.slice(0, 2)).toEqual([orderBeforeMove[1], orderBeforeMove[0]]);
 	expect(await page.evaluate(() => JSON.parse(localStorage.getItem('yacwu-session-order') ?? '[]'))).toContain(orderBeforeMove[1]);
