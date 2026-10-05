@@ -3953,6 +3953,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						<div class="item agent pending">
 							<div class="body">
 								<span class="working-label">Current activity</span>
+								<span class="activity-spinner" role="img" aria-label="Working" title="Working"></span>
 								<span class="working-description">{currentWorkDescription(viewedItems)}</span>
 							</div>
 						</div>
@@ -6295,6 +6296,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-weight: 600;
 	}
 
+	.activity-spinner {
+		flex: none;
+		width: 0.8em;
+		height: 0.8em;
+		align-self: center;
+		border: 2px solid var(--color-rule-2);
+		border-top-color: var(--color-accent-active);
+		border-radius: 50%;
+		animation: activity-spin 0.8s linear infinite;
+	}
+
 	.working-description {
 		min-width: 0;
 		max-width: 100%;
@@ -7425,8 +7437,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 
 		.run-dot.running,
-		.session-state-dot.running {
+		.session-state-dot.running,
+		.activity-spinner {
 			animation: none;
+		}
+	}
+
+	@keyframes activity-spin {
+		to {
+			transform: rotate(360deg);
 		}
 	}
 
