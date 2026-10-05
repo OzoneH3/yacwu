@@ -3,6 +3,12 @@ export interface TaskProgressEstimate {
 	remainingMinutes: number | null;
 }
 
+export interface TaskProgressTranscriptEntry extends TaskProgressEstimate {
+	type: 'taskProgress';
+	id: string;
+	[key: string]: unknown;
+}
+
 const PROGRESS_CONTEXT_MARKER = '<!-- YACWU_TASK_PROGRESS -->';
 const PROGRESS_VALUE_RE = /\[\[YACWU_PROGRESS percent=(\d{1,3}) remaining_minutes=(\d{1,4}|unknown)\]\]/g;
 
@@ -26,6 +32,24 @@ export function parseTaskProgress(text: string): TaskProgressEstimate | null {
 		};
 	}
 	return latest;
+}
+
+/** Split progress protocol data out of assistant messages into its own transcript entry. */
+export function separateTaskProgressEntries<T extends { type: string; id: string; text?: string }>(
+	items: T[]
+): Array<T | TaskProgressTranscriptEntry> {
+	const result: Array<T | TaskProgressTranscriptEntry> = [];
+	for (const item of items) {
+		if (item.type !== 'agentMessage' || typeof item.text !== 'string') {
+			result.push(item);
+			continue;
+		}
+		const estimate = parseTaskProgress(item.text);
+		const visibleText = stripTaskProgressMarkers(item.text);
+		if (visibleText || !estimate) result.push({ ...item, text: visibleText });
+		if (estimate) result.push({ type: 'taskProgress', id: `progress-${item.id}`, ...estimate });
+	}
+	return result;
 }
 
 /** Keep protocol markers out of the visible assistant transcript. */

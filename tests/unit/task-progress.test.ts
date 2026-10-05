@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	parseTaskProgress,
+	separateTaskProgressEntries,
 	stripTaskProgressMarkers,
 	withTaskProgressInstructions
 } from '../../src/lib/task-progress';
@@ -26,5 +27,15 @@ describe('task progress reporting', () => {
 			.toBe('Working\nstill working');
 		expect(stripTaskProgressMarkers('Working [[YACWU_PROGRESS percent=100 remaining_minutes=0]] complete'))
 			.toBe('Working complete');
+	});
+
+	test('moves an assistant progress estimate into its own transcript entry', () => {
+		const entries = separateTaskProgressEntries([
+			{ type: 'agentMessage', id: 'reply-1', text: 'Working on it. [[YACWU_PROGRESS percent=55 remaining_minutes=4]]' }
+		]);
+		expect(entries).toEqual([
+			{ type: 'agentMessage', id: 'reply-1', text: 'Working on it.' },
+			{ type: 'taskProgress', id: 'progress-reply-1', percent: 55, remainingMinutes: 4 }
+		]);
 	});
 });

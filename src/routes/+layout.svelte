@@ -35,7 +35,7 @@
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 	import { detectPromptKind, parseInteractiveChoice } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
-	import { parseTaskProgress, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
+import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 	import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 
 	let { children } = $props();
@@ -474,7 +474,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let transcriptEl = $state<HTMLDivElement | null>(null);
 	// The transcript renders whichever thread is in view: the session itself,
 	// or a selected sub-agent's thread.
-	const viewedItems = $derived(itemsOf(viewed).filter(isRenderableTranscriptItem));
+	const viewedItems = $derived(
+		separateTaskProgressEntries(itemsOf(viewed)).filter(isRenderableTranscriptItem)
+	);
 	const virtualTranscript = $derived(
 		virtualizeItems(viewedItems, transcriptScrollTop, transcriptViewportHeight, transcriptHeightVersion)
 	);
@@ -4608,7 +4610,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				{@const rawShown = Boolean(agentRawShown[agentRawKey(item)])}
 				{@const time = agentTime(item)}
 				{@const turnDuration = (item as any)._turnDurationMs}
-				{@const taskProgress = parseTaskProgress(String((item as any).text ?? ''))}
 								<!-- The tap handler is a touch-only hover surrogate; keyboard
 								     users reach the toggle directly via focus. -->
 								<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -4633,16 +4634,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{/each}
 									{/if}
 					</div>
-					{#if taskProgress}
-						<div class="message-progress" role="status" aria-label={`Task progress ${taskProgress.percent} percent, ${taskProgress.percent >= 100 ? 'complete' : formatEstimatedRemaining(taskProgress.remainingMinutes)}`}>
-							<span class="message-progress-label">Progress</span>
-							<span aria-hidden="true">·</span>
-							<strong>{taskProgress.percent}%</strong>
-							<span class="message-progress-meter" aria-hidden="true"><span style={`width: ${taskProgress.percent}%`}></span></span>
-							<span aria-hidden="true">·</span>
-							<span>{taskProgress.percent >= 100 ? 'Complete' : formatEstimatedRemaining(taskProgress.remainingMinutes)}</span>
-						</div>
-					{/if}
 					<div class="agent-meta">
 										{#if time}
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
@@ -4674,6 +4665,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 												{/if}
 											</svg>
 										</button>
+									</div>
+								</div>
+							{:else if item.type === 'taskProgress'}
+								<div class="item task-progress-entry" role="status" aria-label={`Task progress ${(item as any).percent} percent, ${(item as any).percent >= 100 ? 'complete' : formatEstimatedRemaining((item as any).remainingMinutes)}`}>
+									<span class="gutter">↗</span>
+									<div class="message-progress">
+										<span class="message-progress-label">Progress</span>
+										<span aria-hidden="true">·</span>
+										<strong>{(item as any).percent}%</strong>
+										<span class="message-progress-meter" aria-hidden="true"><span style={`width: ${(item as any).percent}%`}></span></span>
+										<span aria-hidden="true">·</span>
+										<span>{(item as any).percent >= 100 ? 'Complete' : formatEstimatedRemaining((item as any).remainingMinutes)}</span>
 									</div>
 								</div>
 							{:else if item.type === 'reasoning'}
