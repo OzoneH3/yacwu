@@ -194,7 +194,7 @@
 	let dismissedChoiceId = $state<string | null>(null);
 	let choiceCustomAnswer = $state('');
 	let choicePromptId = $state<string | null>(null);
-	let instantTooltip = $state<{ text: string; left: number; top: number } | null>(null);
+	let instantTooltip = $state<{ text: string; left: number; top: number; wide: boolean } | null>(null);
 	let instantTooltipTarget: Element | null = null;
 	const internallyRemovedTitles = new WeakSet<Element>();
 	// Read-only file browser (FileBrowser.svelte), rooted at the session cwd.
@@ -278,7 +278,20 @@
 	const sessionContextLine = $derived(activeTodoQueue?.currentTask || latestPrompt || activeSummary?.name?.trim() || '');
 	const sessionContextTitle = $derived.by(() => {
 		const lines = [];
-		if (activeTodoQueue?.currentTask) lines.push(`Current todo [${activeTodoQueue.startedCount}/${activeTodoQueue.tasks.length}]: ${activeTodoQueue.currentTask}`);
+		if (activeTodoQueue?.tasks.length) {
+			if (activeTodoQueue.tasks.length > 1) {
+				lines.push(`Todos (${activeTodoQueue.tasks.length})`);
+				activeTodoQueue.tasks.forEach((task, index) => {
+					const position = index + 1;
+					const state = index < activeTodoQueue.startedCount
+						? index === activeTodoQueue.startedCount - 1 && activeTodoQueue.currentTask ? 'Current' : 'Done'
+						: 'Queued';
+					lines.push(`[${position}/${activeTodoQueue.tasks.length}] ${state} · ${task}`);
+				});
+			} else if (activeTodoQueue.currentTask) {
+				lines.push(`Current todo [${activeTodoQueue.startedCount}/${activeTodoQueue.tasks.length}]: ${activeTodoQueue.currentTask}`);
+			}
+		}
 		if (activeSummary?.name?.trim()) lines.push(`Session: ${activeSummary.name.trim()}`);
 		if (latestPrompt) lines.push(`Latest prompt: ${latestPrompt}`);
 		if (originalPrompt && originalPrompt !== latestPrompt) lines.push(`Original prompt: ${originalPrompt}`);
@@ -3412,14 +3425,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 		instantTooltipTarget = target;
 		const rect = target.getBoundingClientRect();
-		const width = Math.min(288, window.innerWidth - 16);
+		const wide = Boolean(target.closest('.session-label'));
+		const width = Math.min(wide ? 560 : 288, window.innerWidth - 16);
 		const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2));
 		const below = rect.bottom + 10;
-		const top = below + 90 < window.innerHeight ? below : Math.max(8, rect.top - 52);
+		const maxHeight = wide ? Math.min(window.innerHeight * 0.6, 448) : 90;
+		const top = below + maxHeight < window.innerHeight
+			? below
+			: Math.max(8, rect.top - (wide ? Math.min(maxHeight, 240) : 52));
 		const describedBy = new Set((target.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean));
 		describedBy.add('yacwu-instant-tooltip');
 		target.setAttribute('aria-describedby', [...describedBy].join(' '));
-		instantTooltip = { text, left, top };
+		instantTooltip = { text, left, top, wide };
 	}
 
 	function hideInstantTooltip(target?: Element | null) {
@@ -4243,7 +4260,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			</header>
 			{#if sessionContextLine || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
-				<div class="original-prompt" title={sessionContextTitle} aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
+				<div class="original-prompt" aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
 					{#if active?.status === 'running' && !viewedAgentId}
 						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
 							{#if activeTaskProgress}
@@ -4255,7 +4272,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{/if}
 						</div>
 					{/if}
-					<span>Session</span>
+					<span class="session-label" title={sessionContextTitle}>Session</span>
 					{#if activeTodoQueue?.currentTask}<span class="todo-position">[{activeTodoQueue.startedCount}/{activeTodoQueue.tasks.length}]</span>{/if}
 					<p>{sessionContextLine}</p>
 					<div class="session-bar-right">
@@ -5020,6 +5037,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	<div
 		id="yacwu-instant-tooltip"
 		class="instant-tooltip"
+		class:wide={instantTooltip.wide}
 		role="tooltip"
 		style={`left: ${instantTooltip.left}px; top: ${instantTooltip.top}px`}
 	>{instantTooltip.text}</div>
@@ -5052,6 +5070,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: pre-line;
 		overflow-wrap: anywhere;
 		pointer-events: none;
+	}
+
+	.instant-tooltip.wide {
+		max-width: min(35rem, calc(100vw - 1rem));
+		max-height: min(60vh, 28rem);
+		overflow: auto;
 	}
 
 	:global(*) {
