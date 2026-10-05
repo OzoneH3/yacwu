@@ -93,6 +93,19 @@
 		return parts.join('/');
 	}
 
+	function matchingChangePath(preferredPath: string): string | null {
+		if (changes.status !== 'ready') return null;
+		const normalize = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+		const preferred = normalize(preferredPath);
+		const exact = changes.files.find((file) => normalize(file.path) === preferred);
+		if (exact) return exact.path;
+		const suffixMatches = changes.files.filter((file) => {
+			const candidate = normalize(file.path);
+			return candidate.endsWith(`/${preferred}`) || preferred.endsWith(`/${candidate}`);
+		});
+		return suffixMatches.length === 1 ? suffixMatches[0].path : null;
+	}
+
 	async function loadChanges(preferredPath: string | null = selectedPath) {
 		const request = ++changesRequest;
 		if (changes.status === 'ready') refreshing = true;
@@ -111,9 +124,7 @@
 				comparison: String(data.comparison ?? ''),
 				files: Array.isArray(data.files) ? data.files : []
 			};
-			const path = preferredPath && changes.files.some((file) => file.path === preferredPath)
-				? preferredPath
-				: null;
+			const path = preferredPath ? matchingChangePath(preferredPath) : null;
 			selectedPath = path;
 			if (path) await loadDiff(path);
 			else diff = null;
