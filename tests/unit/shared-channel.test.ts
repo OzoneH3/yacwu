@@ -23,5 +23,6 @@ describe('shared background channel', () => {
 		expect(visibleUserText(withContext)).toBe(prompt);
 		expect(visibleUserText(withContext.replace('\n\n<!--', '<!--'))).toBe(prompt);
 		expect(visibleUserText(prompt)).toBe(prompt);
+		expect(visibleUserText(`${prompt}\n\n<!-- YACWU_TASK_PROGRESS -->private instructions`)).toBe(prompt);
 	});
 });

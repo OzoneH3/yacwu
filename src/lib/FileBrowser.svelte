@@ -15,6 +15,7 @@
 		size: number;
 		symlink: boolean;
 	}
+	interface FileChangeStats { additions: number | null; deletions: number | null }
 
 	type DirState =
 		| { status: 'loading' }
@@ -53,6 +54,7 @@
 	let serverRoot = $state<string | null>(null);
 	const root = $derived(serverRoot ?? cwd);
 	let dirs = $state<Record<string, DirState>>({});
+	let changeStats = $state<Record<string, FileChangeStats>>({});
 	let expanded = $state<Record<string, boolean>>({});
 	let selectedPath = $state<string | null>(null);
 	let file = $state<FileState | null>(null);
@@ -109,6 +111,20 @@
 				status: 'error',
 				message: error instanceof Error ? error.message : 'failed to list directory'
 			};
+		}
+	}
+
+	async function loadChangeStats() {
+		try {
+			const res = await fetch(`/api/threads/${threadId}/git/changes?scope=all`);
+			const data = await res.json();
+			if (!res.ok || !Array.isArray(data.files)) return;
+			changeStats = Object.fromEntries(data.files.map((item: any) => [String(item.path), {
+				additions: typeof item.additions === 'number' ? item.additions : null,
+				deletions: typeof item.deletions === 'number' ? item.deletions : null
+			}]));
+		} catch {
+			// The file browser remains usable when Git metadata is unavailable.
 		}
 	}
 
@@ -192,6 +208,7 @@
 			for (const path of Object.keys(dirs)) {
 				if (path === '' || expanded[path]) void loadDir(path, true);
 			}
+			void loadChangeStats();
 		} catch (error) {
 			saveError = error instanceof Error ? error.message : 'failed to save file';
 		} finally {
@@ -217,6 +234,7 @@
 		threadId;
 		untrack(() => {
 			void loadDir('');
+			void loadChangeStats();
 			void tick().then(() => closeEl?.focus());
 		});
 	});
@@ -232,6 +250,7 @@
 		if (refreshNonce === lastRefreshNonce) return;
 		lastRefreshNonce = refreshNonce;
 		untrack(() => {
+			void loadChangeStats();
 			for (const path of Object.keys(dirs)) {
 				if (path === '' || expanded[path]) void loadDir(path, true);
 			}
@@ -351,6 +370,7 @@
 	{:else}
 		{#each state.entries as entry (entry.name)}
 			{@const path = dirPath ? `${dirPath}/${entry.name}` : entry.name}
+			{@const stats = changeStats[path]}
 			{#if entry.kind === 'dir'}
 				<button
 					type="button"
@@ -380,6 +400,11 @@
 				>
 					<span class="fb-name">{entry.name}</span>
 					{#if entry.symlink}<span class="fb-sym" aria-label="symbolic link">⤳</span>{/if}
+					{#if stats}
+						<span class="fb-change-stats" aria-label={`${stats.additions ?? 0} additions, ${stats.deletions ?? 0} deletions`}>
+							{#if stats.additions === null || stats.deletions === null}<span class="binary">binary</span>{:else}<span class="additions">+{stats.additions}</span><span class="deletions">-{stats.deletions}</span>{/if}
+						</span>
+					{/if}
 					<span class="fb-size">{fmtBytes(entry.size)}</span>
 				</button>
 			{:else}
@@ -654,6 +679,11 @@
 		flex: none;
 		color: var(--color-muted);
 	}
+
+	.fb-change-stats { flex: none; display: inline-flex; gap: 0.25rem; font-family: var(--font-outlier); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+	.fb-change-stats .additions { color: var(--color-success); }
+	.fb-change-stats .deletions { color: var(--color-error); }
+	.fb-change-stats .binary { color: var(--color-muted); }
 
 	.fb-size {
 		flex: none;

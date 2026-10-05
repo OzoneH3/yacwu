@@ -29,8 +29,15 @@ export function hasSharedChannelContext(text: string): boolean {
 export function visibleUserText(text: string): string {
 	// App-server backends may trim leading blank lines before echoing user input,
 	// so match the sentinel itself rather than depending on its surrounding LFs.
-	const markerAt = text.indexOf('<!-- YACWU_SHARED_BACKGROUND_CHANNEL -->');
-	return markerAt < 0 ? text : text.slice(0, markerAt).trimEnd();
+	const markers = [
+		'<!-- YACWU_SHARED_BACKGROUND_CHANNEL -->',
+		'<!-- YACWU_TASK_PROGRESS -->'
+	];
+	const markerAt = markers
+		.map((marker) => text.indexOf(marker))
+		.filter((index) => index >= 0)
+		.sort((a, b) => a - b)[0];
+	return markerAt === undefined ? text : text.slice(0, markerAt).trimEnd();
 }
 
 /** Add one-time, session-specific instructions for coordinating through the shared scratch folder. */

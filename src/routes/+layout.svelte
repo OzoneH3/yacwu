@@ -35,6 +35,7 @@
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 	import { detectPromptKind, parseInteractiveChoice } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
+	import { parseTaskProgress, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 
 	let { children } = $props();
 
@@ -89,6 +90,7 @@
 	interface ModelDisplayProfile {
 		capability: number;
 		efficiency: string;
+		valueRating: string;
 	}
 
 	interface ModelState {
@@ -190,6 +192,8 @@
 	// Read-only file browser (FileBrowser.svelte), rooted at the session cwd.
 	let filesOpen = $state(false);
 	let filesReveal = $state<{ path: string; line: number | null; nonce: number } | null>(null);
+	let fileLinkPreview = $state<{ path: string; content: string } | null>(null);
+	let copiedFileLink = $state<string | null>(null);
 	let filesRefresh = $state(0);
 	let filesToggleEl = $state<HTMLButtonElement | null>(null);
 	let changesOpen = $state(false);
@@ -364,6 +368,24 @@
 	const viewedId = $derived(viewedAgentId ?? activeId);
 	const viewed = $derived(viewedId ? (threads[viewedId] ?? null) : null);
 	const viewedAgent = $derived(viewedAgentId ? (agents[viewedAgentId] ?? null) : null);
+	const activeTaskProgress = $derived.by(() => {
+		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
+		const items = itemsOf(active);
+		let latestUserIndex = -1;
+		for (let index = items.length - 1; index >= 0; index -= 1) {
+			if (items[index].type === 'userMessage') {
+				latestUserIndex = index;
+				break;
+			}
+		}
+		for (let index = items.length - 1; index > latestUserIndex; index -= 1) {
+			const item = items[index] as any;
+			if (item.type !== 'agentMessage') continue;
+			const estimate = parseTaskProgress(String(item.text ?? ''));
+			if (estimate) return estimate;
+		}
+		return null;
+	});
 	// Slash-command autocomplete: offered while the composer holds a bare
 	// command token ("/…" with no whitespace or newline yet), mirroring the
 	// codex TUI's command popup. Esc hides it until the token changes.
@@ -497,13 +519,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (!choice) return null;
 		const name = `${choice.displayName} ${choice.id}`.toLowerCase().replace(/\s+/g, ' ');
 		const profiles: Array<[RegExp, ModelDisplayProfile]> = [
-			[/gpt-6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional' }],
-			[/gpt-5\.6 luna/, { capability: 60, efficiency: 'Exceptional' }],
-			[/gpt-6\.1 sol/, { capability: 93, efficiency: 'Excellent' }],
-			[/gpt-5\.6 terra/, { capability: 72, efficiency: 'Very good' }],
-			[/gpt-6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good' }],
-			[/gpt-5\.6 sol/, { capability: 79, efficiency: 'Good' }],
-			[/gpt-6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low' }]
+			[/gpt-6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional', valueRating: '★★★★★' }],
+			[/gpt-5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: '★★★★★' }],
+			[/gpt-6\.1 sol/, { capability: 93, efficiency: 'Excellent', valueRating: '★★★★★' }],
+			[/gpt-5\.6 terra/, { capability: 72, efficiency: 'Very good', valueRating: '★★★★½' }],
+			[/gpt-6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good', valueRating: '★★★★½' }],
+			[/gpt-5\.6 sol/, { capability: 79, efficiency: 'Good', valueRating: '★★★½' }],
+			[/gpt-6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low', valueRating: '★★★½' }]
 		];
 		return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 	}
@@ -1709,7 +1731,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function sendMessageRequest(id: string, text: string, images: File[], turnId: string | null): Promise<Response> {
-		const messageText = addSharedChannelContext(id, text);
+		const messageText = withTaskProgressInstructions(addSharedChannelContext(id, text));
 		if (images.length > 0) {
 			const body = new FormData();
 			body.set('text', messageText);
@@ -2610,6 +2632,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function agentParts(text: string): RenderPart[] {
+		text = stripTaskProgressMarkers(text);
 		const parts: RenderPart[] = [];
 		const re = /<agent-img>\s*([\s\S]*?)\s*<\/agent-img>/g;
 		let last = 0;
@@ -2622,6 +2645,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 		if (last < text.length) parts.push({ type: 'text', text: text.slice(last) });
 		return parts;
+	}
+
+	function formatEstimatedRemaining(minutes: number | null): string {
+		if (minutes === null) return 'time unknown';
+		if (minutes < 60) return `~${minutes}m left`;
+		const hours = Math.floor(minutes / 60);
+		const remainder = minutes % 60;
+		return remainder ? `~${hours}h ${remainder}m left` : `~${hours}h left`;
 	}
 
 	function chooseImages() {
@@ -2748,6 +2779,35 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		changesOpen = false;
 		filesOpen = true;
 		filesReveal = { path: rel, line, nonce: ++localCounter };
+	}
+
+	async function loadFileLinkPreview(path: string) {
+		if (!activeId) return;
+		fileLinkPreview = { path, content: 'Loading…' };
+		try {
+			const res = await fetch(`${threadApi(activeId ?? '', '/file')}?path=${encodeURIComponent(path)}`);
+			const data = await res.json();
+			if (!res.ok) throw new Error(data.error ?? 'Could not load file');
+			const content = data.binary ? '[Binary file]' : data.tooLarge ? '[File is too large to preview]' : String(data.content ?? '');
+			if (fileLinkPreview?.path === path) fileLinkPreview = { path, content: content.slice(0, 2400) };
+		} catch (error) {
+			if (fileLinkPreview?.path === path) fileLinkPreview = { path, content: error instanceof Error ? error.message : 'Could not load file' };
+		}
+	}
+
+	async function copyFileLinkContents(path: string) {
+		try {
+			if (!activeId) throw new Error('No active session');
+			const res = await fetch(`${threadApi(activeId ?? '', '/file')}?path=${encodeURIComponent(path)}`);
+			const data = await res.json();
+			if (!res.ok) throw new Error(data.error ?? 'Could not read file');
+			if (data.binary || data.tooLarge) throw new Error('This file cannot be copied as text');
+			await navigator.clipboard.writeText(String(data.content ?? ''));
+			copiedFileLink = path;
+			setTimeout(() => { if (copiedFileLink === path) copiedFileLink = null; }, 1400);
+		} catch (error) {
+			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not copy file contents' }, 4500);
+		}
 	}
 
 	function openChangesPanel(path: string | null = null) {
@@ -3331,12 +3391,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{:else if token.type === 'code'}
 			{@const pathTarget = agentPathTarget(token.text)}
 			{#if pathTarget !== null}
-				<button
-					type="button"
-					class="code-path"
-					title={pathTarget.line ? `Open in file browser at line ${pathTarget.line}` : 'Open in file browser'}
-					onclick={() => openFileInBrowser(pathTarget.path, pathTarget.line)}
-				><code>{token.text}</code></button>
+				<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(pathTarget.path)} onmouseleave={() => fileLinkPreview?.path === pathTarget.path && (fileLinkPreview = null)}>
+					<button type="button" class="code-path" title={pathTarget.line ? `Open in file browser at line ${pathTarget.line}` : 'Open in file browser'} onclick={() => openFileInBrowser(pathTarget.path, pathTarget.line)}><code>{token.text}</code></button>
+					<button type="button" class="file-link-copy" aria-label={`Copy ${pathTarget.path}`} title={copiedFileLink === pathTarget.path ? 'Copied' : 'Copy file contents'} onclick={() => void copyFileLinkContents(pathTarget.path)}>{copiedFileLink === pathTarget.path ? '✓' : '⧉'}</button>
+					{#if fileLinkPreview?.path === pathTarget.path}<span class="file-link-preview"><strong>{pathTarget.path}</strong><pre>{fileLinkPreview.content}</pre></span>{/if}
+				</span>
 			{:else}
 				<code>{token.text}</code>
 			{/if}
@@ -3346,14 +3405,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			{#if token.href}
 				{@const fileTarget = token.external ? null : agentPathTarget(token.href, false)}
 				{#if fileTarget !== null}
-					<button
-						type="button"
-						class="link-path"
-						title={fileTarget.line
-							? `Open ${fileTarget.path} at line ${fileTarget.line}`
-							: `Open ${fileTarget.path} in file browser`}
-						onclick={() => openFileInBrowser(fileTarget.path, fileTarget.line)}
-					>{@render markdownInlines(token.children)}</button>
+					<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(fileTarget.path)} onmouseleave={() => fileLinkPreview?.path === fileTarget.path && (fileLinkPreview = null)}>
+						<button type="button" class="link-path" title={fileTarget.line ? `Open ${fileTarget.path} at line ${fileTarget.line}` : `Open ${fileTarget.path} in file browser`} onclick={() => openFileInBrowser(fileTarget.path, fileTarget.line)}>{@render markdownInlines(token.children)}</button>
+						<button type="button" class="file-link-copy" aria-label={`Copy ${fileTarget.path}`} title={copiedFileLink === fileTarget.path ? 'Copied' : 'Copy file contents'} onclick={() => void copyFileLinkContents(fileTarget.path)}>{copiedFileLink === fileTarget.path ? '✓' : '⧉'}</button>
+						{#if fileLinkPreview?.path === fileTarget.path}<span class="file-link-preview"><strong>{fileTarget.path}</strong><pre>{fileLinkPreview.content}</pre></span>{/if}
+					</span>
 				{:else}
 					<a
 						href={token.href}
@@ -3678,17 +3734,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{/if}
 						{#if fastSessions[s.id]}{@render fastMark()}{/if}
 					</a>
-					<button
-						class="delete-session"
-						type="button"
-						aria-label={`delete session ${shortLabel(s)}`}
-						title="Delete session"
-						onclick={() => deleteSession(s.id)}
-					>
-						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-							<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
-						</svg>
-					</button>
 				</div>
 				{#each sideChatsOf(s.id) as side (side.id)}
 					<div class="session-row side-row">
@@ -3721,17 +3766,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</span>
 							{#if fastSessions[side.id]}{@render fastMark()}{/if}
 						</a>
-						<button
-							class="delete-session"
-							type="button"
-							aria-label={`delete session ${shortLabel(side)}`}
-							title="Delete session"
-							onclick={() => deleteSession(side.id)}
-						>
-							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-								<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
-							</svg>
-						</button>
 					</div>
 				{/each}
 			{:else}
@@ -3955,6 +3989,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				<div class="original-prompt" title={sessionContextTitle} aria-label={`Session: ${sessionContextLine}`}>
 					<span>Session</span>
 					<p>{sessionContextLine}</p>
+					{#if active?.status === 'running' && !viewedAgentId}
+						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
+							{#if activeTaskProgress}
+								<span class="session-progress-meter" aria-hidden="true"><span style={`width: ${activeTaskProgress.percent}%`}></span></span>
+								<span>{activeTaskProgress.percent}% est.</span>
+								<span>{formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}</span>
+							{:else}
+								<span>Estimating…</span>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/if}
 
@@ -4052,7 +4097,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<dd>
 								{activeModelChoice?.displayName ?? activeConfig?.model ?? '—'}
 								{#if activeModelProfile}
-									<span class="model-profile-detail">~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} usage efficiency</span>
+									<span class="model-profile-detail">~{activeModelProfile.capability}/100 capability · {activeModelProfile.efficiency} usage efficiency · {activeModelProfile.valueRating}</span>
 								{/if}
 							</dd>
 						</div>
@@ -4108,6 +4153,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						</div>
 					{/if}
+					<button class="session-remove-action" type="button" onclick={() => { sessionInfoDialog?.close(); void deleteSession(activeId); }}>
+						{isSideChat(activeSummary) ? 'Remove side conversation' : 'Archive session'}
+					</button>
 				</div>
 			</dialog>
 
@@ -4615,7 +4663,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${activeModelProfile ? ` · approximately ${activeModelProfile.capability}/100 capability · ${activeModelProfile.efficiency} usage efficiency` : ''}`}>
 						<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
 						{#if activeModelProfile}
-							<span class="model-profile-indicator" aria-hidden="true">~{activeModelProfile.capability} · {activeModelProfile.efficiency}</span>
+						<span class="model-profile-indicator" aria-hidden="true">~{activeModelProfile.capability} · {activeModelProfile.efficiency} · {activeModelProfile.valueRating}</span>
 						{/if}
 						<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
@@ -4630,7 +4678,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{#each activeModels as choice (choice.id)}
 								{@const profile = modelDisplayProfile(choice)}
 								<option value={choice.id}>
-									{choice.displayName || choice.id}{profile ? ` · ~${profile.capability}/100 · ${profile.efficiency} efficiency` : ''}
+									{choice.displayName || choice.id}{profile ? ` · ~${profile.capability}/100 · ${profile.efficiency} efficiency · ${profile.valueRating}` : ''}
 								</option>
 							{/each}
 										</select>
@@ -5467,45 +5515,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-neutral);
 	}
 
-	.delete-session {
-		position: static;
-		display: grid;
-		place-items: center;
-		width: var(--space-md);
-		height: var(--space-md);
-		padding: 0;
-		border: var(--rule-hair) solid transparent;
-		border-radius: var(--radius-sm);
-		background: transparent;
-		color: var(--color-muted);
-		cursor: pointer;
-		opacity: 1;
-		pointer-events: auto;
-		white-space: nowrap;
-		transform: none;
-		transition:
-			background-color var(--dur-micro) var(--ease-out),
-			opacity var(--dur-micro) var(--ease-out),
-			transform var(--dur-micro) var(--ease-out);
-	}
-
-	.delete-session svg {
-		display: block;
-		width: var(--space-sm);
-		height: var(--space-sm);
-		fill: none;
-		stroke: currentColor;
-		stroke-linecap: round;
-		stroke-linejoin: round;
-		stroke-width: 1.75;
-	}
-
-	.delete-session:focus-visible {
-		opacity: 1;
-		pointer-events: auto;
-		transition: none;
-	}
-
 	.empty {
 		display: flex;
 		flex-direction: column;
@@ -5717,7 +5726,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.original-prompt {
 		display: flex;
-		align-items: baseline;
+		align-items: center;
 		gap: var(--space-xs);
 		min-width: 0;
 		padding: 0.4rem var(--space-sm);
@@ -5736,6 +5745,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.original-prompt p {
+		flex: 1 1 auto;
 		min-width: 0;
 		margin: 0;
 		overflow: hidden;
@@ -5743,6 +5753,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-size: var(--text-xs);
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.session-progress {
+		flex: 0 0 auto;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		color: var(--color-muted);
+		font-size: var(--text-2xs);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	.session-progress-meter {
+		width: 2.6rem;
+		height: 0.3rem;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--color-rule);
+	}
+
+	.session-progress-meter > span {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--color-accent);
+		transition: width 180ms ease;
 	}
 
 	.usage-limits {
@@ -6167,6 +6204,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.session-info-panel {
 		padding: var(--space-sm);
 	}
+
+	.session-remove-action { width: 100%; min-height: var(--control-height); margin-block-start: var(--space-sm); padding-inline: var(--space-sm); border: var(--rule-hair) solid color-mix(in srgb, var(--color-error) 38%, var(--color-rule)); border-radius: var(--radius-input); background: transparent; color: var(--color-error); cursor: pointer; font: inherit; text-align: start; }
+	.session-remove-action:hover { background: color-mix(in srgb, var(--color-error) 8%, var(--color-paper)); }
 
 	.session-info-heading {
 		display: flex;
@@ -6981,6 +7021,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font: inherit;
 		text-align: start;
 	}
+
+	.markdown-body .file-link-actions { position: relative; display: inline-flex; align-items: baseline; gap: 0.15rem; }
+	.markdown-body .file-link-copy { padding: 0 0.15rem; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-muted); cursor: pointer; font: inherit; font-size: 0.8em; vertical-align: baseline; }
+	.markdown-body .file-link-copy:hover, .markdown-body .file-link-copy:focus-visible { color: var(--color-accent-active); background: var(--color-paper-3); }
+	.markdown-body .file-link-preview { position: absolute; z-index: 20; inset-block-start: calc(100% + 0.35rem); inset-inline-start: 0; width: min(34rem, 75vw); max-height: 19rem; padding: var(--space-xs); overflow: hidden; border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper); box-shadow: var(--shadow-popover); color: var(--color-ink-2); pointer-events: none; }
+	.markdown-body .file-link-preview strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); }
+	.markdown-body .file-link-preview pre { max-height: 15rem; margin: var(--space-3xs) 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-outlier); font-size: var(--text-2xs); }
 
 	.markdown-body .code-path code {
 		text-decoration: underline;
@@ -7924,17 +7971,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			color: var(--color-ink);
 		}
 
-		.delete-session {
-			opacity: 0;
-			pointer-events: none;
-		}
-
-		.session-row:hover .delete-session,
-		.session-row:focus-within .delete-session {
-			opacity: 1;
-			pointer-events: auto;
-		}
-
 		.raw-toggle {
 			opacity: 0;
 			pointer-events: none;
@@ -7964,7 +8000,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.session-info-close:hover,
 		.rename-session:hover,
 		.theme-toggle:hover,
-		.delete-session:hover,
 		.new-activity:hover,
 		.archive-toast button:hover {
 			background: var(--color-paper-3);
@@ -8017,8 +8052,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		transform: translateY(calc(-100% - var(--space-2xs) + 1px));
 	}
 
-	.archive-toast button:active,
-	.delete-session:active {
+	.archive-toast button:active {
 		transform: translateY(1px);
 	}
 
@@ -8216,7 +8250,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.effort,
 		.send,
 		.welcome-action,
-		.delete-session,
 		.attachment,
 		.new-activity,
 		.archive-toast button,
@@ -8227,7 +8260,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			min-height: var(--control-height);
 		}
 
-		.delete-session,
 		.raw-toggle {
 			width: var(--control-height);
 		}
