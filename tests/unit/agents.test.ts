@@ -91,6 +91,25 @@ test('wait folds per-agent states, closing shut-down agents', () => {
 	expect(registry[AGENT_B].closed).toBe(true);
 });
 
+test('agents remain grouped with the work order after finishing', () => {
+	const registry: AgentRegistry = {};
+	trackAgentItem(registry, SESSION, spawn([AGENT_A]), 'work-order-1');
+	trackAgentItem(registry, SESSION, {
+		type: 'collabAgentToolCall',
+		id: 'item-wait',
+		tool: 'wait',
+		status: 'completed',
+		senderThreadId: SESSION,
+		receiverThreadIds: [AGENT_A],
+		agentsStates: { [AGENT_A]: { status: 'completed' } }
+	}, 'work-order-1');
+	trackAgentItem(registry, SESSION, spawn([AGENT_B]), 'work-order-2');
+
+	expect(registry[AGENT_A].state).toBe('completed');
+	expect(registry[AGENT_A].workOrderId).toBe('work-order-1');
+	expect(registry[AGENT_B].workOrderId).toBe('work-order-2');
+});
+
 test('subAgentActivity registers the agent thread with its path', () => {
 	const registry: AgentRegistry = {};
 	trackAgentItem(registry, SESSION, {
@@ -151,7 +170,8 @@ test('the session root is not listed as its own agent tab', () => {
 		role: 'coordinator',
 		path: 'root',
 		state: 'running',
-		closed: false
+		closed: false,
+		workOrderId: null
 	};
 	expect(agentsForSession(registry, SESSION).map((agent) => agent.id)).toEqual([AGENT_A]);
 });

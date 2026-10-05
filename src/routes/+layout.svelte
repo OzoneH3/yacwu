@@ -178,6 +178,8 @@
 	let accountUsagePending = $state<Record<string, boolean>>({});
 	// Sub-agent threads spawned by sessions (multi-agent collaboration).
 	let agents = $state<AgentRegistry>({});
+	let activeTurnBySession = $state<Record<string, string>>({});
+	let latestWorkOrderBySession = $state<Record<string, string>>({});
 	let agentHistoryLoading = $state(false);
 	// Agent threads whose metadata (nickname/role) was already requested.
 	const agentMetaFetched = new Set<string>();
@@ -255,8 +257,11 @@
 	// ?agent= query param) shows its transcript read-only; the session itself
 	// stays the URL's identity, so the rail selection never moves.
 	const activeAgents = $derived(activeId ? agentsForSession(agents, activeId) : []);
-	const currentAgents = $derived(activeAgents.filter((agent) => agentIsRunning(agent)));
-	const previousAgents = $derived(activeAgents.filter((agent) => !agentIsRunning(agent)));
+	const activeWorkOrderId = $derived(activeId ? latestWorkOrderBySession[activeId] ?? null : null);
+	const currentAgents = $derived(
+		activeAgents.filter((agent) => activeWorkOrderId ? agent.workOrderId === activeWorkOrderId : agentIsRunning(agent))
+	);
+	const previousAgents = $derived(activeAgents.filter((agent) => !currentAgents.includes(agent)));
 	const viewedAgentId = $derived(activeId ? page.url.searchParams.get('agent') : null);
 	const viewedId = $derived(viewedAgentId ?? activeId);
 	const viewed = $derived(viewedId ? (threads[viewedId] ?? null) : null);
@@ -390,7 +395,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 	}
 
-	function upsertItem(id: string, item: ThreadItem & { id: string }, stampTime = false) {
+	function upsertItem(
+		id: string,
+		item: ThreadItem & { id: string },
+		stampTime = false,
+		historicalWorkOrderId?: string
+	) {
 		const t = ensureThread(id);
 		if (!t.byId[item.id]) t.order.push(item.id);
 		// Preserve any locally-accumulated streamed text across updates.
@@ -410,7 +420,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// Collaboration items reveal sub-agent threads; keep the registry live
 		// for both streamed items and restored history.
 		if (next.type === 'collabAgentToolCall' || next.type === 'subAgentActivity') {
-			trackAgentItem(agents, id, next);
+			const rootId = agents[id] ? agentRootId(agents, agents[id]) : id;
+			const workOrderId =
+				rootId === id && historicalWorkOrderId
+					? historicalWorkOrderId
+					: activeTurnBySession[rootId] ?? latestWorkOrderBySession[rootId] ?? null;
+			trackAgentItem(agents, id, next, workOrderId);
+			if (workOrderId) latestWorkOrderBySession[rootId] = workOrderId;
 		}
 	}
 
@@ -423,7 +439,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		pendingUserEchoes[id] = [];
 		for (const turn of turns) {
 			for (const item of turn.items ?? []) {
-				if ((item as any).id) upsertItem(id, item as any);
+				if ((item as any).id) upsertItem(id, item as any, false, turn.id);
 			}
 		}
 	}
@@ -478,6 +494,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function removeSession(id: string) {
 		sessions = sessions.filter((s) => s.id !== id);
+		delete activeTurnBySession[id];
+		delete latestWorkOrderBySession[id];
 		if (interruptedSessions[id]) {
 			delete interruptedSessions[id];
 			persistInterruptedSessions();
@@ -695,7 +713,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					markTaskStarted(tid);
 					const t = ensureThread(tid);
 					t.status = 'running';
-					t.turnId = p.turn?.id ?? null;
+				t.turnId = p.turn?.id ?? null;
+				if (p.turn?.id) activeTurnBySession[tid] = p.turn.id;
 					t.error = null;
 					touchSession(tid, p.turn?.startedAt);
 				}
@@ -706,7 +725,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					markTaskCompleted(tid);
 					const t = ensureThread(tid);
 					t.status = 'idle';
-					t.turnId = null;
+				t.turnId = null;
+				delete activeTurnBySession[tid];
 					touchSession(tid, p.turn?.completedAt);
 					if (p.turn?.status === 'failed' && p.turn?.error?.message) {
 						t.error = p.turn.error.message;

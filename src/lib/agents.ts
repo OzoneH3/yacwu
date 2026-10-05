@@ -21,6 +21,8 @@ export interface AgentInfo {
 	state: string | null;
 	/** The agent was closed (closeAgent / shutdown) and won't run again. */
 	closed: boolean;
+	/** Root-session turn that last used this agent; groups agents by work order. */
+	workOrderId: string | null;
 }
 
 /** Prefer the live thread lifecycle when available; collab tool metadata can lag. */
@@ -45,7 +47,8 @@ function ensureAgent(registry: AgentRegistry, id: string, parentId: string): Age
 			role: null,
 			path: null,
 			state: null,
-			closed: false
+			closed: false,
+			workOrderId: null
 		};
 	}
 	return registry[id];
@@ -65,7 +68,8 @@ function applyCollabState(agent: AgentInfo, status: string) {
 export function trackAgentItem(
 	registry: AgentRegistry,
 	ownerThreadId: string,
-	item: unknown
+	item: unknown,
+	workOrderId?: string | null
 ): boolean {
 	const it = item as Record<string, any> | null;
 	if (!it || typeof it !== 'object') return false;
@@ -74,6 +78,7 @@ export function trackAgentItem(
 		const agentId = typeof it.agentThreadId === 'string' ? it.agentThreadId : '';
 		if (!agentId || agentId === ownerThreadId) return false;
 		const agent = ensureAgent(registry, agentId, ownerThreadId);
+		if (workOrderId) agent.workOrderId = workOrderId;
 		if (typeof it.agentPath === 'string' && it.agentPath) agent.path = it.agentPath;
 		if (it.kind === 'started') applyCollabState(agent, 'running');
 		else if (it.kind === 'interrupted') agent.state = 'interrupted';
@@ -89,7 +94,10 @@ export function trackAgentItem(
 	const receivers: string[] = Array.isArray(it.receiverThreadIds)
 		? it.receiverThreadIds.filter((r: unknown) => typeof r === 'string' && r !== parentId)
 		: [];
-	for (const receiver of receivers) ensureAgent(registry, receiver, parentId);
+	for (const receiver of receivers) {
+		const agent = ensureAgent(registry, receiver, parentId);
+		if (workOrderId) agent.workOrderId = workOrderId;
+	}
 
 	const completed = it.status === 'completed';
 	if (completed && (it.tool === 'spawnAgent' || it.tool === 'resumeAgent')) {
@@ -104,6 +112,7 @@ export function trackAgentItem(
 		for (const [agentId, state] of Object.entries(states as Record<string, any>)) {
 			if (agentId === parentId) continue;
 			const agent = ensureAgent(registry, agentId, parentId);
+			if (workOrderId) agent.workOrderId = workOrderId;
 			if (typeof state?.status === 'string') applyCollabState(agent, state.status);
 		}
 	}
