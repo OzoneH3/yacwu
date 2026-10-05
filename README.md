@@ -19,23 +19,25 @@ state lives entirely in Codex's own persistent sessions, read back via
 - ⚡ Live streaming of assistant messages, reasoning, commands, plans, file
   changes, and current activity; send steering instructions while a turn runs,
   or stop and resume it later
-- ⏱️ A Session bar keeps the current prompt visible and shows model-reported
-  task progress estimates; elapsed time appears while work runs and on its
-  completed response
+- ⏱️ The Session bar keeps the current prompt visible, puts task progress and
+  time-left estimates before the Session label, and shows 5-hour / 7-day usage
+  on the right. Progress updates appear as their own transcript entries;
+  elapsed time appears while work runs and on its completed response
 - 🤝 Multi-agent visibility: switch between the session and spawned agents,
   see which agents are active, and browse finished agents in a separate
   Previous group; agent transcripts are read-only
-- 🧠 Choose a model and reasoning effort per session. The model picker also
-  shows approximate capability and usage-efficiency indicators (these are
-  Yacwu display estimates, not official benchmark scores)
-- 📊 See remaining 5-hour and 7-day Codex usage in the top bar
+- 🧠 Choose a model and reasoning effort per session. Model capability,
+  usage-efficiency, and value indicators appear in the model choices; after
+  selection, the picker shows only the model name. These are Yacwu display
+  estimates, not official benchmark scores
 - 💬 Interactive answers: when Codex asks a question with listed options,
   choose one in a prompt dialog or enter a custom response
 - 📁 Workspace browser rooted at the session folder, with a Monaco text editor
   (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
   links in assistant messages
 - ± Git changes inspector with All, Staged, and Unstaged scopes, added/removed
-  line counts, lazy unified diffs, and a resizable split view
+  line counts in both the inspector and transcript file-change entries, lazy
+  unified diffs, and a resizable split view
 - 🧭 Transcript position rail for jumping between messages in long sessions
 - ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
   prompt history with the Codex TUI's shell-style recall semantics
