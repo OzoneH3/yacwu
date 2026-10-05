@@ -3193,8 +3193,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<div class="cwd-browser" id="cwd-browser" aria-label="Choose working directory">
 		<div class="cwd-browser-toolbar">
 							<button class="cwd-up" type="button" onclick={() => browseDirectories(directoryParent(cwdBrowsePath))} disabled={!cwdBrowsePath || directoryParent(cwdBrowsePath) === cwdBrowsePath} aria-label="Go to parent folder" title="Parent folder">↑</button>
-							<span class="cwd-current" title={cwdBrowsePath}>{cwdBrowsePath || 'Choose a folder'}</span>
-			<button class="mini ghost cwd-use" type="button" onclick={() => selectBrowseDirectory()} disabled={!cwdBrowsePath}>Use folder</button>
+							<button
+								class="cwd-current"
+								type="button"
+								title="Use this folder"
+								aria-label={`Use folder ${cwdBrowsePath || 'current directory'}`}
+								disabled={!cwdBrowsePath || cwdBrowseLoading}
+								onclick={() => selectBrowseDirectory()}
+							>{cwdBrowsePath || 'Choose a folder'}</button>
 		</div>
 		<label class="cwd-hidden-toggle">
 			<input type="checkbox" bind:checked={showHiddenDirectories} />
@@ -4586,14 +4592,31 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.cwd-current {
+		appearance: none;
+		border: 0;
+		padding: var(--space-3xs);
+		background: transparent;
 		flex: 1;
 		min-width: 0;
 		overflow: hidden;
 		color: var(--color-muted);
+		cursor: pointer;
 		font-family: var(--font-outlier);
 		font-size: 0.68rem;
+		text-align: start;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.cwd-current:hover:not(:disabled),
+	.cwd-current:focus-visible {
+		color: var(--color-accent-active);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+	}
+
+	.cwd-current:disabled {
+		cursor: default;
 	}
 
 	.cwd-hidden-toggle {
@@ -4613,12 +4636,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		height: 1rem;
 		margin: 0;
 		accent-color: var(--color-accent-active);
-	}
-
-	.cwd-use {
-		min-height: var(--control-height-compact);
-		padding-inline: var(--space-2xs);
-		font-size: var(--text-xs);
 	}
 
 	.cwd-directory-list {
