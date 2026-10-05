@@ -251,6 +251,12 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 	await expect(page.locator('.item.agent .body').last()).toContainText('PONG', {
 		timeout: 90_000
 	});
+	await expect(page.locator('.original-prompt p')).toHaveText('Reply with exactly the single word: PONG');
+	await page.locator('.composer textarea').fill('For this follow-up, reply with the single word: SECOND');
+	await page.locator('button.send').click();
+	await expect(page.locator('.original-prompt p')).toHaveText('For this follow-up, reply with the single word: SECOND');
+	await expect(page.locator('.original-prompt')).toHaveAttribute('title', /Original prompt: Reply with exactly the single word: PONG/);
+	await expect(page.locator('.item.agent .body').last()).toContainText('SECOND', { timeout: 90_000 });
 	await expect(page.locator('.topbar .session-info-trigger')).toHaveAttribute('aria-label', /idle/, {
 		timeout: 90_000
 	});

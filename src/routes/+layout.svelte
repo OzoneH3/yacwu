@@ -133,6 +133,14 @@
 	let sessionOrder = $state<string[]>([]);
 	let draggingSessionId = $state<string | null>(null);
 	let dragOverSessionId = $state<string | null>(null);
+	let pointerSessionDrag = $state<{
+		id: string;
+		pointerId: number;
+		startX: number;
+		startY: number;
+		targetId: string | null;
+		active: boolean;
+	} | null>(null);
 	// Host picker: local plus the remote machines found in ~/.ssh/config.
 	let newHost = $state(LOCAL_HOST);
 	let hostChoices = $state<HostInfo[]>([]);
@@ -219,20 +227,25 @@
 	const activeId = $derived(page.params.id ?? null);
 	const active = $derived(activeId ? threads[activeId] : null);
 	const activeSummary = $derived(sessions.find((s) => s.id === activeId) ?? null);
-	const originalPrompt = $derived.by(() => {
-		const firstUserMessage = itemsOf(active).find((item) => item.type === 'userMessage') as any;
-		return (firstUserMessage?.content ?? [])
+	const userPrompts = $derived.by(() =>
+		itemsOf(active)
+			.filter((item) => item.type === 'userMessage')
+			.map((item) => ((item as any).content ?? [])
 			.map((part: any) => typeof part?.text === 'string' ? part.text : '')
 			.join(' ')
 			.replace(/\s+/g, ' ')
-			.trim();
-	});
-	const sessionContextLine = $derived(activeSummary?.name?.trim() || originalPrompt);
+			.trim())
+			.filter(Boolean)
+	);
+	const originalPrompt = $derived(userPrompts[0] ?? '');
+	const latestPrompt = $derived(userPrompts.at(-1) ?? '');
+	const sessionContextLine = $derived(latestPrompt || activeSummary?.name?.trim() || '');
 	const sessionContextTitle = $derived.by(() => {
-		if (activeSummary?.name?.trim() && originalPrompt && activeSummary.name.trim() !== originalPrompt) {
-			return `Session: ${activeSummary.name.trim()}\nOriginal prompt: ${originalPrompt}`;
-		}
-		return originalPrompt || activeSummary?.name || '';
+		const lines = [];
+		if (activeSummary?.name?.trim()) lines.push(`Session: ${activeSummary.name.trim()}`);
+		if (latestPrompt) lines.push(`Latest prompt: ${latestPrompt}`);
+		if (originalPrompt && originalPrompt !== latestPrompt) lines.push(`Original prompt: ${originalPrompt}`);
+		return lines.join('\n');
 	});
 	const activeConfig = $derived(activeId ? sessionConfigs[activeId] : null);
 	const activeModels = $derived(activeId ? (sessionModels[activeId] ?? []) : []);
@@ -542,12 +555,38 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (target) reorderSession(id, target);
 	}
 
-	function startSessionDrag(event: DragEvent, id: string) {
+	function startSessionDrag(event: PointerEvent, id: string) {
+		if (event.button !== 0) return;
+		pointerSessionDrag = {
+			id,
+			pointerId: event.pointerId,
+			startX: event.clientX,
+			startY: event.clientY,
+			targetId: null,
+			active: false
+		};
 		draggingSessionId = id;
-		if (event.dataTransfer) {
-			event.dataTransfer.effectAllowed = 'move';
-			event.dataTransfer.setData('text/plain', id);
+		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+	}
+
+	function moveSessionDrag(event: PointerEvent) {
+		const drag = pointerSessionDrag;
+		if (!drag || drag.pointerId !== event.pointerId) return;
+		if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 5) return;
+		const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-session-row-id]');
+		const targetId = target?.dataset.sessionRowId ?? null;
+		pointerSessionDrag = { ...drag, active: true, targetId };
+		dragOverSessionId = targetId;
+	}
+
+	function finishSessionDrag(event: PointerEvent) {
+		const drag = pointerSessionDrag;
+		if (drag && drag.pointerId === event.pointerId && drag.active && drag.targetId) {
+			reorderSession(drag.id, drag.targetId);
 		}
+		pointerSessionDrag = null;
+		draggingSessionId = null;
+		dragOverSessionId = null;
 	}
 
 	function removeSession(id: string) {
@@ -3311,32 +3350,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			{#each topSessions as s (s.id)}
 				<div
 					class="session-row"
+					data-session-row-id={s.id}
 					role="group"
 					aria-label={`Session ${shortLabel(s)}`}
 					class:drop-target={dragOverSessionId === s.id && draggingSessionId !== s.id}
-					ondragover={(event) => {
-						if (!draggingSessionId || draggingSessionId === s.id) return;
-						event.preventDefault();
-						dragOverSessionId = s.id;
-						if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-					}}
-					ondragleave={() => { if (dragOverSessionId === s.id) dragOverSessionId = null; }}
-					ondrop={(event) => {
-						event.preventDefault();
-						const draggedId = event.dataTransfer?.getData('text/plain') || draggingSessionId;
-						if (draggedId) reorderSession(draggedId, s.id);
-						draggingSessionId = null;
-						dragOverSessionId = null;
-					}}
 				>
 					<button
 						class="session-drag-handle"
 						type="button"
-						draggable="true"
 						aria-label={`Reorder ${shortLabel(s)}`}
-						title="Drag to reorder"
-						ondragstart={(event) => startSessionDrag(event, s.id)}
-						ondragend={() => { draggingSessionId = null; dragOverSessionId = null; }}
+						title="Drag to reorder; use arrow keys to move"
+						onpointerdown={(event) => startSessionDrag(event, s.id)}
+						onpointermove={moveSessionDrag}
+						onpointerup={finishSessionDrag}
+						onpointercancel={finishSessionDrag}
 						onkeydown={(event) => {
 							if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
 								event.preventDefault();
