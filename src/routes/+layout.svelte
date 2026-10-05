@@ -34,6 +34,7 @@
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 	import { detectPromptKind, parseInteractiveChoice } from '$lib/interactive-choice';
+	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 
 	let { children } = $props();
 
@@ -247,7 +248,7 @@
 		itemsOf(active)
 			.filter((item) => item.type === 'userMessage')
 			.map((item) => ((item as any).content ?? [])
-			.map((part: any) => typeof part?.text === 'string' ? part.text : '')
+			.map((part: any) => typeof part?.text === 'string' ? visibleUserText(part.text) : '')
 			.join(' ')
 			.replace(/\s+/g, ' ')
 			.trim())
@@ -567,6 +568,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return LOCAL_HOST;
 	}
 
+	function sharedChannelPathForSession(id: string): string | null {
+		const summary = sessions.find((session) => session.id === id);
+		return sharedChannelPath(sessionHost(id), cwds[id] ?? summary?.cwd ?? '');
+	}
+
+	function addSharedChannelContext(id: string, text: string): string {
+		const visibleText = visibleUserText(text);
+		const alreadyJoined = itemsOf(threads[id] ?? null).some((item) => {
+			if (item.type !== 'userMessage') return false;
+			return ((item as any).content ?? []).some(
+				(part: any) => typeof part?.text === 'string' && hasSharedChannelContext(part.text)
+			);
+		});
+		const path = sharedChannelPathForSession(id);
+		return !path || alreadyJoined ? visibleText : withSharedChannelContext(visibleText, path, id);
+	}
+
 	/** Thread API URL carrying the session's host as a routing hint. */
 	function threadApi(id: string, path = ''): string {
 		return `/api/threads/${id}${path}${hostQuery(sessionHost(id))}`;
@@ -836,7 +854,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const queue = pendingUserEchoes[id];
 		if (!queue?.length) return;
 		const text = (item.content ?? [])
-			.map((c: any) => (typeof c?.text === 'string' ? c.text : ''))
+			.map((c: any) => (typeof c?.text === 'string' ? visibleUserText(c.text) : ''))
 			.join('');
 		const match = queue.find((entry) => entry.text === text);
 		if (match) removeLocalItem(id, match.id);
@@ -1679,9 +1697,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function sendMessageRequest(id: string, text: string, images: File[], turnId: string | null): Promise<Response> {
+		const messageText = addSharedChannelContext(id, text);
 		if (images.length > 0) {
 			const body = new FormData();
-			body.set('text', text);
+			body.set('text', messageText);
 			if (turnId) body.set('turnId', turnId);
 			for (const image of images) body.append('images', image, image.name);
 			return fetch(threadApi(id, '/message'), { method: 'POST', body });
@@ -1690,7 +1709,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return fetch(threadApi(id, '/message'), {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ text, ...(turnId ? { turnId } : {}) })
+			body: JSON.stringify({ text: messageText, ...(turnId ? { turnId } : {}) })
 		});
 	}
 
@@ -2468,7 +2487,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			const item = t.byId[itemId] as any;
 			if (item?.type !== 'userMessage') continue;
 			const text = ((item.content ?? []) as any[])
-				.map((c) => (typeof c?.text === 'string' ? c.text : ''))
+				.map((c) => (typeof c?.text === 'string' ? visibleUserText(c.text) : ''))
 				.filter(Boolean)
 				.join('\n')
 				.trim();
@@ -2564,7 +2583,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function userParts(item: any): RenderPart[] {
 		const parts: RenderPart[] = [];
 		for (const c of item.content ?? []) {
-			if (typeof c?.text === 'string' && c.text) parts.push({ type: 'text', text: c.text });
+			if (typeof c?.text === 'string' && c.text) {
+				const text = visibleUserText(c.text);
+				if (text) parts.push({ type: 'text', text });
+			}
 			if (c?.type === 'localImage' && typeof c.path === 'string') {
 				parts.push({ type: 'image', path: c.path, source: 'local' });
 			}
@@ -3577,7 +3599,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			</div>
 		{/if}
 		<nav class="sessions" data-loaded={sessionsLoaded}>
-			{#each topSessions as s (s.id)}
+			{#each topSessions as s, sessionIndex (s.id)}
 				<div
 					class="session-row"
 					data-session-row-id={s.id}
@@ -3638,17 +3660,39 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{/if}
 						{#if fastSessions[s.id]}{@render fastMark()}{/if}
 					</a>
-					<button
-						class="delete-session"
-						type="button"
-						aria-label={`delete session ${shortLabel(s)}`}
-						title="Delete session"
-						onclick={() => deleteSession(s.id)}
-					>
-						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-							<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
-						</svg>
-					</button>
+					<div class="session-actions">
+						<button
+							class="move-session"
+							type="button"
+							aria-label={`Move ${shortLabel(s)} up`}
+							title="Move up"
+							disabled={sessionIndex === 0}
+							onclick={() => moveSessionByKeyboard(s.id, -1)}
+						>
+							<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 9.5 4.5-4 4.5 4" /></svg>
+						</button>
+						<button
+							class="move-session"
+							type="button"
+							aria-label={`Move ${shortLabel(s)} down`}
+							title="Move down"
+							disabled={sessionIndex === topSessions.length - 1}
+							onclick={() => moveSessionByKeyboard(s.id, 1)}
+						>
+							<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m3.5 6.5 4.5 4 4.5-4" /></svg>
+						</button>
+						<button
+							class="delete-session"
+							type="button"
+							aria-label={`delete session ${shortLabel(s)}`}
+							title="Delete session"
+							onclick={() => deleteSession(s.id)}
+						>
+							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+								<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+							</svg>
+						</button>
+					</div>
 				</div>
 				{#each sideChatsOf(s.id) as side (side.id)}
 					<div class="session-row side-row">
@@ -5417,6 +5461,48 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.session-row.side-row {
 		padding-inline-start: var(--space-md);
 		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	.session-actions {
+		display: flex;
+		align-items: center;
+		gap: 1px;
+	}
+
+	.move-session {
+		display: grid;
+		place-items: center;
+		width: 1.1rem;
+		height: var(--control-height-compact);
+		padding: 0;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--color-muted);
+		cursor: pointer;
+	}
+
+	.move-session svg {
+		width: 13px;
+		height: 13px;
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.7;
+	}
+
+	.move-session:disabled {
+		color: var(--color-faint);
+		cursor: default;
+		opacity: 0.45;
+	}
+
+	.move-session:not(:disabled):hover,
+	.move-session:not(:disabled):focus-visible {
+		background: var(--color-paper-3);
+		color: var(--color-ink);
+		outline: none;
 	}
 
 	.session.side .label {

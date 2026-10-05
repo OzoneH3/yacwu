@@ -1,4 +1,4 @@
-//// Read-only file browsing for the web UI.
+//// File browsing and text editing for the web UI.
 ////
 //// Both endpoints are scoped to a session's working directory: the router
 //// resolves the thread's cwd and every requested path is a relative path

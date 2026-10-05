@@ -248,6 +248,7 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 	await expect(page.locator('.session')).toHaveCount(sessionsBefore + 1);
+	const sessionAId = await page.locator('nav.sessions .session').first().getAttribute('data-id');
 
 	// Send a deterministic prompt and watch the streamed agent reply arrive.
 	await page
@@ -277,9 +278,15 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.session')).toHaveCount(sessionsBefore + 2);
 	await expect(page.locator('.item.agent')).toHaveCount(0);
+	const primarySessionRows = page.locator('nav.sessions > .session-row:not(.side-row)');
+	const orderBeforeMove = await primarySessionRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-session-row-id')));
+	await primarySessionRows.nth(1).locator('.move-session').first().click();
+	const orderAfterMove = await primarySessionRows.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-session-row-id')));
+	expect(orderAfterMove.slice(0, 2)).toEqual([orderBeforeMove[1], orderBeforeMove[0]]);
+	expect(await page.evaluate(() => JSON.parse(localStorage.getItem('yacwu-session-order') ?? '[]'))).toContain(orderBeforeMove[1]);
 
 	// Switch back to Session A — its transcript (with PONG) is restored.
-	await page.locator('.session').nth(1).click();
+	await page.locator(`.session[data-id="${sessionAId}"]`).click();
 	await expect(page.locator('.item.agent .body').last()).toContainText('PONG', {
 		timeout: 30_000
 	});
@@ -625,6 +632,24 @@ test('new session folder picker navigates into and selects directories', async (
 
 test('Git changes viewer filters and renders a responsive Monaco diff', async ({ page }) => {
 	const projectRoot = join(here, '..');
+	let savedBrowserFile = 'initial browser file\n';
+	await page.route('**/api/threads/*/files?*', async (route) => {
+		await route.fulfill({
+			json: {
+				root: projectRoot,
+				path: '',
+				entries: [{ name: 'editable.txt', kind: 'file', size: Buffer.byteLength(savedBrowserFile), symlink: false }]
+			}
+		});
+	});
+	await page.route('**/api/threads/*/file?*', async (route) => {
+		if (route.request().method() === 'PUT') {
+			savedBrowserFile = route.request().postDataJSON().content;
+			await route.fulfill({ json: { path: 'editable.txt' } });
+		} else {
+			await route.fulfill({ json: { path: 'editable.txt', size: Buffer.byteLength(savedBrowserFile), content: savedBrowserFile } });
+		}
+	});
 	const changes = [
 		{
 			path: 'src/routes/+layout.svelte',
@@ -718,6 +743,24 @@ test('Git changes viewer filters and renders a responsive Monaco diff', async ({
 	await expect(page.locator('.gv-files')).toBeVisible();
 	await page.getByRole('tab', { name: 'Files' }).click();
 	await expect(page.locator('.file-browser')).toBeVisible();
+	await page.locator('.fb-row.file').click();
+	const fallbackEditor = page.locator('.fb-plain-editor');
+	await expect.poll(async () =>
+		fallbackEditor.isVisible().then(async (fallbackVisible) =>
+			fallbackVisible || page.locator('.fb-editor .monaco-editor').isVisible()
+		)
+	).toBe(true);
+	if (await fallbackEditor.isVisible()) {
+		await fallbackEditor.fill('saved from the file browser\n');
+		await fallbackEditor.press('Control+s');
+	} else {
+		await page.locator('.fb-editor .monaco-editor').click();
+		await page.keyboard.press('Control+a');
+		await page.keyboard.type('saved from the file browser\n');
+		await page.keyboard.press('Control+s');
+	}
+	await expect(page.locator('.fb-save-status')).toHaveText('Saved');
+	expect(savedBrowserFile).toBe('saved from the file browser\n');
 	await page.getByRole('tab', { name: 'Changes' }).click();
 	await expect(page.locator('.git-viewer')).toBeVisible();
 });

@@ -9,7 +9,7 @@ import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process
-import gleam/http.{Get, Post}
+import gleam/http.{Get, Post, Put}
 import gleam/http/cookie
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
@@ -455,6 +455,10 @@ fn dispatch(
     ["api", "threads", id, "file"], Get -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       read_file(host, cx, req, id)
+    }
+    ["api", "threads", id, "file"], Put -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      write_text_file(host, cx, req, id)
     }
     ["api", "threads", id, "git", "changes"], Get -> {
       use host, cx <- with_codex(ctx, req, Some(id))
@@ -952,6 +956,53 @@ fn read_file(
           }
         }
       }
+  }
+}
+
+fn write_text_file(
+  host: String,
+  cx: Codex,
+  req: Request(Connection),
+  thread_id: String,
+) -> Response(ResponseData) {
+  case query_rel_path(req) {
+    Error(_) -> json_response(400, error_body("invalid path"))
+    Ok("") -> json_response(400, error_body("file path is required"))
+    Ok(rel) -> {
+      let content = jsonx.field_string(read_json_body(req), ["content"])
+      case content {
+        Error(_) -> json_response(400, error_body("file content is required"))
+        Ok(content) -> {
+          let bits = bit_array.from_string(content)
+          case bit_array.byte_size(bits) > files.max_file_bytes {
+            True ->
+              json_response(
+                413,
+                error_body("file is too large to save from the browser"),
+              )
+            False ->
+              case thread_root(cx, thread_id) {
+                Error(message) -> json_response(500, error_body(message))
+                Ok(root) ->
+                  case
+                    workspace.write_file(
+                      ws_for(host, cx),
+                      files.resolve(root, rel),
+                      bits,
+                    )
+                  {
+                    Error(message) -> json_response(500, error_body(message))
+                    Ok(_) ->
+                      json_response(
+                        200,
+                        json.object([#("path", json.string(rel))]),
+                      )
+                  }
+              }
+          }
+        }
+      }
+    }
   }
 }
 

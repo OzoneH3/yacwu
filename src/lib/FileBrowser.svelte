@@ -1,5 +1,5 @@
 <!--
-	Read-only file browser for the active session, rooted at the session's
+	File browser and editor for the active session, rooted at the session's
 	working directory. A lazy tree fetches one directory per expand; text
 	files render in a Monaco viewer that loads from the CDN on first use
 	($lib/monaco). Desktop shows tree and viewer side by side; narrow
@@ -58,6 +58,11 @@
 	let file = $state<FileState | null>(null);
 	let monacoLoading = $state(false);
 	let viewerError = $state<string | null>(null);
+	let editorText = $state('');
+	let savedContent = $state('');
+	let saveStatus = $state('');
+	let saveError = $state<string | null>(null);
+	let saving = $state(false);
 	let viewerEl = $state<HTMLDivElement | null>(null);
 	let closeEl = $state<HTMLButtonElement | null>(null);
 
@@ -82,6 +87,10 @@
 	function absolutePath(rel: string): string {
 		const base = root.replace(/[\\/]+$/, '');
 		return rel ? `${base}/${rel}` : base;
+	}
+
+	function editorIsDirty(): boolean {
+		return Boolean(file?.status === 'ready' && file.kind === 'text' && editorText !== savedContent);
 	}
 
 	async function loadDir(path: string, force = false) {
@@ -109,7 +118,10 @@
 	}
 
 	async function selectFile(path: string, line: number | null = null) {
+		if (editorIsDirty() && !window.confirm('Discard unsaved changes?')) return;
 		selectedPath = path;
+		saveStatus = '';
+		saveError = null;
 		targetLine = line;
 		const request = ++fileRequest;
 		if (IMAGE_RE.test(path)) {
@@ -127,14 +139,12 @@
 			if (data.binary) file = { status: 'ready', path, kind: 'binary', size: data.size ?? 0, content: '' };
 			else if (data.tooLarge)
 				file = { status: 'ready', path, kind: 'toolarge', size: data.size ?? 0, content: '' };
-			else
-				file = {
-					status: 'ready',
-					path,
-					kind: 'text',
-					size: data.size ?? 0,
-					content: String(data.content ?? '')
-				};
+			else {
+				const content = String(data.content ?? '');
+				file = { status: 'ready', path, kind: 'text', size: data.size ?? 0, content };
+				editorText = content;
+				savedContent = content;
+			}
 		} catch (error) {
 			if (request !== fileRequest) return;
 			file = {
@@ -146,8 +156,47 @@
 	}
 
 	function closeFile() {
+		if (editorIsDirty() && !window.confirm('Discard unsaved changes?')) return;
 		selectedPath = null;
 		file = null;
+	}
+
+	function requestClose() {
+		if (editorIsDirty() && !window.confirm('Discard unsaved changes?')) return;
+		onclose();
+	}
+
+	function switchToChanges() {
+		if (editorIsDirty() && !window.confirm('Discard unsaved changes?')) return;
+		onchanges();
+	}
+
+	async function saveFile() {
+		if (!selectedPath || !file || file.status !== 'ready' || file.kind !== 'text' || saving) return;
+		const content = typeof editor?.getValue === 'function' ? editor.getValue() : editorText;
+		saving = true;
+		saveStatus = '';
+		saveError = null;
+		try {
+			const res = await fetch(`/api/threads/${threadId}/file?path=${encodeURIComponent(selectedPath)}`, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ content })
+			});
+			const data = await res.json();
+			if (!res.ok) throw new Error(data.error ?? `failed to save file (${res.status})`);
+			savedContent = content;
+			editorText = content;
+			file = { ...file, content, size: new TextEncoder().encode(content).length };
+			saveStatus = 'Saved';
+			for (const path of Object.keys(dirs)) {
+				if (path === '' || expanded[path]) void loadDir(path, true);
+			}
+		} catch (error) {
+			saveError = error instanceof Error ? error.message : 'failed to save file';
+		} finally {
+			saving = false;
+		}
 	}
 
 	// Expand every ancestor of a transcript file-change path, then open it.
@@ -186,7 +235,7 @@
 			for (const path of Object.keys(dirs)) {
 				if (path === '' || expanded[path]) void loadDir(path, true);
 			}
-			if (selectedPath && !IMAGE_RE.test(selectedPath)) void selectFile(selectedPath);
+			if (selectedPath && !IMAGE_RE.test(selectedPath) && !editorIsDirty()) void selectFile(selectedPath);
 		});
 	});
 
@@ -222,8 +271,8 @@
 		}
 		if (!editor) {
 			editor = monacoRef.editor.create(el, {
-				readOnly: true,
-				domReadOnly: true,
+				readOnly: false,
+				domReadOnly: false,
 				theme: monacoTheme(theme),
 				automaticLayout: true,
 				minimap: { enabled: false },
@@ -238,12 +287,21 @@
 				fontFamily: "'JetBrains Mono Variable', ui-monospace, monospace",
 				padding: { top: 8, bottom: 8 }
 			});
+			editor.onDidChangeModelContent(() => {
+				editorText = editor?.getValue() ?? '';
+				saveStatus = '';
+				saveError = null;
+			});
 		}
 		const uri = monacoRef.Uri.file(`/${path}`);
 		const previous = model;
 		model = monacoRef.editor.getModel(uri) ?? monacoRef.editor.createModel(content, undefined, uri);
 		if (model.getValue() !== content) model.setValue(content);
 		editor.setModel(model);
+		savedContent = content;
+		editorText = content;
+		saveStatus = '';
+		saveError = null;
 		if (previous && previous !== model) previous.dispose();
 
 		// Jump to a requested line (path:123 links), marking it quietly.
@@ -268,9 +326,14 @@
 	});
 
 	function onWindowKeydown(e: KeyboardEvent) {
+		if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && e.target instanceof HTMLElement && e.target.closest('.fb-view')) {
+			e.preventDefault();
+			void saveFile();
+			return;
+		}
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			onclose();
+			requestClose();
 		}
 	}
 </script>
@@ -333,7 +396,7 @@
 	<header class="fb-header">
 		<div class="fb-tabs" role="tablist" aria-label="Workspace inspector">
 			<button type="button" role="tab" aria-selected="true">Files</button>
-			<button type="button" role="tab" aria-selected="false" onclick={onchanges}>Changes</button>
+			<button type="button" role="tab" aria-selected="false" onclick={switchToChanges}>Changes</button>
 		</div>
 		<span class="fb-root" title={root}>{root}</span>
 		<button
@@ -355,7 +418,7 @@
 			type="button"
 			class="fb-icon"
 			bind:this={closeEl}
-			onclick={onclose}
+			onclick={requestClose}
 			aria-label="Close file browser"
 			title="Close file browser"
 		>
@@ -378,6 +441,10 @@
 					{#if file.status === 'ready' && file.kind !== 'image'}
 						<span class="fb-view-size">{fmtBytes(file.size)}</span>
 					{/if}
+					{#if file.status === 'ready' && file.kind === 'text'}
+						<span class="fb-save-status" class:error={Boolean(saveError)} role="status">{saving ? 'Saving…' : saveError ?? (editorIsDirty() ? 'Unsaved' : saveStatus)}</span>
+						<button type="button" class="fb-save" onclick={saveFile} disabled={!editorIsDirty() || saving}>Save</button>
+					{/if}
 				</div>
 				{#if file.status === 'loading'}
 					<div class="fb-placeholder">loading…</div>
@@ -398,7 +465,7 @@
 					</div>
 				{:else if viewerError}
 					<div class="fb-placeholder err">{viewerError}</div>
-					<pre class="fb-plain">{file.content}</pre>
+					<textarea class="fb-plain-editor" aria-label={`Edit ${file.path}`} bind:value={editorText} spellcheck="false"></textarea>
 				{:else if monacoLoading}
 					<div class="fb-placeholder">Loading code viewer…</div>
 				{/if}
@@ -662,6 +729,34 @@
 		white-space: nowrap;
 	}
 
+	.fb-save-status {
+		color: var(--color-muted);
+		font-size: var(--text-xs);
+		white-space: nowrap;
+	}
+
+	.fb-save-status.error { color: var(--color-error); }
+
+	.fb-save {
+		min-height: var(--control-height-compact);
+		padding-inline: var(--space-xs);
+		border: var(--rule-hair) solid var(--color-rule);
+		border-radius: var(--radius-sm);
+		background: var(--color-paper-2);
+		color: var(--color-ink);
+		cursor: pointer;
+		font: inherit;
+		font-size: var(--text-xs);
+	}
+
+	.fb-save:disabled {
+		color: var(--color-muted);
+		cursor: default;
+		opacity: 0.6;
+	}
+
+	.fb-save:not(:disabled):hover { background: var(--color-accent-soft); }
+
 	.fb-placeholder {
 		padding: var(--space-lg) var(--space-sm);
 		color: var(--color-muted);
@@ -687,14 +782,21 @@
 		background: var(--color-accent-soft);
 	}
 
-	.fb-plain {
+	.fb-plain-editor {
 		flex: 1;
+		width: 100%;
+		min-height: 0;
 		margin: 0;
 		padding: var(--space-xs) var(--space-sm);
 		overflow: auto;
+		border: 0;
+		outline: 0;
+		background: var(--color-paper);
+		color: var(--color-ink);
 		font-family: var(--font-outlier);
 		font-size: var(--text-sm);
 		white-space: pre;
+		resize: none;
 	}
 
 	.fb-image {
