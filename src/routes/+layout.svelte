@@ -420,7 +420,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	    stream (claude-codex keeps it on the turn record only), so the sent
 	    message would otherwise never appear until a reload. */
 	function addLocalUserMessage(id: string, text: string): string {
-		const shouldScroll = id === activeId && isTranscriptAtBottom();
 		const itemId = `local-user-${++localCounter}`;
 		upsertItem(
 			id,
@@ -428,7 +427,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			true
 		);
 		(pendingUserEchoes[id] ??= []).push({ id: itemId, text });
-		if (shouldScroll) scrollToBottom();
+		// Sending is an explicit request to follow the new turn, even if the
+		// transcript was scrolled up before sending a large block of text.
+		if (id === activeId) scrollToBottom();
 		return itemId;
 	}
 
