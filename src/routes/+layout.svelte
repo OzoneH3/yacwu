@@ -36,6 +36,7 @@
 	import { detectPromptKind, parseInteractiveChoice } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 	import { parseTaskProgress, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
+	import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 
 	let { children } = $props();
 
@@ -200,6 +201,7 @@
 	let filesOpen = $state(false);
 	let filesReveal = $state<{ path: string; line: number | null; nonce: number } | null>(null);
 	let fileChangeLineStats = $state<Record<string, { additions: number | null; deletions: number | null }>>({});
+	let fileChangeStatsRequest = 0;
 	let fileLinkPreview = $state<{ path: string; content: string } | null>(null);
 	let copiedFileLink = $state<string | null>(null);
 	let filesRefresh = $state(0);
@@ -3101,34 +3103,39 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function displayFileChangePath(ch: any): string {
 		const path = fileChangePath(ch);
 		const cwd = activeId ? (cwds[activeId] ?? activeSummary?.cwd) : null;
-		if (!cwd) return path;
-		const root = cwd.replace(/[\\/]+$/, '');
-		return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
+		return normalizeWorkspacePath(path, cwd ?? '');
 	}
 
 	async function refreshFileChangeLineStats(id: string) {
+		const request = ++fileChangeStatsRequest;
 		try {
 			const res = await fetch(threadApi(id, '/git/changes?scope=all'));
 			const data = await res.json();
 			if (!res.ok || !Array.isArray(data.files)) return;
-			fileChangeLineStats = Object.fromEntries(data.files.map((file: any) => [String(file.path), {
-				additions: typeof file.additions === 'number' ? file.additions : null,
-				deletions: typeof file.deletions === 'number' ? file.deletions : null
-			}]));
+			if (request !== fileChangeStatsRequest || id !== activeId) return;
+			const cwd = cwds[id] ?? sessions.find((session) => session.id === id)?.cwd ?? '';
+			fileChangeLineStats = indexFileLineStats(data.files, cwd);
 		} catch {
 			// Keep transcript rendering available if Git stats cannot be read.
 		}
 	}
 
 	function fileChangeStats(ch: any) {
-		return fileChangeLineStats[displayFileChangePath(ch)] ?? null;
+		const cwd = activeId ? (cwds[activeId] ?? activeSummary?.cwd ?? '') : '';
+		return lineStatsForPath(fileChangeLineStats, fileChangePath(ch), cwd);
 	}
 
 	$effect(() => {
 		const id = activeId;
 		filesRefresh;
-		if (id) untrack(() => void refreshFileChangeLineStats(id));
-		else fileChangeLineStats = {};
+		if (id) untrack(() => {
+			fileChangeLineStats = {};
+			void refreshFileChangeLineStats(id);
+		});
+		else {
+			fileChangeStatsRequest += 1;
+			fileChangeLineStats = {};
+		}
 	});
 
 	function displayCommand(command: unknown): string {
