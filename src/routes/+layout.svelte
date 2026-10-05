@@ -234,6 +234,8 @@
 	const FAST_SESSIONS_KEY = 'yacwu-fast-sessions';
 	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
+	const RESTART_CONTINUATION_PROMPT =
+		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
 	let runningTasks: Record<string, string> = {};
 	let archiveNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -249,6 +251,7 @@
 			.join(' ')
 			.replace(/\s+/g, ' ')
 			.trim())
+			.filter((prompt) => prompt !== RESTART_CONTINUATION_PROMPT)
 			.filter(Boolean)
 	);
 	const originalPrompt = $derived(userPrompts[0] ?? '');
@@ -2236,17 +2239,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function playInterruptedSession() {
 		const id = activeId;
 		if (!id || !interruptedSessions[id] || sendingMessage) return;
-		const continuation =
-			'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
 		sendingMessage = true;
 		try {
 			await openSession(id, false);
 			if (conflict?.id === id) return;
 			const thread = ensureThread(id);
 			thread.status = 'running';
-			const echoId = addLocalUserMessage(id, continuation);
+			const echoId = addLocalUserMessage(id, RESTART_CONTINUATION_PROMPT);
 			try {
-				const response = await sendMessageWithRetries(id, continuation, []);
+				const response = await sendMessageWithRetries(id, RESTART_CONTINUATION_PROMPT, []);
 				if (!response.ok) {
 					const data = await response.json().catch(() => ({}));
 					throw new Error(data.error ?? `Could not continue session (${response.status})`);
