@@ -464,21 +464,34 @@ consumption. Usage outside Yacwu can still affect shared allowance, so task
 costs remain empirical estimates. Static model value ratings are unchanged.
 
 The usage window includes a **Manual calibration benchmark** runner. Choose
-a model, supported thinking level, weekly percentage-point target (1–5),
-maximum turns (1–100), and maximum runtime (1–60 minutes). It creates a
-dedicated read-only session with text-only workloads, waits 60 seconds for its
-initial baseline and 90 seconds after each turn, and feeds those observations
-into the same analysis. The runtime limit includes these settling periods.
+a model, supported thinking level, weekly percentage-point target (2–5),
+maximum turns (1–100), and maximum runtime (3–60 minutes). It creates a
+dedicated read-only session with versioned text workloads covering explanations,
+specifications and scheduling analysis. It samples quota every 10 seconds while
+settling: at least 60 seconds for the baseline and 90 seconds after each turn,
+with 60 seconds of unchanged readings required. Changes restart the stability
+timer; a backwards reading must recover to the highest reading seen. Sampling
+stops after five minutes without stability. The runtime limit includes these
+settling periods. The controls show elapsed time, time until the runtime limit,
+completed turns and sampling status; turn-limit stops are labeled partial runs.
+The estimator also requires stable quota readings before learning token costs.
 Run each desired model/thinking combination separately; repeated runs may be
 needed for identifiable token weights and sufficient samples.
 
 Benchmarks consume allowance only after you explicitly start them. Pause other
-Yacwu work first: the runner refuses to start while tasks are active and stops
+Yacwu work first: a shared reservation permits only one benchmark across all
+hosts. The runner refuses to start while tasks are active and stops
 if other Yacwu work begins. It also stops at the observed target, turn/time
 limit, manual Stop, or quota reset. Targets are checked between turns, so the
 final turn can overshoot the requested allowance target. Closing the browser
 does not stop the backend runner; restarting the backend ends it and never
 restarts it automatically.
+
+Quota stability is provisional, not a guarantee that accounting has finished.
+Pause other use of the same account outside Yacwu as well; it cannot be detected
+reliably. Benchmark samples and final summaries are saved with usage telemetry.
+These runs measure allowance use, not model answer quality, and continuing the
+same session includes growing context and cache reuse in the measurements.
 
 ## License
 

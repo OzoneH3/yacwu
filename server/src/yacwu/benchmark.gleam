@@ -6,6 +6,7 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/result
+import yacwu/benchmark_settling
 import yacwu/codex.{type Codex}
 import yacwu/hosts
 import yacwu/jsonx
@@ -17,7 +18,26 @@ import yacwu/usage
 fn launch(host: String, worker: fn() -> Nil) -> Bool
 
 @external(erlang, "yacwu_benchmark", "update")
-fn update(host: String, status: String) -> Nil
+fn write_status(host: String, status: String) -> Nil
+
+// Retain run identity, settings and counts when changing phases.
+fn update(host: String, status: String) -> Nil {
+  let merged = case
+    json.parse(status_text(host), decode.dynamic),
+    json.parse(status, decode.dynamic)
+  {
+    Ok(previous), Ok(next) ->
+      jsonx.object_with(previous, [
+        #("updatedAt", json.int(oauth.now())),
+        ..list.map(jsonx.object_fields(next), fn(field) {
+          #(field.0, jsonx.to_json(field.1))
+        })
+      ])
+      |> json.to_string
+    _, _ -> status
+  }
+  write_status(host, merged)
+}
 
 @external(erlang, "yacwu_benchmark", "finish")
 fn finish(host: String, status: String) -> Nil
@@ -78,14 +98,17 @@ pub fn start(
   minutes: Int,
 ) -> Result(Nil, String) {
   case
-    target >= 1
+    target >= 2
     && target <= 5
     && max_turns >= 1
     && max_turns <= 100
-    && minutes >= 1
+    && minutes >= 3
     && minutes <= 60
   {
-    False -> Error("Choose a 1–5% target, 1–100 turns and 1–60 minutes")
+    False ->
+      Error(
+        "Choose a 2–5 percentage-point target, 1–100 turns and 3–60 minutes",
+      )
     True -> {
       use catalog <- result.try(model_state.list_model_choices(cx))
       case
@@ -127,12 +150,25 @@ pub fn start(
                           ])
                       }
                   }
+                  update(host, json.to_string(final))
+                  let final = case
+                    json.parse(status_text(host), decode.dynamic)
+                  {
+                    Ok(previous) ->
+                      jsonx.object_with(previous, [
+                        #("endedAt", json.int(oauth.now())),
+                      ])
+                    Error(_) -> final
+                  }
                   usage.record(host, "benchmarkFinished", [#("summary", final)])
                   finish(host, json.to_string(final))
                 })
               {
                 True -> Ok(Nil)
-                False -> Error("A benchmark is already running on this host")
+                False ->
+                  Error(
+                    "A benchmark is already running; only one may run across all hosts",
+                  )
               }
           }
       }
@@ -200,21 +236,38 @@ fn run(
         #("status", json.string("settling")),
         #("model", json.string(model)),
         #("effort", json.string(effort)),
+        #("startedAt", json.int(oauth.now())),
+        #("deadlineAt", json.int(deadline)),
+        #("phase", json.string("baseline")),
+        #("turns", json.int(0)),
+        #("targetPercent", json.int(target)),
+        #("workloadVersion", json.int(2)),
         #(
           "message",
-          json.string("Waiting 60 seconds for the baseline allowance to settle"),
+          json.string(
+            "Sampling the baseline until readings are stable for 60 seconds",
+          ),
         ),
       ]),
     ),
   )
-  use _ <- result.try(settle(registry, host, "", deadline, 60))
   let _ =
     codex.request(
       cx,
       "account/read",
       json.object([#("refreshToken", json.bool(False))]),
     )
-  use initial <- result.try(weekly(cx))
+  use first <- result.try(weekly(cx))
+  use initial <- result.try(sample_settle(
+    registry,
+    host,
+    cx,
+    "",
+    deadline,
+    first,
+    first.0,
+    60,
+  ))
   case initial.0 + target <= 100 {
     False -> Error("Not enough weekly allowance for the selected target")
     True -> {
@@ -251,6 +304,7 @@ fn run(
         #("threadId", json.string(thread)),
         #("model", json.string(model)),
         #("effort", json.string(effort)),
+        #("workloadVersion", json.int(2)),
       ])
       let subject = process.new_subject()
       codex.subscribe(cx, process.self(), subject)
@@ -262,6 +316,7 @@ fn run(
         thread,
         model,
         effort,
+        initial,
         initial,
         target,
         max_turns,
@@ -281,22 +336,27 @@ fn rounds(
   model: String,
   effort: String,
   initial: #(Int, Int),
+  current: #(Int, Int),
   target: Int,
   max_turns: Int,
   deadline: Int,
   completed: Int,
 ) -> Result(Json, String) {
   use _ <- result.try(check(registry, host, thread, deadline))
-  use current <- result.try(weekly(cx))
+  use _ <- result.try(case current.1 == initial.1 {
+    True -> Ok(Nil)
+    False -> Error("Weekly allowance reset; benchmark stopped")
+  })
   let used = current.0 - initial.0
   let done = used >= target || completed >= max_turns
   let details =
     json.object([
       #(
         "status",
-        json.string(case done {
-          True -> "completed"
-          False -> "running"
+        json.string(case used >= target, done {
+          True, _ -> "completed"
+          _, True -> "stopped"
+          _, _ -> "running"
         }),
       ),
       #("model", json.string(model)),
@@ -306,12 +366,23 @@ fn rounds(
       #("usedPercent", json.int(used)),
       #("targetPercent", json.int(target)),
       #(
+        "phase",
+        json.string(case done {
+          True -> "finished"
+          False -> "workload"
+        }),
+      ),
+      #("targetReached", json.bool(used >= target)),
+      #("baselineUsedPercent", json.int(initial.0)),
+      #("settled", json.bool(done)),
+      #(
         "message",
         json.string(case used >= target {
           True -> "Target reached"
           False ->
             case done {
-              True -> "Turn limit reached"
+              True ->
+                "Turn limit reached before target; partial calibration only"
               False -> "Generating benchmark workload"
             }
         }),
@@ -375,14 +446,26 @@ fn rounds(
                     #("turns", json.int(completed + 1)),
                     #("usedPercent", json.int(used)),
                     #("targetPercent", json.int(target)),
+                    #("phase", json.string("post-turn")),
                     #(
                       "message",
-                      json.string("Waiting 90 seconds for allowance readings"),
+                      json.string(
+                        "Sampling allowance after the turn until readings stabilize",
+                      ),
                     ),
                   ]),
                 ),
               )
-              use _ <- result.try(settle(registry, host, thread, deadline, 90))
+              use settled <- result.try(sample_settle(
+                registry,
+                host,
+                cx,
+                thread,
+                deadline,
+                initial,
+                current.0,
+                90,
+              ))
               rounds(
                 registry,
                 host,
@@ -392,6 +475,7 @@ fn rounds(
                 model,
                 effort,
                 initial,
+                settled,
                 target,
                 max_turns,
                 deadline,
@@ -437,6 +521,99 @@ fn wait_turn(
   }
 }
 
+fn sample_settle(
+  registry: hosts.Registry,
+  host: String,
+  cx: Codex,
+  thread: String,
+  deadline: Int,
+  reference: #(Int, Int),
+  previous_used: Int,
+  minimum: Int,
+) -> Result(#(Int, Int), String) {
+  use _ <- result.try(check(registry, host, thread, deadline))
+  use first <- result.try(weekly(cx))
+  case first.1 != reference.1 {
+    True -> Error("Weekly allowance reset; benchmark stopped")
+    False ->
+      sample_until_stable(
+        registry,
+        host,
+        cx,
+        thread,
+        deadline,
+        reference,
+        benchmark_settling.start(
+          oauth.now(),
+          int.max(first.0, previous_used),
+          first.1,
+        ),
+        minimum,
+      )
+  }
+}
+
+fn sample_until_stable(
+  registry: hosts.Registry,
+  host: String,
+  cx: Codex,
+  thread: String,
+  deadline: Int,
+  reference: #(Int, Int),
+  reading: benchmark_settling.Reading,
+  minimum: Int,
+) -> Result(#(Int, Int), String) {
+  use _ <- result.try(check(registry, host, thread, deadline))
+  use current <- result.try(weekly(cx))
+  let now = oauth.now()
+  use next <- result.try(benchmark_settling.observe(
+    reading,
+    now,
+    current.0,
+    current.1,
+  ))
+  let stable = benchmark_settling.ready(next, now, minimum)
+  let fields = [
+    #(
+      "usedPercent",
+      json.int(case thread {
+        "" -> 0
+        _ -> int.max(0, current.0 - reference.0)
+      }),
+    ),
+    #("sampledUsedPercent", json.int(current.0)),
+    #("sampledAt", json.int(now)),
+    #("settleElapsedSeconds", json.int(now - next.started)),
+    #("stableSeconds", json.int(now - next.changed)),
+    #("settled", json.bool(stable)),
+  ]
+  update(host, json.to_string(json.object(fields)))
+  usage.record(host, "benchmarkSample", [
+    #("threadId", json.string(thread)),
+    ..fields
+  ])
+  case stable, now - next.started >= 300 {
+    True, _ -> Ok(current)
+    _, True ->
+      Error(
+        "Allowance readings did not stabilize within 5 minutes; no further workload started",
+      )
+    _, _ -> {
+      use _ <- result.try(settle(registry, host, thread, deadline, 10))
+      sample_until_stable(
+        registry,
+        host,
+        cx,
+        thread,
+        deadline,
+        reference,
+        next,
+        minimum,
+      )
+    }
+  }
+}
+
 fn settle(
   registry: hosts.Registry,
   host: String,
@@ -462,10 +639,10 @@ fn workload(round: Int) -> String {
   common
   <> case round % 3 {
     0 ->
-      "Produce a self-contained 1800-word technical explanation of a fictional deterministic scheduling system. Include a worked example, invariants and tradeoffs; invent fresh task names and numbers."
+      "Produce a self-contained 1800-word technical explanation of a deterministic scheduling system. Use tasks A(duration 3), B(duration 5, depends on A), C(duration 2, depends on A), D(duration 4, depends on B and C), two workers, and alphabetical tie-breaking. Include a worked example, invariants and tradeoffs."
     1 ->
-      "Rework the preceding explanation into a 600-word specification and derive 30 detailed edge cases with expected outcomes. Explain the reasoning in text."
+      "Write a 600-word specification for a bounded FIFO job queue with capacity 8, two workers, at most two retries per job, and idempotent job identifiers. Derive 30 detailed edge cases with expected outcomes, covering cancellation, duplicate submissions, retries and shutdown. Explain the reasoning in text. This specification must stand on its own."
     _ ->
-      "Generate 50 distinct mathematical scheduling puzzles with fully worked short solutions. Keep the answer around 2200 words and avoid repeating the preceding cases."
+      "Analyze a scheduler with tasks A(duration 3), B(duration 5, depends on A), C(duration 2, depends on A), D(duration 4, depends on B and C). Derive completion times and invariants with one and two workers, alphabetical tie-breaking, and a single failure in each task. Provide worked timelines and pseudocode, then analyze complexity and 20 boundary cases in about 2200 words."
   }
 }

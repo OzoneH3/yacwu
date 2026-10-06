@@ -29,12 +29,13 @@ cancelled(Label) -> call({cancelled, Label}).
 loop(State) ->
     receive
         {From, Ref, {launch, Label, Fun}} ->
-            case maps:get(Label, State, {<<"{\"status\":\"idle\"}">>, false, false}) of
-                {_, _, true} -> From ! {Ref, false}, loop(State);
-                _ ->
+            Busy = maps:fold(fun(_, {_, _, true}, _) -> true; (_, _, Acc) -> Acc end, false, State),
+            case Busy of
+                true -> From ! {Ref, false}, loop(State);
+                false ->
                     {Pid, Monitor} = spawn_monitor(fun() -> Fun() end),
                     From ! {Ref, true},
-                    loop(State#{Label => {<<"{\"status\":\"starting\"}">>, false, true}, {monitor, Monitor} => {Label, Pid}})
+                    loop(State#{Label => {<<"{\"status\":\"starting\"}">>, false, true}, {monitor, Monitor} => {Label, Pid}, {owner, Label} => Pid})
             end;
         {From, Ref, {update, Label, Json, Running}} ->
             {_, Cancelled, _} = maps:get(Label, State, {<<>>, false, false}),
@@ -50,10 +51,11 @@ loop(State) ->
             From ! {Ref, Cancelled}, loop(State);
         {'DOWN', Monitor, process, _, _} ->
             case maps:take({monitor, Monitor}, State) of
-                {{Label, _}, Rest} ->
+                {{Label, Pid}, Rest} when map_get({owner, Label}, Rest) =:= Pid ->
                     {Json, Cancelled, Running} = maps:get(Label, Rest),
                     Final = case Running of true -> <<"{\"status\":\"failed\",\"message\":\"Benchmark worker ended unexpectedly\"}">>; false -> Json end,
                     loop(Rest#{Label => {Final, Cancelled, false}});
+                {_, Rest} -> loop(Rest);
                 error -> loop(State)
             end
     end.

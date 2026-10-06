@@ -83,6 +83,17 @@ test('matching account hosts share token evidence but use one quota source', () 
 	expect(result.tasks).toHaveLength(2);
 });
 
+test('a transient quota increase does not train costs before repeated readings stabilize', () => {
+	const history = [...setup('a', 'model-a'), quota(2, 10), tokens(3, 'a', 100),
+		event(4, 'turn/completed', { threadId: 'a', turnId: 'a' }),
+		quota(70_000, 12), quota(80_000, 11), quota(150_000, 11)];
+	expect(analyzeObservedUsage(history).observations).toBe(0);
+	expect(analyzeObservedUsage([...history, quota(160_000, 12), quota(219_000, 12)]).observations).toBe(0);
+	const settled = analyzeObservedUsage([...history, quota(160_000, 12), quota(220_000, 12)]);
+	expect(settled.observations).toBe(1);
+	expect(settled.rates[0].tokens).toBe(100);
+});
+
 test('other account hosts are excluded and a host restart does not stop another host task', () => {
 	const result = analyzeObservedUsage([
 		event(-1, 'account', { fingerprint: 'same' }), ...setup('local-task', 'model'), quota(2, 0),

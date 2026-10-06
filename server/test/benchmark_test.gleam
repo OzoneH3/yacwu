@@ -2,6 +2,7 @@ import gleam/erlang/process
 import gleam/json
 import gleeunit/should
 import yacwu/benchmark
+import yacwu/benchmark_settling
 
 @external(erlang, "yacwu_benchmark", "launch")
 fn launch(label: String, worker: fn() -> Nil) -> Bool
@@ -17,11 +18,15 @@ pub fn benchmark_limits_are_checked_before_any_codex_work_test() {
   let cx = process.new_name("unused_benchmark_codex")
   benchmark.start(registry, "test", cx, "model", "medium", 0, 12, 20)
   |> should.be_error
+  benchmark.start(registry, "test", cx, "model", "medium", 1, 12, 20)
+  |> should.be_error
   benchmark.start(registry, "test", cx, "model", "medium", 6, 12, 20)
   |> should.be_error
   benchmark.start(registry, "test", cx, "model", "medium", 2, 101, 20)
   |> should.be_error
   benchmark.start(registry, "test", cx, "model", "medium", 2, 12, 61)
+  |> should.be_error
+  benchmark.start(registry, "test", cx, "model", "medium", 2, 12, 2)
   |> should.be_error
 }
 
@@ -39,6 +44,7 @@ pub fn benchmark_reservation_and_manual_cancel_test() {
   |> should.be_true
   let assert Ok(release) = process.receive(ready, 1000)
   launch(label, fn() { Nil }) |> should.be_false
+  launch("different-host", fn() { Nil }) |> should.be_false
   benchmark.cancel(label)
   cancelled(label) |> should.be_true
   benchmark.status(label)
@@ -46,4 +52,17 @@ pub fn benchmark_reservation_and_manual_cancel_test() {
   |> should.equal("{\"status\":\"stopping\"}")
   process.send(release, Nil)
   process.receive(done, 5000) |> should.be_ok
+}
+
+pub fn delayed_and_backwards_quota_readings_must_settle_test() {
+  let first = benchmark_settling.start(0, 80, 1000)
+  benchmark_settling.ready(first, 60, 90) |> should.be_false
+  let assert Ok(rise) = benchmark_settling.observe(first, 85, 81, 1000)
+  benchmark_settling.ready(rise, 90, 90) |> should.be_false
+  let assert Ok(stale) = benchmark_settling.observe(rise, 100, 80, 1000)
+  benchmark_settling.ready(stale, 170, 90) |> should.be_false
+  let assert Ok(recovered) = benchmark_settling.observe(stale, 175, 81, 1000)
+  benchmark_settling.ready(recovered, 234, 90) |> should.be_false
+  benchmark_settling.ready(recovered, 235, 90) |> should.be_true
+  benchmark_settling.observe(recovered, 240, 0, 2000) |> should.be_error
 }

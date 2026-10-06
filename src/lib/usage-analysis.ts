@@ -95,6 +95,9 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 	let baseline: UsageEvent | null = null;
 	let intervalTokens: Record<string, TokenTotals> = {};
 	let lastTokenAt = -Infinity;
+	let quotaStableSince = 0;
+	let previousQuotaUsed: number | null = null;
+	let quotaPeak = 0;
 	let intervalIncomplete = false;
 	let excludedIntervals = 0;
 	// Stored file order disambiguates notifications in the same millisecond.
@@ -172,9 +175,15 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			if (calibrationScope && scope !== calibrationScope) observations.length = 0;
 			calibrationScope = scope;
 			const sameWindow = baseline && baseline.accountKey === event.accountKey && baseline.resetsAt === event.resetsAt && baseline.limitId === event.limitId && baseline.planType === event.planType;
+			if (!sameWindow) { quotaStableSince = event.at; quotaPeak = event.usedPercent; }
+			else {
+				if (previousQuotaUsed !== event.usedPercent) quotaStableSince = event.at;
+				quotaPeak = Math.max(quotaPeak, event.usedPercent);
+			}
+			previousQuotaUsed = event.usedPercent;
 			if (!sameWindow || event.usedPercent < (baseline?.usedPercent ?? 0)) {
 				baseline = event; intervalTokens = {}; intervalIncomplete = false;
-			} else if (baseline && event.usedPercent - (baseline.usedPercent ?? 0) >= 2 && event.at - lastTokenAt >= settleMs) {
+			} else if (baseline && event.usedPercent - (baseline.usedPercent ?? 0) >= 2 && event.at - lastTokenAt >= settleMs && event.at - quotaStableSince >= settleMs && event.usedPercent >= quotaPeak) {
 				// Pool across whole-percent rounding steps; unchanged readings don't imply free work.
 				if (!intervalIncomplete && Object.values(intervalTokens).some((tokens) => tokens.totalTokens > 0)) observations.push({ percent: event.usedPercent - (baseline.usedPercent ?? 0), tokens: intervalTokens });
 				else excludedIntervals++;
