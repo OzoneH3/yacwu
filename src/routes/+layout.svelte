@@ -423,9 +423,8 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	const viewedId = $derived(viewedAgentId ?? activeId);
 	const viewed = $derived(viewedId ? (threads[viewedId] ?? null) : null);
 	const viewedAgent = $derived(viewedAgentId ? (agents[viewedAgentId] ?? null) : null);
-	const activeTaskProgress = $derived.by(() => {
-		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
-		const items = itemsOf(active);
+	function taskProgressForSession(id: string) {
+		const items = itemsOf(threads[id] ?? null);
 		let latestUserIndex = -1;
 		for (let index = items.length - 1; index >= 0; index -= 1) {
 			if (items[index].type === 'userMessage') {
@@ -440,6 +439,10 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 			if (estimate) return estimate;
 		}
 		return null;
+	}
+	const activeTaskProgress = $derived.by(() => {
+		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
+		return taskProgressForSession(activeId);
 	});
 	// Slash-command autocomplete: offered while the composer holds a bare
 	// command token ("/…" with no whitespace or newline yet), mirroring the
@@ -4276,6 +4279,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{/if}
 		<nav class="sessions" data-loaded={sessionsLoaded}>
 			{#each topSessions as s (s.id)}
+				{@const sessionProgress = taskProgressForSession(s.id)}
 				<div
 					class="session-row"
 					data-session-row-id={s.id}
@@ -4285,9 +4289,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				>
 					<button
 						class="session-drag-handle"
+						class:has-progress={Boolean(sessionProgress)}
 						type="button"
-						aria-label={`Reorder ${shortLabel(s)}`}
-						title="Drag to reorder; use arrow keys to move"
+						aria-label={sessionProgress ? `Estimated ${sessionProgress.percent}% complete; reorder ${shortLabel(s)}` : `Reorder ${shortLabel(s)}`}
+						title={sessionProgress ? `Estimated ${sessionProgress.percent}% done · drag to reorder; use arrow keys to move` : 'Drag to reorder; use arrow keys to move'}
 						onpointerdown={(event) => startSessionDrag(event, s.id)}
 						onpointermove={moveSessionDrag}
 						onpointerup={finishSessionDrag}
@@ -4299,7 +4304,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							}
 						}}
 					>
-						<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3h1M10 3h1M5 8h1m4 0h1m-6 5h1m4 0h1" /></svg>
+						{#if sessionProgress}
+							<span class="session-progress-percent" aria-hidden="true">{sessionProgress.percent}%</span>
+						{:else}
+							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3h1M10 3h1M5 8h1m4 0h1m-6 5h1m4 0h1" /></svg>
+						{/if}
 					</button>
 					<a
 						class="session"
@@ -6039,6 +6048,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.session-drag-handle:active { cursor: grabbing; }
 	.session-drag-handle svg { width: 14px; height: 14px; fill: currentColor; }
+	.session-drag-handle.has-progress {
+		color: var(--color-accent-active);
+	}
+	.session-progress-percent {
+		font-family: var(--font-outlier);
+		font-size: 0.58rem;
+		font-weight: 700;
+		letter-spacing: -0.035em;
+		line-height: 1;
+		white-space: nowrap;
+	}
 
 	.session {
 		position: relative;
