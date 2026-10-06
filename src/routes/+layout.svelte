@@ -2642,6 +2642,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			syncThreadRuntime(id, thread);
 			if (thread.status?.type === 'idle' || thread.status?.type === 'notLoaded') {
 				reportDiagnostics(id, 'stop_succeeded');
+				addLocalNote(id, 'Task was already stopped.');
 				return;
 			}
 			const turnId = thread.turns?.findLast((turn: Turn) => turn.status === 'inProgress')?.id;
@@ -2657,6 +2658,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				throw new Error(error.error ?? `Stop failed (${response.status})`);
 			}
 			reportDiagnostics(id, 'stop_succeeded');
+			addLocalNote(id, 'Task stopped.');
 			// A new turn may have started while the cancellation was in flight.
 			const t = ensureThread(id);
 			if (t.turnId === turnId) {

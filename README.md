@@ -20,8 +20,9 @@ state lives entirely in Codex's own persistent sessions, read back via
   loaded, helping prevent two processes from modifying the same conversation
 - ⚡ Live streaming of assistant messages, reasoning, commands, plans, file
   changes, and current activity; send steering instructions while a turn runs,
-  or stop and resume it later. A quiet-turn monitor posts a notice after two
-  minutes without activity but never stops the worker
+  or stop and resume it later; manual stops are recorded in the transcript.
+  A quiet-turn monitor posts a notice after two minutes without activity but
+  never stops the worker
 - ⏱️ The Session bar keeps the current prompt visible, puts task progress and
   time-left estimates before the Session label, and shows 5-hour / 7-day usage
   on the right. Progress updates appear as their own transcript entries;
