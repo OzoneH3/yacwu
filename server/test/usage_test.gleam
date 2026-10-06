@@ -30,11 +30,23 @@ pub fn persists_usage_without_conversation_content_test() {
       decode.dynamic,
     )
   usage.response(label, "account/rateLimits/read", limits)
+  let assert Ok(account) =
+    json.parse(
+      "{\"account\":{\"type\":\"chatgpt\",\"email\":\"private@example.invalid\",\"planType\":\"pro\"}}",
+      decode.dynamic,
+    )
+  usage.response(label, "account/read", account)
   let saved = usage.history(label) |> json.to_string
   string.contains(saved, "private-prompt-must-not-be-recorded")
   |> should.be_false
   string.contains(saved, "cachedInputTokens") |> should.be_true
   string.contains(saved, "usedPercent") |> should.be_true
+  string.contains(saved, "private@example.invalid") |> should.be_false
+  string.contains(saved, "fingerprint") |> should.be_true
+  usage.shared_history(label)
+  |> json.to_string
+  |> string.contains("usage-unit-test")
+  |> should.be_true
   let path =
     json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
   simplifile.delete(path) |> should.be_ok

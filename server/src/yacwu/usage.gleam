@@ -20,6 +20,12 @@ fn read(label: String) -> String
 @external(erlang, "yacwu_usage", "path")
 fn path(label: String) -> String
 
+@external(erlang, "yacwu_usage", "read_all")
+fn read_all() -> String
+
+@external(erlang, "yacwu_usage", "fingerprint")
+fn fingerprint(value: String) -> String
+
 pub fn record(
   label: String,
   event: String,
@@ -65,6 +71,27 @@ pub fn request(label: String, method: String, params: Json) -> Nil {
 
 pub fn response(label: String, method: String, data: Dynamic) -> Nil {
   case method {
+    "account/read" -> {
+      let email =
+        jsonx.field_string(data, ["account", "email"]) |> result.unwrap("")
+      let id =
+        jsonx.field_string(data, ["account", "chatgptAccountId"])
+        |> result.unwrap(email)
+      let plan =
+        jsonx.field_string(data, ["account", "planType"]) |> result.unwrap("")
+      let kind =
+        jsonx.field_string(data, ["account", "type"]) |> result.unwrap("")
+      case id {
+        "" -> record(label, "account", [#("fingerprint", json.null())])
+        _ ->
+          record(label, "account", [
+            #(
+              "fingerprint",
+              json.string(fingerprint(id <> ":" <> kind <> ":" <> plan)),
+            ),
+          ])
+      }
+    }
     "account/rateLimits/read" -> quota(label, data)
     "thread/start" -> {
       metadata(label, data, ["thread"])
@@ -188,6 +215,20 @@ pub fn history(label: String) -> Json {
   json.object([
     #("host", json.string(label)),
     #("path", json.string(path(label))),
+    #("events", json.preprocessed_array(events)),
+  ])
+}
+
+/// Historical sources are included even when their remote connection is offline.
+pub fn shared_history(label: String) -> Json {
+  let events =
+    read_all()
+    |> string.split("\n")
+    |> list.filter_map(fn(line) {
+      json.parse(line, decode.dynamic) |> result.map(jsonx.to_json)
+    })
+  json.object([
+    #("host", json.string(label)),
     #("events", json.preprocessed_array(events)),
   ])
 }

@@ -633,7 +633,21 @@ fn sample_usage(state: State) -> State {
     dict.values(state.pending)
     |> list.any(fn(request) { request.method == "account/rateLimits/read" })
   case state.status, pending {
-    Running(conn), False ->
+    Running(conn), False -> {
+      let account_pending =
+        dict.values(state.pending)
+        |> list.any(fn(request) { request.method == "account/read" })
+      let state = case account_pending {
+        False ->
+          send_request(
+            state,
+            conn,
+            "account/read",
+            json.object([#("refreshToken", json.bool(False))]),
+            Discard,
+          )
+        True -> state
+      }
       send_request(
         state,
         conn,
@@ -641,6 +655,7 @@ fn sample_usage(state: State) -> State {
         json.object([]),
         Discard,
       )
+    }
     _, _ -> state
   }
 }

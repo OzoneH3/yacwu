@@ -1,3 +1,5 @@
+import { learnTokenCosts, type CostEstimate, type UsageObservation } from './usage-fit';
+
 /** Only usage metadata is stored: never prompts, answers or tool output. */
 export interface UsageEvent {
 	at: number;
@@ -14,6 +16,8 @@ export interface UsageEvent {
 	resetsAt?: number;
 	limitId?: string | null;
 	planType?: string | null;
+	fingerprint?: string | null;
+	accountKey?: string;
 }
 
 export interface TokenTotals {
@@ -25,6 +29,7 @@ export interface TokenTotals {
 }
 
 export interface UsageTask {
+	host: string;
 	threadId: string;
 	turnId: string;
 	model: string;
@@ -41,88 +46,66 @@ export interface UsageTask {
 	sharedAllowanceDelta: number | null;
 	estimatedWeeklyPercent: number | null;
 	quotaScope: string | null;
+	accountKey: string;
+	estimate: CostEstimate | null;
+	settling: boolean;
+	benchmark: boolean;
 }
 
-interface Observation { percent: number; tokens: Record<string, number> }
 export interface UsageRate {
 	model: string;
 	effort: string;
 	samples: number;
 	tokens: number;
 	percentPer100kTokens: number | null;
+	estimate: CostEstimate | null;
+	weights: Record<'uncached' | 'cached' | 'output', number | null>;
 }
 
 const emptyTokens = (): TokenTotals => ({ totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 });
 const groupKey = (model: string, effort: string) => JSON.stringify([model, effort]);
 
-/** Require independent evidence; a single mixture cannot identify each model's cost. */
-function fullRank(matrix: number[][], columns: number): boolean {
-	const a = matrix.map((row) => [...row]);
-	let rank = 0;
-	for (let column = 0; column < columns; column++) {
-		let pivot = rank;
-		for (let row = rank; row < a.length; row++) if (Math.abs(a[row][column]) > Math.abs(a[pivot]?.[column] ?? 0)) pivot = row;
-		if (!a[pivot] || Math.abs(a[pivot][column]) < 1e-6) continue;
-		[a[rank], a[pivot]] = [a[pivot], a[rank]];
-		const scale = a[rank][column];
-		for (let c = column; c < columns; c++) a[rank][c] /= scale;
-		for (let row = rank + 1; row < a.length; row++) {
-			const factor = a[row][column];
-			for (let c = column; c < columns; c++) a[row][c] -= factor * a[rank][c];
+/** Keep legacy host-only history, and combine known matching accounts without guessing identity. */
+function accountEvents(events: UsageEvent[], host: string) {
+	const accounts = new Map<string, string>();
+	const annotated = [...events].sort((a, b) => a.at - b.at).map((event) => {
+		if (event.event === 'account') {
+			if (event.fingerprint) accounts.set(event.host, event.fingerprint);
+			else accounts.delete(event.host);
 		}
-		rank++;
-	}
-	return rank === columns;
+		return { ...event, accountKey: accounts.get(event.host) ?? `unidentified:${event.host}` };
+	});
+	const selected = accounts.get(host) ?? `unidentified:${host}`;
+	return annotated.filter((event) => event.accountKey === selected || event.accountKey === `unidentified:${host}`);
 }
 
-/** Empirical nonnegative costs, fitted jointly when models run concurrently. */
-function fitRates(observations: Observation[], keys: string[]): Map<string, number> {
-	if (!keys.length || observations.length < Math.max(3, keys.length + 1)) return new Map();
-	if (keys.some((key) => observations.filter((sample) => (sample.tokens[key] ?? 0) > 0).length < 3)) return new Map();
-	const x = observations.map((sample) => keys.map((key) => (sample.tokens[key] ?? 0) / 100_000));
-	if (!fullRank(x, keys.length)) return new Map();
-	const beta = keys.map(() => 0);
-	const prediction = observations.map(() => 0);
-	for (let iteration = 0; iteration < 500; iteration++) {
-		let change = 0;
-		for (let column = 0; column < keys.length; column++) {
-			let numerator = 0, denominator = 1e-8;
-			for (let row = 0; row < x.length; row++) {
-				const feature = x[row][column];
-				numerator += feature * (observations[row].percent - prediction[row] + feature * beta[column]);
-				denominator += feature * feature;
-			}
-			const next = Math.max(0, numerator / denominator);
-			const delta = next - beta[column];
-			for (let row = 0; row < x.length; row++) prediction[row] += x[row][column] * delta;
-			beta[column] = next;
-			change = Math.max(change, Math.abs(delta));
-		}
-		if (change < 1e-8) break;
-	}
-	return new Map(keys.map((key, index) => [key, beta[index]]));
-}
-
-export function analyzeUsage(events: UsageEvent[]) {
+export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; settleMs?: number } = {}) {
+	const host = options.host ?? 'local';
+	const settleMs = options.settleMs ?? 60_000;
+	const events = accountEvents(rawEvents, host);
 	const tasks: UsageTask[] = [];
 	const tasksByTurn = new Map<string, UsageTask>();
 	const active = new Map<string, UsageTask>();
 	const settings = new Map<string, { model: string; effort: string; parent: string | null }>();
 	const totals = new Map<string, TokenTotals>();
 	const quotas: UsageEvent[] = [];
-	const observations: Observation[] = [];
+	const observations: UsageObservation[] = [];
+	const benchmarks = new Set<string>();
 	let calibrationScope: string | null = null;
 	let baseline: UsageEvent | null = null;
-	let intervalTokens: Record<string, number> = {};
+	let intervalTokens: Record<string, TokenTotals> = {};
+	let lastTokenAt = -Infinity;
 	let intervalIncomplete = false;
 	let excludedIntervals = 0;
 	// Stored file order disambiguates notifications in the same millisecond.
 	for (const event of events) {
 		if (!Number.isFinite(event.at)) continue;
-		const id = event.threadId;
+		const id = event.threadId ? `${event.host}:${event.threadId}` : undefined;
+		if (event.event === 'benchmark' && id) benchmarks.add(id);
 		if (event.event === 'collectorStarted' || event.event === 'connectionLost') {
-			for (const task of active.values()) { task.endedAt = event.at; task.status = 'tracking gap'; task.partialTokens = true; }
-			active.clear(); totals.clear(); baseline = null; intervalTokens = {}; intervalIncomplete = false;
+			for (const [key, task] of active) if (task.host === event.host) { task.endedAt = event.at; task.status = 'tracking gap'; task.partialTokens = true; active.delete(key); }
+			for (const key of totals.keys()) if (key.startsWith(`${event.host}:`)) totals.delete(key);
+			baseline = null; intervalTokens = {}; intervalIncomplete = false;
 		} else if ((event.event === 'settings' || event.event === 'metadata') && id) {
 			const previous = settings.get(id);
 			settings.set(id, { model: event.model || previous?.model || 'Unknown', effort: event.effort || previous?.effort || 'Unknown', parent: event.parentThreadId || previous?.parent || null });
@@ -140,9 +123,10 @@ export function analyzeUsage(events: UsageEvent[]) {
 			if (previous) { previous.endedAt = event.at; previous.status = 'interrupted'; previous.partialTokens = true; }
 			const config = settings.get(id);
 			const task: UsageTask = {
-				threadId: id, turnId: event.turnId, model: config?.model ?? 'Unknown', effort: config?.effort ?? 'Unknown', parentThreadId: config?.parent ?? null,
+				host: event.host, threadId: event.threadId!, turnId: event.turnId, model: config?.model ?? 'Unknown', effort: config?.effort ?? 'Unknown', parentThreadId: config?.parent ?? null,
 				startedAt: event.at, endedAt: null, status: 'running', tokens: emptyTokens(), partialTokens: !totals.has(id), overlapping: active.size > 0,
-				weeklyLeftBefore: null, weeklyLeftAfter: null, sharedAllowanceDelta: null, estimatedWeeklyPercent: null, quotaScope: calibrationScope
+				weeklyLeftBefore: null, weeklyLeftAfter: null, sharedAllowanceDelta: null, estimatedWeeklyPercent: null, quotaScope: calibrationScope,
+				accountKey: event.accountKey!, estimate: null, settling: false, benchmark: benchmarks.has(id)
 			};
 			for (const other of active.values()) other.overlapping = true;
 			active.set(id, task); tasks.push(task);
@@ -163,10 +147,16 @@ export function analyzeUsage(events: UsageEvent[]) {
 				continue;
 			}
 			const delta = next.totalTokens - previous.totalTokens;
+			const deltaTokens = emptyTokens();
+			for (const field of Object.keys(next) as (keyof TokenTotals)[]) deltaTokens[field] = Math.max(0, next[field] - previous[field]);
+			if (delta > 0) lastTokenAt = event.at;
 			if (validTurn) for (const field of Object.keys(next) as (keyof TokenTotals)[]) task.tokens[field] += Math.max(0, next[field] - previous[field]);
 			if (baseline && delta > 0) {
 				if (!validTurn || task.model === 'Unknown' || task.effort === 'Unknown') intervalIncomplete = true;
-				else { const key = groupKey(task.model, task.effort); intervalTokens[key] = (intervalTokens[key] ?? 0) + delta; }
+				else {
+					const key = groupKey(task.model, task.effort), bucket = intervalTokens[key] ??= emptyTokens();
+					for (const field of Object.keys(bucket) as (keyof TokenTotals)[]) bucket[field] += deltaTokens[field];
+				}
 			}
 		} else if (event.event === 'turn/completed' && id) {
 			const task = active.get(id);
@@ -174,38 +164,48 @@ export function analyzeUsage(events: UsageEvent[]) {
 				task.endedAt = event.at; task.status = event.status ?? 'completed'; active.delete(id);
 			}
 		} else if (event.event === 'quota' && typeof event.usedPercent === 'number' && event.usedPercent >= 0 && event.usedPercent <= 100 && typeof event.resetsAt === 'number') {
+			// One quota source per account; merging duplicate host readings would double-charge or introduce stale decreases.
+			if (event.host !== host) continue;
 			quotas.push(event);
-			const scope = JSON.stringify([event.limitId ?? 'codex', event.planType ?? null]);
+			const scope = JSON.stringify([event.accountKey, event.limitId ?? 'codex', event.planType ?? null]);
 			for (const task of active.values()) if (!task.quotaScope) task.quotaScope = scope;
 			if (calibrationScope && scope !== calibrationScope) observations.length = 0;
 			calibrationScope = scope;
-			const sameWindow = baseline && baseline.resetsAt === event.resetsAt && baseline.limitId === event.limitId && baseline.planType === event.planType;
+			const sameWindow = baseline && baseline.accountKey === event.accountKey && baseline.resetsAt === event.resetsAt && baseline.limitId === event.limitId && baseline.planType === event.planType;
 			if (!sameWindow || event.usedPercent < (baseline?.usedPercent ?? 0)) {
 				baseline = event; intervalTokens = {}; intervalIncomplete = false;
-			} else if (baseline && event.usedPercent - (baseline.usedPercent ?? 0) >= 2) {
+			} else if (baseline && event.usedPercent - (baseline.usedPercent ?? 0) >= 2 && event.at - lastTokenAt >= settleMs) {
 				// Pool across whole-percent rounding steps; unchanged readings don't imply free work.
-				if (!intervalIncomplete && Object.values(intervalTokens).some((tokens) => tokens > 0)) observations.push({ percent: event.usedPercent - (baseline.usedPercent ?? 0), tokens: intervalTokens });
+				if (!intervalIncomplete && Object.values(intervalTokens).some((tokens) => tokens.totalTokens > 0)) observations.push({ percent: event.usedPercent - (baseline.usedPercent ?? 0), tokens: intervalTokens });
 				else excludedIntervals++;
 				baseline = event; intervalTokens = {}; intervalIncomplete = false;
 			}
 		}
 	}
-	const keys = [...new Set(observations.flatMap((sample) => Object.keys(sample.tokens)))];
-	const learned = fitRates(observations, keys);
+	const learned = learnTokenCosts(observations);
 	const groups = [...new Set(tasks.map((task) => groupKey(task.model, task.effort)))];
 	const rates: UsageRate[] = groups.map((key) => {
 		const [model, effort] = JSON.parse(key);
-		const samples = observations.filter((sample) => (sample.tokens[key] ?? 0) > 0);
-		return { model, effort, samples: samples.length, tokens: samples.reduce((total, sample) => total + (sample.tokens[key] ?? 0), 0), percentPer100kTokens: learned.get(key) ?? null };
+		const samples = observations.filter((sample) => (sample.tokens[key]?.totalTokens ?? 0) > 0);
+		const total = emptyTokens();
+		for (const sample of samples) for (const field of Object.keys(total) as (keyof TokenTotals)[]) total[field] += sample.tokens[key][field];
+		const normalized = { ...total };
+		for (const field of Object.keys(total) as (keyof TokenTotals)[]) normalized[field] = total.totalTokens ? total[field] / total.totalTokens * 100_000 : 0;
+		const estimate = learned.estimate(key, normalized);
+		return { model, effort, samples: samples.length, tokens: total.totalTokens, percentPer100kTokens: estimate?.value ?? null, estimate, weights: learned.weights(key) };
 	});
 	for (const task of tasks) {
-		const before = quotas.findLast((quota) => quota.at <= task.startedAt && task.startedAt - quota.at <= 90_000);
-		const after = task.endedAt ? quotas.find((quota) => quota.at >= task.endedAt! && quota.at - task.endedAt! <= 90_000) : quotas.findLast((quota) => quota.at >= task.startedAt);
+		const accountQuotas = quotas.filter((quota) => quota.accountKey === task.accountKey);
+		const before = accountQuotas.findLast((quota) => quota.at <= task.startedAt && task.startedAt - quota.at <= 90_000);
+		const after = task.endedAt ? accountQuotas.findLast((quota) => quota.at >= task.endedAt! + settleMs && quota.at - task.endedAt! <= Math.max(180_000, settleMs)) : accountQuotas.findLast((quota) => quota.at >= task.startedAt);
+		task.settling = task.endedAt !== null && !after && (accountQuotas.at(-1)?.at ?? 0) < task.endedAt + settleMs;
 		task.weeklyLeftBefore = before ? 100 - before.usedPercent! : null;
 		task.weeklyLeftAfter = after ? 100 - after.usedPercent! : null;
 		if (before && after && before.resetsAt === after.resetsAt && before.limitId === after.limitId && before.planType === after.planType && after.usedPercent! >= before.usedPercent!) task.sharedAllowanceDelta = after.usedPercent! - before.usedPercent!;
-		const rate = learned.get(groupKey(task.model, task.effort));
-		if (rate !== undefined && task.quotaScope === calibrationScope && !task.partialTokens && task.tokens.totalTokens > 0) task.estimatedWeeklyPercent = rate * task.tokens.totalTokens / 100_000;
+		if (task.quotaScope === calibrationScope && !task.partialTokens && task.tokens.totalTokens > 0) {
+			task.estimate = learned.estimate(groupKey(task.model, task.effort), task.tokens);
+			task.estimatedWeeklyPercent = task.estimate?.value ?? null;
+		}
 	}
-	return { tasks: tasks.reverse(), rates, observations: observations.length, excludedIntervals, calibrated: learned.size > 0 };
+	return { tasks: tasks.reverse(), rates, observations: observations.length, excludedIntervals, calibrated: learned.calibrated, hosts: [...new Set(events.map((event) => event.host))] };
 }

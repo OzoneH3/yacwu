@@ -46,7 +46,9 @@ state lives entirely in Codex's own persistent sessions, read back via
   details to inspect recorded model, thinking level, cumulative token deltas,
   elapsed time, and weekly allowance readings. Backend recording continues
   with the browser closed; pooled observations learn estimated weekly cost
-  per model/thinking level, including overlapping turns
+  per model/thinking level, including overlapping turns. Separate token weights,
+  indicative uncertainty ranges, and matching-account hosts improve estimates;
+  manual benchmarks provide bounded calibration workloads
 - 💬 Interactive answers: direct questions and questions with listed options
   open a prompt dialog; answer or dismiss each to advance through the session's
   question queue, including questions from its agents
@@ -431,16 +433,43 @@ Token counts use differences in cumulative usage, including cached input,
 rather than the context-size counter. Existing turns without a known token
 baseline, or turns interrupted by a recording gap, are marked partial.
 
-Calibration pools readings until at least two percentage points are consumed,
-then fits nonnegative costs by model and thinking level from the token deltas.
-It requires several independent observations before producing an estimate;
-quota resets, incomplete intervals, and allowance changes without tracked
-tokens do not train the model. Changes in quota bucket or plan restart
-calibration. Elapsed time is recorded for comparison; waiting on a tool does
-not imply token consumption. Shared allowance can also be consumed by other
-apps or hosts, and whole-percent readings can arrive late, so these estimates
-are empirical approximations rather than exact per-task charges. Static model
-value ratings are unchanged by this calibration.
+Calibration pools readings until at least two percentage points are consumed
+and token activity has been quiet for 60 seconds. Post-task readings allow a
+settling period for delayed quota updates. It learns nonnegative weights for
+uncached input, cached input, and output when independently identifiable;
+reasoning is counted within output once. Insufficient or indistinguishable
+token breakdowns use a labeled total-token fallback. Multiple independent
+observations are required. Whole-percent differences are treated as ranges
+(up to one percentage point either side), and displayed uncertainty combines
+rounding and fit variation. The ranges are indicative, not guaranteed bounds.
+
+Hosts with matching hashed account fingerprints share token evidence, using
+the selected host as the single quota source to avoid double-counting readings.
+An account ID is preferred when exposed; otherwise the fingerprint uses email,
+account type, and plan. Raw email addresses are not stored. Unidentified hosts
+remain separate; legacy host-only history remains available. Account, quota
+bucket and plan changes keep calibration separate. Quota resets, recording
+gaps and allowance changes without tracked tokens do not train the model.
+Elapsed time is recorded for comparison; waiting on a tool does not imply token
+consumption. Usage outside Yacwu can still affect shared allowance, so task
+costs remain empirical estimates. Static model value ratings are unchanged.
+
+The usage window includes a **Manual calibration benchmark** runner. Choose
+a model, supported thinking level, weekly percentage-point target (1–5),
+maximum turns (1–100), and maximum runtime (1–60 minutes). It creates a
+dedicated read-only session with text-only workloads, waits 60 seconds for its
+initial baseline and 90 seconds after each turn, and feeds those observations
+into the same analysis. The runtime limit includes these settling periods.
+Run each desired model/thinking combination separately; repeated runs may be
+needed for identifiable token weights and sufficient samples.
+
+Benchmarks consume allowance only after you explicitly start them. Pause other
+Yacwu work first: the runner refuses to start while tasks are active and stops
+if other Yacwu work begins. It also stops at the observed target, turn/time
+limit, manual Stop, or quota reset. Targets are checked between turns, so the
+final turn can overshoot the requested allowance target. Closing the browser
+does not stop the backend runner; restarting the backend ends it and never
+restarts it automatically.
 
 ## License
 

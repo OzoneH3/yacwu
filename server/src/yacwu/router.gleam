@@ -27,6 +27,7 @@ import mist.{type Connection, type ResponseData}
 import simplifile
 import yacwu/auth
 import yacwu/backends
+import yacwu/benchmark
 import yacwu/codex.{type Codex}
 import yacwu/defaults
 import yacwu/diagnostics
@@ -441,7 +442,35 @@ fn dispatch(
     }
     ["api", "usage"], Get -> {
       use host, _ <- with_codex(ctx, req, None)
-      json_response(200, usage.history(host))
+      json_response(200, usage.shared_history(host))
+    }
+    ["api", "usage", "benchmark"], Get -> {
+      use host, _ <- with_codex(ctx, req, None)
+      json_response(200, benchmark.status(host))
+    }
+    ["api", "usage", "benchmark"], Post -> {
+      use host, cx <- with_codex(ctx, req, None)
+      let body = read_json_body(req)
+      case
+        benchmark.start(
+          ctx.registry,
+          host,
+          cx,
+          jsonx.field_string(body, ["model"]) |> result.unwrap(""),
+          jsonx.field_string(body, ["effort"]) |> result.unwrap(""),
+          jsonx.field_int(body, ["targetPercent"]) |> result.unwrap(2),
+          jsonx.field_int(body, ["maxTurns"]) |> result.unwrap(12),
+          jsonx.field_int(body, ["minutes"]) |> result.unwrap(20),
+        )
+      {
+        Ok(_) -> json_response(202, benchmark.status(host))
+        Error(message) -> json_response(400, error_body(message))
+      }
+    }
+    ["api", "usage", "benchmark", "stop"], Post -> {
+      use host, _ <- with_codex(ctx, req, None)
+      benchmark.cancel(host)
+      json_response(200, benchmark.status(host))
     }
     ["api", "threads"], Get -> list_threads(ctx, req)
     ["api", "threads"], Post -> create_thread(ctx, req)

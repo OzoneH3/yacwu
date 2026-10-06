@@ -1,8 +1,10 @@
 -module(yacwu_usage).
--export([path/1, append/2, read/1, now/0]).
+-export([path/1, append/2, read/1, read_all/0, fingerprint/1, now/0]).
 -include_lib("kernel/include/file.hrl").
 
 now() -> erlang:system_time(millisecond).
+
+fingerprint(Value) -> binary:encode_hex(crypto:hash(sha256, Value)).
 
 path(Label) ->
     State = os:getenv("XDG_STATE_HOME", filename:join(os:getenv("HOME", "/tmp"), ".local/state")),
@@ -31,3 +33,14 @@ read(Label) ->
     Path = path(Label),
     Read = fun(P) -> case file:read_file(P) of {ok, Bytes} -> Bytes; _ -> <<>> end end,
     <<(Read(<<Path/binary, ".1">>))/binary, (Read(Path))/binary>>.
+
+read_all() ->
+    Dir = filename:dirname(path(<<"local">>)),
+    case file:list_dir(Dir) of
+        {ok, Names} ->
+            Read = fun(P) -> case file:read_file(P) of {ok, Bytes} -> <<Bytes/binary, "\n">>; _ -> <<>> end end,
+            Parts = [[Read(filename:join(Dir, unicode:characters_to_binary([Name, ".1"]))), Read(filename:join(Dir, Name))]
+                     || Name <- lists:sort(Names), re:run(Name, "^usage-[0-9]+\\.jsonl$", [{capture, none}]) =:= match],
+            iolist_to_binary(Parts);
+        _ -> <<>>
+    end.

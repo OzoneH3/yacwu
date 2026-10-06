@@ -2,13 +2,15 @@
 	import { onMount } from 'svelte';
 	import { hostQuery } from './protocol';
 	import { analyzeUsage, type UsageEvent } from './usage-analysis';
-	let { host, sessionId, onclose }: { host: string; sessionId: string; onclose: () => void } = $props();
+	import BenchmarkControls from './BenchmarkControls.svelte';
+	import type { CostEstimate } from './usage-fit';
+	let { host, sessionId, models, selectedModel, selectedEffort, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; selectedModel?: string; selectedEffort?: string; onclose: () => void } = $props();
 	let dialog = $state<HTMLDialogElement>();
 	let events = $state<UsageEvent[]>([]);
 	let loading = $state(false);
 	let error = $state('');
 	let onlySession = $state(true);
-	const analysis = $derived(analyzeUsage(events));
+	const analysis = $derived(analyzeUsage(events, { host }));
 	const sessionThreads = $derived.by(() => {
 		const ids = new Set([sessionId]);
 		let changed = true;
@@ -18,8 +20,9 @@
 		}
 		return ids;
 	});
-	const tasks = $derived(analysis.tasks.filter((task) => !onlySession || sessionThreads.has(task.threadId)).slice(0, 100));
-	const percent = (value: number | null) => value === null ? '—' : `~${value.toFixed(2)}%`;
+	const tasks = $derived(analysis.tasks.filter((task) => !onlySession || (task.host === host && sessionThreads.has(task.threadId))).slice(0, 100));
+	const percent = (value: number | null) => value === null ? '—' : `~${value.toFixed(value > 0 && value < .01 ? 3 : 2)}%`;
+	const range = (estimate: CostEstimate | null) => estimate ? `${percent(estimate.value)} (${estimate.low.toFixed(3)}–${estimate.high.toFixed(3)}%)` : 'Learning…';
 	const tokens = (value: number) => value.toLocaleString();
 	function duration(start: number, end: number | null) {
 		const seconds = Math.max(0, Math.round(((end ?? Date.now()) - start) / 1000));
@@ -45,17 +48,18 @@
 			<button type="button" onclick={refresh} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
 			<button type="button" onclick={onclose} aria-label="Close usage history">×</button>
 		</header>
-		<p>Estimates learn from tokens and weekly allowance readings on {host === 'local' ? 'this machine' : host}. Account usage also includes other apps and hosts.</p>
+		<p>Estimates use token usage from hosts with matching account fingerprints: {analysis.hosts.join(', ')}. Weekly readings come from {host}. Usage outside Yacwu can still affect the allowance.</p>
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
+		<BenchmarkControls {host} {models} {selectedModel} {selectedEffort} oncomplete={() => void refresh()} />
 		<h3>Model and thinking level</h3>
-		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded. Readings are pooled across at least 2% used.</p>
+		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded. Intervals close after at least 2% used and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
 		<div class="table-wrap">
 			<table>
-				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>Weekly cost / 100k tokens</th></tr></thead>
+				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>Weekly cost / 100k (observed mix)</th><th>Uncached / cached / output per 100k</th></tr></thead>
 				<tbody>
 					{#each analysis.rates as rate}
-						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}</td><td>{tokens(rate.tokens)}</td><td>{rate.percentPer100kTokens === null ? 'Learning…' : percent(rate.percentPer100kTokens)}</td></tr>
-					{:else}<tr><td colspan="5">No tasks recorded yet. Recording begins after the updated backend starts.</td></tr>{/each}
+						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}</td><td>{tokens(rate.tokens)}</td><td>{range(rate.estimate)}{#if rate.estimate}<small>{rate.estimate.weighted ? 'Separate token weights' : 'Total-token fallback'}</small>{/if}</td><td>{percent(rate.weights.uncached)} / {percent(rate.weights.cached)} / {percent(rate.weights.output)}</td></tr>
+					{:else}<tr><td colspan="6">No tasks recorded yet. Recording begins after the updated backend starts.</td></tr>{/each}
 				</tbody>
 			</table>
 		</div>
@@ -67,19 +71,19 @@
 				<tbody>
 					{#each tasks as task}
 						<tr>
-							<td>{new Date(task.startedAt).toLocaleString()}<small>{task.status}{task.parentThreadId ? ' · agent' : ''}{task.overlapping ? ' · overlapping' : ''}</small></td>
+							<td>{new Date(task.startedAt).toLocaleString()}<small>{task.host} · {task.status}{task.benchmark ? ' · benchmark' : ''}{task.parentThreadId ? ' · agent' : ''}{task.overlapping ? ' · overlapping' : ''}{task.settling ? ' · settling' : ''}</small></td>
 							<td>{task.model}<small>{task.effort}</small></td>
 							<td title={`Input ${tokens(task.tokens.inputTokens)}, cached ${tokens(task.tokens.cachedInputTokens)}, output ${tokens(task.tokens.outputTokens)}, reasoning ${tokens(task.tokens.reasoningOutputTokens)}`}>{tokens(task.tokens.totalTokens)}{task.partialTokens ? ' (partial)' : ''}</td>
 							<td>{duration(task.startedAt, task.endedAt)}</td>
 							<td>{task.weeklyLeftBefore ?? '—'}% → {task.weeklyLeftAfter ?? '—'}%</td>
 							<td>{task.sharedAllowanceDelta === null ? '—' : `${task.sharedAllowanceDelta}%`}</td>
-							<td>{percent(task.estimatedWeeklyPercent)}</td>
+							<td>{task.partialTokens ? 'Partial recording' : range(task.estimate)}{#if task.estimate}<small>{task.estimate.samples} samples · {task.estimate.weighted ? 'weighted' : 'total-token fallback'}</small>{/if}</td>
 						</tr>
 					{:else}<tr><td colspan="7">No recorded tasks for this selection.</td></tr>{/each}
 				</tbody>
 			</table>
 		</div>
-		<p class="meta">Each task is one Codex turn; agents have their own rows. Account change is shared usage, not an exact charge for that task. Estimates need several independent observations; partial recordings remain unestimated. Tokens count cumulative usage deltas, including cached input. Tool waiting time does not imply token use.</p>
+		<p class="meta">Each task is one Codex turn; agents have their own rows. Account change includes a settling period and can overlap later work. Separate uncached input, cached input and output weights are learned when identifiable; reasoning is included in output only once. Partial recordings remain unestimated. Tool waiting time does not imply token use.</p>
 	</div>
 </dialog>
 

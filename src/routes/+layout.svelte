@@ -5553,7 +5553,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 {#if usageHistoryOpen && activeId}
 	{#key `${activeHost}:${activeId}`}
-		<UsageHistory host={activeHost} sessionId={activeId} onclose={() => usageHistoryOpen = false} />
+		<UsageHistory host={activeHost} sessionId={activeId} models={activeModels} selectedModel={activeConfig?.model} selectedEffort={activeConfig?.effort} onclose={() => usageHistoryOpen = false} />
 	{/key}
 {/if}
 
