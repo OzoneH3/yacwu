@@ -340,6 +340,7 @@ type State {
     backoff: Int,
     last_error: String,
     activity: diagnostics.Tracker,
+    silent_alerted: List(String),
     last_diagnostic_at: Int,
     last_received_at: Int,
   )
@@ -368,6 +369,7 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     backoff: 0,
     last_error: "",
     activity: dict.new(),
+    silent_alerted: [],
     last_diagnostic_at: 0,
     last_received_at: 0,
   )
@@ -413,21 +415,18 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     Subscribe(owner, subject) -> {
       // Idempotent per owner: subscribers re-subscribe to self-heal after
       // registry restarts, and monitors must not accumulate.
-      case list.any(state.subscribers, fn(s) { s.0 == owner }) {
+      let state = case list.any(state.subscribers, fn(s) { s.0 == owner }) {
         True ->
-          actor.continue(
-            State(..state, subscribers: [
+          State(..state, subscribers: [
               #(owner, subject),
               ..list.filter(state.subscribers, fn(s) { s.0 != owner })
-            ]),
-          )
+            ])
         False -> {
           let _ = process.monitor(owner)
-          actor.continue(
-            State(..state, subscribers: [#(owner, subject), ..state.subscribers]),
-          )
+          State(..state, subscribers: [#(owner, subject), ..state.subscribers])
         }
       }
+      actor.continue(replay_silent_alerts(state, subject, oauth.now()))
     }
     SubscriberDown(pid) ->
       case state.connector == Some(pid), state.status {
@@ -523,17 +522,27 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let _ = diagnostics.rotate_stderr(state.label)
       let snapshot = state_diagnostics(state, at)
       diagnostics.record(state.label, at, "heartbeat", [#("snapshot", snapshot)])
+      let silent = diagnostics.silent_entries(state.activity, at)
+      let silent_ids = list.map(silent, fn(entry) { entry.0 })
+      let newly_silent = list.filter(silent, fn(entry) {
+        !list.contains(state.silent_alerted, entry.0)
+      })
+      let state = list.fold(newly_silent, state, fn(state, entry) {
+        let #(_, details) = entry
+        diagnostics.record(state.label, at, "turn_silent", [#("details", details)])
+        broadcast_stalled(state, details)
+      })
       case
         diagnostics.is_silent(state.activity, at)
         && at - state.last_diagnostic_at >= 120
       {
         True -> {
-          diagnostics.record(state.label, at, "turn_silent", [
+          diagnostics.record(state.label, at, "turn_silent_snapshot", [
             #("snapshot", snapshot),
           ])
-          actor.continue(State(..state, last_diagnostic_at: at))
+          actor.continue(State(..state, silent_alerted: silent_ids, last_diagnostic_at: at))
         }
-        False -> actor.continue(state)
+        False -> actor.continue(State(..state, silent_alerted: silent_ids))
       }
       |> reschedule_diagnostics(state.self)
     }
@@ -977,6 +986,10 @@ fn process_line(state: State, line: BitArray) -> State {
             State(
               ..state,
               activity: diagnostics.observe(state.activity, msg, at),
+              silent_alerted: list.filter(state.silent_alerted, fn(thread) {
+                thread != jsonx.field_string(msg, ["params", "threadId"])
+                |> result.unwrap("")
+              }),
             )
           case method {
             "turn/started"
@@ -1219,6 +1232,29 @@ fn broadcast(state: State, line: BitArray) -> State {
     }
     Error(_) -> state
   }
+}
+
+fn stalled_notification(details: Json) -> String {
+  json.to_string(
+    json.object([
+      #("method", json.string("yacwu/diagnostic/stalled")),
+      #("params", details),
+    ]),
+  )
+}
+
+fn broadcast_stalled(state: State, details: Json) -> State {
+  broadcast(state, bit_array.from_string(stalled_notification(details)))
+}
+
+fn replay_silent_alerts(
+  state: State,
+  subject: Subject(String),
+  at: Int,
+) -> State {
+  diagnostics.silent_entries(state.activity, at)
+  |> list.each(fn(entry) { process.send(subject, stalled_notification(entry.1)) })
+  state
 }
 
 /// Tell subscribers (the SSE stream) about remote connection transitions as a

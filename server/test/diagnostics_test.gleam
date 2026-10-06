@@ -22,6 +22,9 @@ pub fn silence_tracks_events_and_completion_test() {
   let tracker = diagnostics.observe(dict.new(), started, 100)
   should.equal(diagnostics.is_silent(tracker, 219), False)
   should.equal(diagnostics.is_silent(tracker, 220), True)
+  let silent = diagnostics.silent_entries(tracker, 220)
+  let assert [#("thread", details)] = silent
+  should.equal(string.contains(json.to_string(details), "silentSeconds"), True)
   let delta =
     parsed(
       "{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"thread\",\"delta\":\"private output\"}}",

@@ -1067,6 +1067,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const shouldScroll = affectedThreadId === viewedId && isTranscriptAtBottom();
 
 		switch (msg.method) {
+			case 'yacwu/diagnostic/stalled': {
+				const workerId = String(p.threadId ?? '');
+				if (!workerId) break;
+				const silentSeconds = Math.max(120, Number(p.silentSeconds) || 120);
+				const minutes = Math.floor(silentSeconds / 60);
+				const agent = agents[workerId];
+				const worker = agent ? agentLabel(agent) : 'Worker';
+				addLocalNote(
+					workerId,
+					`${worker} has had no Codex activity for ${minutes} minutes. It may still be reasoning or waiting on a tool; Yacwu has not stopped it.`,
+					'info'
+				);
+				break;
+			}
 			case 'yacwu/host/status': {
 				const host = String(p.host ?? '');
 				if (!host) break;

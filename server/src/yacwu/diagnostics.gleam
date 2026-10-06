@@ -137,6 +137,28 @@ pub fn snapshot(tracker: Tracker, at: Int) -> Json {
 }
 
 pub fn is_silent(tracker: Tracker, at: Int) -> Bool {
-  dict.values(tracker)
-  |> list.any(fn(activity) { at - activity.last_at >= 120 })
+  silent_entries(tracker, at) != []
+}
+
+/// Active per-thread alerts, including only bounded metadata safe for the UI.
+pub fn silent_entries(tracker: Tracker, at: Int) -> List(#(String, Json)) {
+  dict.to_list(tracker)
+  |> list.filter_map(fn(entry) {
+    let #(thread, activity) = entry
+    let silent_seconds = at - activity.last_at
+    case silent_seconds >= 120 {
+      True ->
+        Ok(#(
+          thread,
+          json.object([
+            #("threadId", json.string(thread)),
+            #("turnId", json.string(activity.turn)),
+            #("silentSeconds", json.int(silent_seconds)),
+            #("lastMethod", json.string(activity.method)),
+            #("lastItemType", json.string(activity.item_type)),
+          ]),
+        ))
+      False -> Error(Nil)
+    }
+  })
 }
