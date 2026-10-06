@@ -1,0 +1,34 @@
+import { filterAndSortModelChoices, modelDisplayProfile, type ModelChoiceSummary } from './model-display';
+
+export interface SuggestionModel extends ModelChoiceSummary {
+	efforts: string[];
+	defaultEffort: string;
+}
+
+/** Local starting-point rules, not an evaluation of the project or attachment contents. */
+export function suggestPromptSettings(prompt: string, models: SuggestionModel[], attachments = 0) {
+	const text = prompt.trim();
+	if (!text && !attachments) return null;
+	const demanding = /\b(formal verification|mathematical proof|prove correctness|cryptograph\w*|safety.critical|distributed consensus)\b/i.test(text);
+	const complex = demanding || text.length > 3000 || /\b(architect\w*|refactor\w*|migration|concurrency|race condition|deadlock|root cause|multi.agent|security audit|implement|debug\w*|investigate|benchmark)\b/i.test(text);
+	const simple = !complex && !attachments && text.length < 600 && /\b(rename|typo|spelling|wording|center|colour|color|padding|margin|readme|summari[sz]e|translate|hide|label|button)\b/i.test(text);
+	const target = demanding ? 100 : simple ? 70 : 93;
+	const preferredEffort = demanding ? 'high' : complex ? 'high' : simple ? 'low' : 'medium';
+	const candidates = filterAndSortModelChoices(models);
+	const known = candidates.filter((choice) => modelDisplayProfile(choice));
+	const model = known.find((choice) => modelDisplayProfile(choice)!.capability >= target)
+		?? [...known].sort((a, b) => modelDisplayProfile(b)!.capability - modelDisplayProfile(a)!.capability)[0]
+		?? candidates[0];
+	if (!model) return null;
+	const order = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+	const supported = model.efforts.filter((effort) => order.includes(effort));
+	const effort = model.efforts.includes(preferredEffort) ? preferredEffort
+		: supported.sort((a, b) => Math.abs(order.indexOf(a) - order.indexOf(preferredEffort)) - Math.abs(order.indexOf(b) - order.indexOf(preferredEffort)))[0]
+		?? model.efforts[0] ?? model.defaultEffort;
+	const reason = demanding ? 'Exacting correctness requirements suggest the strongest available model with deeper thinking.'
+		: complex ? 'Technical complexity or a long brief suggests a capable model with deeper thinking.'
+		: simple ? 'A short, well-scoped edit suggests an efficient model with low thinking.'
+		: 'For an ambiguous or general task, a capable model with medium thinking is a balanced starting point.';
+	return { model: model.id, name: model.displayName || model.id, effort, reason,
+		caveat: 'Local heuristic based only on draft text and attachment count; no project, conversation, or attachment contents are analyzed. No allowance used.' };
+}

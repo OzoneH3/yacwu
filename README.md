@@ -35,9 +35,13 @@ state lives entirely in Codex's own persistent sessions, read back via
   see which agents are active, and browse finished agents in a separate
   Previous group; agent transcripts are read-only, and agent activity links
   jump directly to the corresponding transcript
-- 🧠 Choose a model and reasoning effort per session. Model capability,
-  usage-efficiency, and value indicators appear in the model choices. Value
-  ratings now emphasize capability per estimated 1% of Pro allowance used;
+- 🧠 Choose a model and reasoning effort per session.
+  “Suggest settings” recommends an available model and supported thinking level
+  for the draft prompt, explains its reasoning, and lets you apply both together.
+  It uses local text heuristics (no allowance consumed), not project or attachment
+  analysis; suggestions are starting points rather than guaranteed best choices.
+  Model capability, usage-efficiency, and value indicators appear in the model
+  choices. Value ratings emphasize capability per estimated 1% of Pro allowance used;
   these are rough Yacwu comparisons, not official benchmark scores. After
   selection, the picker shows only the model name. If you change models
   mid-turn, you can stop and restart the current prompt on the newly selected

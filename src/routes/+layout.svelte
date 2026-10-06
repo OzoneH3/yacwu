@@ -33,6 +33,7 @@
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
+	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 	import { detectPromptKind, parseInteractiveQuestion } from '$lib/interactive-choice';
@@ -1792,6 +1793,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if ((threads[id]?.turnId || activeTurnBySession[id]) && !turnEfforts[id] && sessionConfigs[id]?.effort) {
 			turnEfforts = { ...turnEfforts, [id]: sessionConfigs[id].effort };
 		}
+	}
+
+	async function applySuggestedSettings(model: string, effort: string) {
+		const id = activeId;
+		if (!id || modelPending || effortPending || switchingPromptModel) return;
+		captureTurnModelBeforeConfigChange(id);
+		modelPending = true;
+		try {
+			const { ok, data } = await postCmd(id, 'model', { model, effort });
+			if (!ok) { addLocalNote(id, data.error ?? 'failed to apply suggested settings', 'err'); return; }
+			const settings = data as ModelState;
+			sessionConfigs[id] = { model: settings.model, effort: settings.effort, profile: sessionConfigs[id]?.profile ?? null };
+			rememberEfforts(id, settings);
+		} catch {
+			addLocalNote(id, 'failed to apply suggested settings', 'err');
+		} finally { modelPending = false; }
 	}
 
 	/** Composer model picker: the server preserves a compatible effort or uses the model default. */
@@ -5469,6 +5486,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								</svg>
 							</button>
 							<div class="composer-actions-end">
+								{#key activeId}
+									<ModelSuggestion prompt={input} models={activeModels} attachments={selectedAttachments.length} disabled={modelPending || effortPending || switchingPromptModel} running={active?.status === 'running'} onapply={applySuggestedSettings} />
+								{/key}
 				{#if activeConfig && activeModels.length > 0}
 					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}`}>
 						<span class="model-picker-copy">
@@ -8766,6 +8786,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.composer-actions-end {
 		display: flex;
+		flex-wrap: wrap;
+		justify-content: flex-end;
 		align-items: center;
 		gap: var(--space-2xs);
 	}
