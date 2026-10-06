@@ -213,6 +213,8 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let fileChangeLineStats = $state<Record<string, { additions: number | null; deletions: number | null }>>({});
 	let fileChangeStatsRequest = 0;
 	let fileLinkPreview = $state<{ path: string; content: string } | null>(null);
+	let restartPromptEchoes = $state<Record<string, string[]>>({});
+	let suppressedRestartItemIds = $state<Record<string, string[]>>({});
 	let copiedFileLink = $state<string | null>(null);
 	let filesRefresh = $state(0);
 	let filesToggleEl = $state<HTMLButtonElement | null>(null);
@@ -1122,6 +1124,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (match && (match.text === text || text.startsWith(match.text))) removeLocalItem(id, match.id);
 	}
 
+	function suppressRestartPromptEcho(id: string, item: any, completed: boolean): boolean {
+		const suppressedIds = suppressedRestartItemIds[id] ?? [];
+		if (suppressedIds.includes(item.id)) {
+			if (completed) suppressedRestartItemIds[id] = suppressedIds.filter((itemId) => itemId !== item.id);
+			return true;
+		}
+		const text = (item.content ?? [])
+			.map((part: any) => typeof part?.text === 'string' ? visibleUserText(part.text) : '')
+			.join('')
+			.trim();
+		const queue = restartPromptEchoes[id] ?? [];
+		const match = queue.findIndex((prompt) => prompt === text);
+		if (match < 0) return false;
+		restartPromptEchoes[id] = queue.filter((_, index) => index !== match);
+		suppressedRestartItemIds[id] = [...suppressedIds, item.id];
+		return true;
+	}
+
 	/** Append a client-side note (slash-command echo / help / errors). */
 	function addLocalNote(id: string, text: string, tone: 'info' | 'err' = 'info') {
 		const shouldScroll = id === activeId && isTranscriptAtBottom();
@@ -1232,6 +1252,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const completedTurnId = typeof p.turn?.id === 'string' ? p.turn.id : null;
 				const currentTurnId = tid ? threads[tid]?.turnId : null;
 				if (tid && !(completedTurnId && currentTurnId && completedTurnId !== currentTurnId)) {
+					setTimeout(() => {
+						delete restartPromptEchoes[tid];
+						delete suppressedRestartItemIds[tid];
+					}, 60_000);
 					if (turnModels[tid]) {
 						const { [tid]: _finishedTurnModel, ...remainingTurnModels } = turnModels;
 						turnModels = remainingTurnModels;
@@ -1265,6 +1289,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			case 'item/started':
 			case 'item/completed': {
 				if (tid && p.item?.id) {
+					if (p.item.type === 'userMessage' && suppressRestartPromptEcho(tid, p.item, msg.method === 'item/completed')) break;
 					if (msg.method === 'item/completed' && p.item.type === 'agentMessage' && dismissedAttentionByThread[tid]) {
 						const { [tid]: _read, ...remainingAttention } = dismissedAttentionByThread;
 						dismissedAttentionByThread = remainingAttention;
@@ -2761,7 +2786,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			thread.error = null;
 			turnModels = { ...turnModels, [id]: sessionConfigs[id]?.model ?? '' };
 			turnEfforts = { ...turnEfforts, [id]: sessionConfigs[id]?.effort ?? '' };
-			const echoId = addLocalUserMessage(id, prompt);
+			restartPromptEchoes[id] = [...(restartPromptEchoes[id] ?? []), prompt];
 			try {
 				const response = await sendMessageWithRetries(id, prompt, []);
 				if (!response.ok) {
@@ -2772,7 +2797,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			} catch (error) {
 				thread.status = 'idle';
 				thread.turnStartedAt = null;
-				removeLocalItem(id, echoId);
+				restartPromptEchoes[id] = (restartPromptEchoes[id] ?? []).filter((queuedPrompt) => queuedPrompt !== prompt);
 				const { [id]: _failedModel, ...remainingModels } = turnModels;
 				turnModels = remainingModels;
 				const { [id]: _failedEffort, ...remainingEfforts } = turnEfforts;
