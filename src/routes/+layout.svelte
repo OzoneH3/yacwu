@@ -191,7 +191,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
 	let interactiveChoiceDialog = $state<HTMLDialogElement | null>(null);
-	let dismissedChoiceId = $state<string | null>(null);
+	let resolvedInteractiveQuestionIds = $state<Record<string, boolean>>({});
 	let choiceCustomAnswer = $state('');
 	let choicePromptId = $state<string | null>(null);
 	let instantTooltip = $state<{ text: string; left: number; top: number; wide: boolean } | null>(null);
@@ -314,26 +314,40 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 		if (originalPrompt && originalPrompt !== latestPrompt) lines.push(`Original prompt: ${originalPrompt}`);
 		return lines.join('\n');
 	});
-	const pendingInteractiveChoice = $derived.by(() => {
-		if (!activeId || viewedAgentId) return null;
-		const items = itemsOf(active);
-		for (let index = items.length - 1; index >= 0; index--) {
-			const item = items[index] as any;
-			if (item.type === 'userMessage') return null;
-			if (item.type === 'agentMessage') {
+	const pendingInteractiveQuestions = $derived.by(() => {
+		if (!activeId || viewedAgentId) return [];
+		const queue: Array<{ id: string; threadId: string; question: string; options: string[] }> = [];
+		const threadIds = [activeId, ...agentsForSession(agents, activeId).map((agent) => agent.id)];
+		for (const threadId of threadIds) {
+			const items = itemsOf(threads[threadId] ?? null);
+			let latestUserIndex = -1;
+			for (let index = items.length - 1; index >= 0; index -= 1) {
+				if (items[index].type === 'userMessage') {
+					latestUserIndex = index;
+					break;
+				}
+			}
+			for (let index = latestUserIndex + 1; index < items.length; index += 1) {
+				const item = items[index] as any;
+				if (item.type !== 'agentMessage') continue;
 				const choice = parseInteractiveQuestion(String(item.text ?? ''));
-				return choice ? { id: String(item.id), ...choice } : null;
+				const key = `${threadId}:${String(item.id)}`;
+				if (choice && !resolvedInteractiveQuestionIds[key]) {
+					queue.push({ id: String(item.id), threadId, ...choice });
+				}
 			}
 		}
-		return null;
+		return queue;
 	});
+	const pendingInteractiveChoice = $derived(pendingInteractiveQuestions[0] ?? null);
 	$effect(() => {
 		const pending = pendingInteractiveChoice;
-		if (pending && pending.id !== choicePromptId) {
-			choicePromptId = pending.id;
+		const pendingKey = pending ? `${pending.threadId}:${pending.id}` : null;
+		if (pendingKey && pendingKey !== choicePromptId) {
+			choicePromptId = pendingKey;
 			choiceCustomAnswer = '';
 		}
-		if (!pending || pending.id === dismissedChoiceId) {
+		if (!pending) {
 			if (interactiveChoiceDialog?.open) interactiveChoiceDialog.close();
 			return;
 		}
@@ -2088,14 +2102,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function answerInteractiveChoice(option: string) {
 		if (!pendingInteractiveChoice || sendingMessage || !option.trim()) return;
-		dismissedChoiceId = pendingInteractiveChoice.id;
+		resolveInteractiveQuestion(pendingInteractiveChoice);
 		interactiveChoiceDialog?.close();
 		input = `I choose: ${option}`;
 		void send();
 	}
 
+	function resolveInteractiveQuestion(question: { id: string; threadId: string }) {
+		resolvedInteractiveQuestionIds = {
+			...resolvedInteractiveQuestionIds,
+			[`${question.threadId}:${question.id}`]: true
+		};
+	}
+
 	function dismissInteractiveChoice() {
-		if (pendingInteractiveChoice) dismissedChoiceId = pendingInteractiveChoice.id;
+		if (pendingInteractiveChoice) resolveInteractiveQuestion(pendingInteractiveChoice);
 		interactiveChoiceDialog?.close();
 	}
 
@@ -4792,6 +4813,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<div class="interactive-choice-panel">
 						<div class="session-info-heading">
 							<h2 id="interactive-choice-title">Codex has a question</h2>
+							{#if pendingInteractiveQuestions.length > 1}<span class="meta">1 of {pendingInteractiveQuestions.length}</span>{/if}
 							<button class="session-info-close" type="button" onclick={dismissInteractiveChoice} aria-label="Dismiss question" title="Dismiss">
 								<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
 							</button>
