@@ -7176,7 +7176,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		padding: var(--space-sm);
 	}
 
-	.session-remove-action { width: 100%; min-height: var(--control-height); margin-block-start: var(--space-sm); padding-inline: var(--space-sm); border: var(--rule-hair) solid color-mix(in srgb, var(--color-error) 38%, var(--color-rule)); border-radius: var(--radius-input); background: transparent; color: var(--color-error); cursor: pointer; font: inherit; text-align: start; }
+	.session-remove-action { width: 100%; min-height: var(--control-height); margin-block-start: var(--space-sm); padding-inline: var(--space-sm); border: var(--rule-hair) solid color-mix(in srgb, var(--color-error) 38%, var(--color-rule)); border-radius: var(--radius-input); background: transparent; color: var(--color-error); cursor: pointer; font: inherit; text-align: center; }
 	.session-remove-action:hover { background: color-mix(in srgb, var(--color-error) 8%, var(--color-paper)); }
 
 	.session-info-heading {
