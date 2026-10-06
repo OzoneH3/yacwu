@@ -174,6 +174,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	let sessionHistoryLoaded = $state<Record<string, boolean>>({});
 	let sessionOpening = $state<Record<string, boolean>>({});
 	let interruptedSessions = $state<Record<string, boolean>>({});
+	let finishedSessions = $state<Record<string, boolean>>({});
 	let recoveringSessions = $state<Record<string, boolean>>({});
 	let startupRecoveryComplete = $state(false);
 	let sessionConfigs = $state<Record<string, { model: string; effort: string; profile: string | null }>>({});
@@ -256,6 +257,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	const FAST_SESSIONS_KEY = 'yacwu-fast-sessions';
 	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
+	const FINISHED_SESSIONS_KEY = 'yacwu-finished-sessions';
 	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
 	const RESTART_CONTINUATION_PROMPT =
 		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
@@ -808,7 +810,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			suppressSessionClickId = null;
 			return;
 		}
+		clearFinishedSession(id);
 		closeSidebar(false);
+	}
+
+	function clearFinishedSession(id: string) {
+		if (!finishedSessions[id]) return;
+		const { [id]: _read, ...remaining } = finishedSessions;
+		finishedSessions = remaining;
+		localStorage.setItem(FINISHED_SESSIONS_KEY, JSON.stringify(remaining));
+	}
+
+	function markSessionFinished(id: string) {
+		if (id === activeId || threads[id]?.error) return;
+		if (Object.values(agents).some((agent) => agentRootId(agents, agent) === id && threads[agent.id]?.status === 'running')) return;
+		finishedSessions = { ...finishedSessions, [id]: true };
+		localStorage.setItem(FINISHED_SESSIONS_KEY, JSON.stringify(finishedSessions));
 	}
 
 	function removeSession(id: string) {
@@ -824,6 +841,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			delete interruptedSessions[id];
 			persistInterruptedSessions();
 		}
+		if (finishedSessions[id]) clearFinishedSession(id);
 		for (const agent of Object.values(agents)) {
 			if (agentRootId(agents, agent) === id) {
 				delete agents[agent.id];
@@ -1189,6 +1207,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					void refreshFileChangeLineStats(tid);
 					if (tid === activeId) filesRefresh += 1;
 					advanceTodoQueue(tid);
+					if (p.turn?.status === 'completed') {
+						const sessionId = agents[tid] ? agentRootId(agents, agents[tid]) : tid;
+						if (threads[sessionId]?.status === 'idle') markSessionFinished(sessionId);
+					}
 				}
 				break;
 			}
@@ -1655,6 +1677,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			conflict = null;
 			unseenActivity = false;
 			if (!id) return;
+			clearFinishedSession(id);
 			// Stale browsing state must not leak across visits to a session.
 			composerHistories.get(id)?.resetNavigation();
 			slashDismissedToken = null;
@@ -3767,6 +3790,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			todoQueues = {};
 		}
 		try {
+			const savedFinished = JSON.parse(localStorage.getItem(FINISHED_SESSIONS_KEY) ?? '{}');
+			if (savedFinished && typeof savedFinished === 'object' && !Array.isArray(savedFinished)) {
+				finishedSessions = Object.fromEntries(
+					Object.entries(savedFinished).filter((entry): entry is [string, boolean] => entry[1] === true)
+				);
+			}
+		} catch {
+			finishedSessions = {};
+		}
+		if (activeId) clearFinishedSession(activeId);
+		try {
 			const savedOrder = JSON.parse(localStorage.getItem(SESSION_ORDER_KEY) ?? '[]');
 			if (Array.isArray(savedOrder)) sessionOrder = savedOrder.filter((id): id is string => typeof id === 'string');
 		} catch {
@@ -4256,7 +4290,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									title={sessionAttentionById[s.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
 								>{sessionAttentionById[s.id] === 'choice' ? '?' : '!'}</span>
 							{/if}
-			{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
+							{#if finishedSessions[s.id]}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
+					{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
 							{#if interruptedSessions[s.id]}<span class="session-interrupted">Interrupted</span>
 							{:else if recoveringSessions[s.id]}<span class="session-interrupted checking">Checking…</span>{/if}
 						</span>
@@ -4293,6 +4328,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										title={sessionAttentionById[side.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
 									>{sessionAttentionById[side.id] === 'choice' ? '?' : '!'}</span>
 								{/if}
+								{#if finishedSessions[side.id]}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
 								⎇ {shortLabel(side)}
 							</span>
 							{#if fastSessions[side.id]}{@render fastMark()}{/if}
@@ -6036,6 +6072,27 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.needs-input-indicator.choice {
 		background: var(--color-warning);
 		color: var(--color-paper);
+	}
+
+	.session-finished-indicator {
+		display: inline-grid;
+		place-items: center;
+		flex: none;
+		width: 1rem;
+		height: 1rem;
+		border-radius: var(--radius-pill);
+		background: var(--color-success-soft);
+		color: var(--color-success);
+	}
+
+	.session-finished-indicator svg {
+		width: 0.75rem;
+		height: 0.75rem;
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 2;
 	}
 
 	.session-name {
