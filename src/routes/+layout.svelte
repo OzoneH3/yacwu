@@ -2166,7 +2166,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function fmtReset(resetsAt: number): string {
 		const diff = resetsAt - Math.floor(Date.now() / 1000);
-		return diff <= 0 ? 'now' : fmtDuration(diff);
+		const countdown = diff <= 0 ? 'now' : fmtDuration(diff);
+		const date = new Date(resetsAt * 1000);
+		if (!Number.isFinite(date.getTime())) return countdown;
+		const timestamp = new Intl.DateTimeFormat(undefined, {
+			year: 'numeric', month: 'short', day: 'numeric',
+			hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
+		}).format(date);
+		return `${countdown} (${timestamp})`;
 	}
 
 	function windowLabel(mins: number): string {
