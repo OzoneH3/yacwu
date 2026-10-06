@@ -101,6 +101,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 		tasks: string[];
 		startedCount: number;
 		currentTask: string | null;
+		initialTask: string | null;
 	}
 
 	interface ModelState {
@@ -282,21 +283,28 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	const originalPrompt = $derived(userPrompts[0] ?? '');
 	const latestPrompt = $derived(userPrompts.at(-1) ?? '');
 	const activeTodoQueue = $derived(activeId ? todoQueues[activeId] ?? null : null);
+	const activeTodoOffset = $derived(activeTodoQueue?.initialTask ? 1 : 0);
+	const activeTodoTotal = $derived(activeTodoQueue ? activeTodoQueue.tasks.length + activeTodoOffset : 0);
+	const activeTodoPosition = $derived(activeTodoQueue ? activeTodoQueue.startedCount + activeTodoOffset : 0);
 	const sessionContextLine = $derived(activeTodoQueue?.currentTask || latestPrompt || activeSummary?.name?.trim() || '');
 	const sessionContextTitle = $derived.by(() => {
 		const lines = [];
 		if (activeTodoQueue?.tasks.length) {
-			if (activeTodoQueue.tasks.length > 1) {
-				lines.push(`Todos (${activeTodoQueue.tasks.length})`);
+			if (activeTodoTotal > 1) {
+				lines.push(`Todos (${activeTodoTotal})`);
+				if (activeTodoQueue.initialTask) {
+					const runningInitialTask = activeTodoQueue.startedCount === 0 && active?.status === 'running';
+					lines.push(`[1/${activeTodoTotal}] ${runningInitialTask ? 'Current' : 'Done'} · ${activeTodoQueue.initialTask}`);
+				}
 				activeTodoQueue.tasks.forEach((task, index) => {
-					const position = index + 1;
+					const position = index + 1 + activeTodoOffset;
 					const state = index < activeTodoQueue.startedCount
 						? index === activeTodoQueue.startedCount - 1 && activeTodoQueue.currentTask ? 'Current' : 'Done'
 						: 'Queued';
-					lines.push(`[${position}/${activeTodoQueue.tasks.length}] ${state} · ${task}`);
+					lines.push(`[${position}/${activeTodoTotal}] ${state} · ${task}`);
 				});
 			} else if (activeTodoQueue.currentTask) {
-				lines.push(`Current todo [${activeTodoQueue.startedCount}/${activeTodoQueue.tasks.length}]: ${activeTodoQueue.currentTask}`);
+				lines.push(`Current todo [${activeTodoPosition}/${activeTodoTotal}]: ${activeTodoQueue.currentTask}`);
 			}
 		}
 		if (activeSummary?.name?.trim()) lines.push(`Session: ${activeSummary.name.trim()}`);
@@ -910,11 +918,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function queueTodo(id: string, task: string) {
-		const existing = todoQueues[id] ?? { tasks: [], startedCount: 0, currentTask: null };
+		const existing = todoQueues[id] ?? {
+			tasks: [], startedCount: 0, currentTask: null,
+			initialTask: threads[id]?.status === 'running'
+				? (itemsOf(threads[id]).filter((item) => item.type === 'userMessage').at(-1) as any)
+					?.content?.map((part: any) => typeof part?.text === 'string' ? visibleUserText(part.text) : '').join('').trim() || 'Current task'
+				: null
+		};
 		const queue = { ...existing, tasks: [...existing.tasks, task] };
 		todoQueues = { ...todoQueues, [id]: queue };
 		persistTodoQueues();
-		addLocalNote(id, `Queued todo (${queue.tasks.length} total): ${task}`, 'info');
+		addLocalNote(id, `Queued todo (${queue.tasks.length + (queue.initialTask ? 1 : 0)} total): ${task}`, 'info');
 		if (sessionHistoryLoaded[id] && threads[id]?.status !== 'running') advanceTodoQueue(id);
 	}
 
@@ -2347,13 +2361,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const queue = todoQueues[id];
 				if (!queue?.tasks.length) addLocalNote(id, 'no queued todos');
 				else {
+					const offset = queue.initialTask ? 1 : 0;
+					const total = queue.tasks.length + offset;
 					const lines = queue.tasks.map((task, index) => {
-						const position = index + 1;
+						const position = index + 1 + offset;
 						const state = index < queue.startedCount
 							? index === queue.startedCount - 1 && queue.currentTask ? 'current' : 'done'
 							: 'queued';
-						return `[${position}/${queue.tasks.length}] ${state} · ${task}`;
+						return `[${position}/${total}] ${state} · ${task}`;
 					});
+					if (queue.initialTask) {
+						const isRunning = queue.startedCount === 0 && threads[id]?.status === 'running';
+						lines.unshift(`[1/${total}] ${isRunning ? 'current' : 'done'} · ${queue.initialTask}`);
+					}
 					addLocalNote(id, lines.join('\n'));
 				}
 				break;
@@ -3649,7 +3669,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const startedCount = Number(queue.startedCount);
 					if (!Number.isInteger(startedCount) || startedCount < 0 || startedCount > queue.tasks.length) return [];
 					if (queue.currentTask !== null && typeof queue.currentTask !== 'string') return [];
-					return [[id, { tasks: queue.tasks, startedCount, currentTask: queue.currentTask ?? null }]];
+					return [[id, { tasks: queue.tasks, startedCount, currentTask: queue.currentTask ?? null, initialTask: typeof queue.initialTask === 'string' ? queue.initialTask : null }]];
 				}));
 			}
 		} catch {
@@ -4405,7 +4425,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</div>
 					{/if}
 					<span class="session-label" title={sessionContextTitle}>Session</span>
-					{#if activeTodoQueue?.currentTask}<span class="todo-position">[{activeTodoQueue.startedCount}/{activeTodoQueue.tasks.length}]</span>{/if}
+					{#if activeTodoQueue?.tasks.length}<span class="todo-position">[{activeTodoPosition}/{activeTodoTotal}]</span>{/if}
 					<p>{sessionContextLine}</p>
 					<div class="session-bar-right">
 						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
