@@ -14,11 +14,14 @@ state lives entirely in Codex's own persistent sessions, read back via
 - 🖥️ Light and dark themes, with a responsive workspace for desktop and mobile
 - 🧵 Multi-session workspace: create sessions in chosen folders, rename and
   reorder them, switch between them, and resume interrupted work
+- ✅ Background completion indicators mark finished sessions until you open
+  them, so completed work is easy to spot in the session list
 - 🔒 In-use detection warns before opening a session another Codex process has
   loaded, helping prevent two processes from modifying the same conversation
 - ⚡ Live streaming of assistant messages, reasoning, commands, plans, file
   changes, and current activity; send steering instructions while a turn runs,
-  or stop and resume it later
+  or stop and resume it later. A quiet-turn monitor posts a notice after two
+  minutes without activity but never stops the worker
 - ⏱️ The Session bar keeps the current prompt visible, puts task progress and
   time-left estimates before the Session label, and shows 5-hour / 7-day usage
   on the right. Progress updates appear as their own transcript entries;
@@ -30,7 +33,8 @@ state lives entirely in Codex's own persistent sessions, read back via
 - 🧠 Choose a model and reasoning effort per session. Model capability,
   usage-efficiency, and value indicators appear in the model choices; after
   selection, the picker shows only the model name. These are Yacwu display
-  estimates, not official benchmark scores
+  estimates, not official benchmark scores. If you change models mid-turn, you
+  can stop and restart the current prompt on the newly selected model
 - 💬 Interactive answers: when Codex asks a question with listed options,
   choose one in a prompt dialog or enter a custom response
 - 📁 Workspace browser rooted at the session folder, with a Monaco text editor
@@ -49,7 +53,8 @@ state lives entirely in Codex's own persistent sessions, read back via
 - 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when
   creating a session (or with `/profile`)
 - 🧾 Queue follow-up work with `/todo <task>`; queued tasks start one at a time
-  after the current turn, and `/todo` shows the queue
+  after the current turn, and `/todo` shows the queue with progress numbering
+  that includes an already-running prompt
 - 🔁 Alternative backends: `YACWU_BACKENDS` registers other local app-server
   commands (e.g. [claude-codex](https://github.com/fuergaosi233/claude-codex))
   that appear in the host picker alongside the default local codex
