@@ -4292,7 +4292,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				>
 					<button
 						class="session-drag-handle"
-						class:has-progress={Boolean(sessionProgress)}
+						class:has-progress={Boolean(sessionTimeLeft)}
 					type="button"
 						aria-label={sessionTimeLeft ? `${sessionTimeLeft}; reorder ${shortLabel(s)}` : `Reorder ${shortLabel(s)}`}
 						title={sessionTimeLeft ?? undefined}
@@ -4307,8 +4307,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							}
 						}}
 					>
-						{#if sessionProgress}
-							<span class="session-progress-percent" aria-hidden="true">{sessionProgress.percent}%</span>
+						{#if sessionTimeLeft}
+							<span class="session-progress-percent" aria-hidden="true">{sessionProgress?.percent}%</span>
 						{:else}
 							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3h1M10 3h1M5 8h1m4 0h1m-6 5h1m4 0h1" /></svg>
 						{/if}
