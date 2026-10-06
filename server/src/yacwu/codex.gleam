@@ -43,6 +43,7 @@ import yacwu/diagnostics
 import yacwu/jsonx
 import yacwu/oauth
 import yacwu/remote
+import yacwu/usage
 import yacwu/ws
 
 // Version we report in the `initialize` handshake. We present ourselves as the
@@ -347,6 +348,7 @@ type State {
 }
 
 fn initial_state(self: Codex, label: String, transport: Transport) -> State {
+  usage.record(label, "collectorStarted", [])
   State(
     self: self,
     label: label,
@@ -418,9 +420,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let state = case list.any(state.subscribers, fn(s) { s.0 == owner }) {
         True ->
           State(..state, subscribers: [
-              #(owner, subject),
-              ..list.filter(state.subscribers, fn(s) { s.0 != owner })
-            ])
+            #(owner, subject),
+            ..list.filter(state.subscribers, fn(s) { s.0 != owner })
+          ])
         False -> {
           let _ = process.monitor(owner)
           State(..state, subscribers: [#(owner, subject), ..state.subscribers])
@@ -518,20 +520,25 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
     DiagnosticTick -> {
+      let state = sample_usage(state)
       let at = oauth.now()
       let _ = diagnostics.rotate_stderr(state.label)
       let snapshot = state_diagnostics(state, at)
       diagnostics.record(state.label, at, "heartbeat", [#("snapshot", snapshot)])
       let silent = diagnostics.silent_entries(state.activity, at)
       let silent_ids = list.map(silent, fn(entry) { entry.0 })
-      let newly_silent = list.filter(silent, fn(entry) {
-        !list.contains(state.silent_alerted, entry.0)
-      })
-      let state = list.fold(newly_silent, state, fn(state, entry) {
-        let #(_, details) = entry
-        diagnostics.record(state.label, at, "turn_silent", [#("details", details)])
-        broadcast_stalled(state, details)
-      })
+      let newly_silent =
+        list.filter(silent, fn(entry) {
+          !list.contains(state.silent_alerted, entry.0)
+        })
+      let state =
+        list.fold(newly_silent, state, fn(state, entry) {
+          let #(_, details) = entry
+          diagnostics.record(state.label, at, "turn_silent", [
+            #("details", details),
+          ])
+          broadcast_stalled(state, details)
+        })
       case
         diagnostics.is_silent(state.activity, at)
         && at - state.last_diagnostic_at >= 120
@@ -540,7 +547,9 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
           diagnostics.record(state.label, at, "turn_silent_snapshot", [
             #("snapshot", snapshot),
           ])
-          actor.continue(State(..state, silent_alerted: silent_ids, last_diagnostic_at: at))
+          actor.continue(
+            State(..state, silent_alerted: silent_ids, last_diagnostic_at: at),
+          )
         }
         False -> actor.continue(State(..state, silent_alerted: silent_ids))
       }
@@ -618,6 +627,24 @@ fn state_diagnostics(state: State, at: Int) -> Json {
   ])
 }
 
+/// Sample the shared weekly quota; avoid stacking reads if Codex is unresponsive.
+fn sample_usage(state: State) -> State {
+  let pending =
+    dict.values(state.pending)
+    |> list.any(fn(request) { request.method == "account/rateLimits/read" })
+  case state.status, pending {
+    Running(conn), False ->
+      send_request(
+        state,
+        conn,
+        "account/rateLimits/read",
+        json.object([]),
+        Discard,
+      )
+    _, _ -> state
+  }
+}
+
 fn on_request(
   state: State,
   method: String,
@@ -655,6 +682,7 @@ fn send_request(
 ) -> State {
   let id = state.next_id
   let at = oauth.now()
+  usage.request(state.label, method, params)
   let turn_id =
     json.parse(json.to_string(params), decode.at(["turnId"], decode.string))
     |> result.unwrap(
@@ -982,12 +1010,18 @@ fn process_line(state: State, line: BitArray) -> State {
         // Notification.
         _, Ok(method) -> {
           let at = oauth.now()
+          usage.notification(state.label, method, msg)
+          let state = case method {
+            "turn/started" | "turn/completed" -> sample_usage(state)
+            _ -> state
+          }
           let state =
             State(
               ..state,
               activity: diagnostics.observe(state.activity, msg, at),
               silent_alerted: list.filter(state.silent_alerted, fn(thread) {
-                thread != jsonx.field_string(msg, ["params", "threadId"])
+                thread
+                != jsonx.field_string(msg, ["params", "threadId"])
                 |> result.unwrap("")
               }),
             )
@@ -1136,11 +1170,13 @@ fn on_response(
             ),
           ])
           let state = case reply {
-            Ok(value) ->
+            Ok(value) -> {
+              usage.response(state.label, method, value)
               State(
                 ..state,
                 activity: diagnostics.restore(state.activity, value, at),
               )
+            }
             Error(_) -> state
           }
           case reply_to {
@@ -1253,7 +1289,9 @@ fn replay_silent_alerts(
   at: Int,
 ) -> State {
   diagnostics.silent_entries(state.activity, at)
-  |> list.each(fn(entry) { process.send(subject, stalled_notification(entry.1)) })
+  |> list.each(fn(entry) {
+    process.send(subject, stalled_notification(entry.1))
+  })
   state
 }
 
@@ -1369,6 +1407,7 @@ fn on_disconnect(state: State, message: String) -> actor.Next(State, Msg) {
 }
 
 fn fail_all(state: State, message: String) -> State {
+  usage.record(state.label, "connectionLost", [])
   let at = oauth.now()
   diagnostics.record(state.label, at, "connection_lost", [
     #("snapshot", state_diagnostics(state, at)),

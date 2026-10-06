@@ -41,6 +41,7 @@ import yacwu/remote
 import yacwu/session_lock
 import yacwu/ssh_config
 import yacwu/static_files
+import yacwu/usage
 import yacwu/workspace
 
 pub type Context {
@@ -438,6 +439,10 @@ fn dispatch(
       use _, cx <- with_codex(ctx, req, Some(id))
       set_thread_name(cx, req, id)
     }
+    ["api", "usage"], Get -> {
+      use host, _ <- with_codex(ctx, req, None)
+      json_response(200, usage.history(host))
+    }
     ["api", "threads"], Get -> list_threads(ctx, req)
     ["api", "threads"], Post -> create_thread(ctx, req)
     ["api", "threads", "loaded"], Get -> loaded_threads(ctx)
@@ -671,7 +676,10 @@ fn simple_rpc(
 }
 
 /// Permanent deletion is exposed only for archived threads, never active ones.
-fn delete_archived_thread(cx: Codex, thread_id: String) -> Response(ResponseData) {
+fn delete_archived_thread(
+  cx: Codex,
+  thread_id: String,
+) -> Response(ResponseData) {
   case codex.request(cx, "thread/list", thread_list_params(True)) {
     Error(message) -> json_response(500, error_body(message))
     Ok(result) -> {

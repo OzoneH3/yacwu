@@ -32,6 +32,7 @@
 	import { ComposerHistory } from '$lib/history';
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
+	import UsageHistory from '$lib/UsageHistory.svelte';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 	import { detectPromptKind, parseInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
@@ -190,6 +191,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let unseenActivity = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
+	let usageHistoryOpen = $state(false);
 	let archiveBrowserDialog = $state<HTMLDialogElement | null>(null);
 	let archivedSessions = $state<ThreadSummary[]>([]);
 	let archivedSessionsLoading = $state(false);
@@ -4727,9 +4729,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</span>
 								{/if}
 								{#if activeAccountUsage.sevenDay}
-									<span class="usage-window" title={`7-day limit · resets in ${fmtReset(activeAccountUsage.sevenDay.resetsAt)}`}>
+									<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true} title={`7-day limit · resets in ${fmtReset(activeAccountUsage.sevenDay.resetsAt)} · open task usage history`}>
 										<strong>7d</strong> {remainingPercent(activeAccountUsage.sevenDay)}% left
-									</span>
+									</button>
 								{/if}
 							</div>
 						{/if}
@@ -4859,6 +4861,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						{/if}
 					</dl>
+					<button class="mini" type="button" onclick={() => { sessionInfoDialog?.close(); usageHistoryOpen = true; }}>Task usage history</button>
 					<button class="session-remove-action" type="button" onclick={() => { sessionInfoDialog?.close(); void deleteSession(activeId); }}>
 						{isSideChat(activeSummary) ? 'Remove side conversation' : 'Archive session'}
 					</button>
@@ -5540,6 +5543,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{/if}
 	</main>
 </div>
+
+{#if usageHistoryOpen && activeId}
+	{#key `${activeHost}:${activeId}`}
+		<UsageHistory host={activeHost} sessionId={activeId} onclose={() => usageHistoryOpen = false} />
+	{/key}
+{/if}
 
 {#if archiveNotice}
 	<div class="archive-toast {archiveNotice.tone}" role={archiveNotice.tone === 'error' ? 'alert' : 'status'}>
@@ -6709,6 +6718,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-ink-2);
 		font-weight: 600;
 	}
+
+	.usage-details { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 
 	.session-heading {
 		min-width: 0;

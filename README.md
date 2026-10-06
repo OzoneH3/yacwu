@@ -41,6 +41,11 @@ state lives entirely in Codex's own persistent sessions, read back via
   selection, the picker shows only the model name. If you change models
   mid-turn, you can stop and restart the current prompt on the newly selected
   model
+- 📊 Task usage history: click the weekly allowance or open it from Session
+  details to inspect recorded model, thinking level, cumulative token deltas,
+  elapsed time, and weekly allowance readings. Backend recording continues
+  with the browser closed; pooled observations learn estimated weekly cost
+  per model/thinking level, including overlapping turns
 - 💬 Interactive answers: direct questions and questions with listed options
   open a prompt dialog; answer or dismiss each to advance through the session's
   question queue, including questions from its agents
@@ -409,6 +414,32 @@ or upstream service stall.
 Backend diagnostics take effect after restarting Yacwu; local stderr capture
 starts with the next local child. Let active tasks finish before restarting a
 server that owns their Codex child. Reload the browser after rebuilding.
+
+### Task allowance analysis
+
+Usage metadata is stored per host in `$XDG_STATE_HOME/yacwu/usage` (default
+`~/.local/state/yacwu/usage`); `YACWU_USAGE_DIR` overrides the directory. Files
+are private, rotate at 20 MiB, and retain one previous file. Prompts, responses,
+and tool output are excluded. Recording begins when the updated backend starts
+and continues without an open browser. Quota snapshots are sampled every
+30 seconds and at turn boundaries, along with live quota/token notifications.
+
+The history window separates the account-wide weekly percentage change from a
+task's estimated cost. Each row is one Codex turn; agents have separate rows.
+Token counts use differences in cumulative usage, including cached input,
+rather than the context-size counter. Existing turns without a known token
+baseline, or turns interrupted by a recording gap, are marked partial.
+
+Calibration pools readings until at least two percentage points are consumed,
+then fits nonnegative costs by model and thinking level from the token deltas.
+It requires several independent observations before producing an estimate;
+quota resets, incomplete intervals, and allowance changes without tracked
+tokens do not train the model. Changes in quota bucket or plan restart
+calibration. Elapsed time is recorded for comparison; waiting on a tool does
+not imply token consumption. Shared allowance can also be consumed by other
+apps or hosts, and whole-percent readings can arrive late, so these estimates
+are empirical approximations rather than exact per-task charges. Static model
+value ratings are unchanged by this calibration.
 
 ## License
 
