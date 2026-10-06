@@ -195,6 +195,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let archivedSessionsLoading = $state(false);
 	let archivedSessionsError = $state<string | null>(null);
 	let restoringArchivedSessionId = $state<string | null>(null);
+	let deletingArchivedSessionId = $state<string | null>(null);
 	let interactiveChoiceDialog = $state<HTMLDialogElement | null>(null);
 	let resolvedInteractiveQuestionIds = $state<Record<string, boolean>>({});
 	let choiceCustomAnswer = $state('');
@@ -1188,6 +1189,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			case 'thread/unarchived': {
 				if (p.thread) upsertSession(p.thread);
 				else void loadSessions();
+				break;
+			}
+			case 'thread/deleted': {
+				if (tid) {
+					removeSession(tid);
+					archivedSessions = archivedSessions.filter((session) => session.id !== tid);
+				}
 				break;
 			}
 			case 'thread/name/updated': {
@@ -2920,7 +2928,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function restoreArchivedSession(session: ThreadSummary) {
-		if (restoringArchivedSessionId) return;
+		if (restoringArchivedSessionId || deletingArchivedSessionId) return;
 		restoringArchivedSessionId = session.id;
 		try {
 			const response = await fetch(`/api/threads/${session.id}/unarchive${hostQuery(session.host)}`, {
@@ -2938,6 +2946,28 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) }, 6000);
 		} finally {
 			restoringArchivedSessionId = null;
+		}
+	}
+
+	async function deleteArchivedSession(session: ThreadSummary) {
+		if (restoringArchivedSessionId || deletingArchivedSessionId) return;
+		const label = shortLabel(session);
+		if (!window.confirm(`Permanently delete “${label}”? This cannot be undone.`)) return;
+		deletingArchivedSessionId = session.id;
+		try {
+			const response = await fetch(`/api/threads/${session.id}/delete${hostQuery(session.host)}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({})
+			});
+			const data = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(data.error ?? 'Could not delete the archived session.');
+			archivedSessions = archivedSessions.filter((entry) => entry.id !== session.id);
+			showArchiveNotice({ tone: 'info', message: `Permanently deleted ${label}` });
+		} catch (error) {
+			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) }, 6000);
+		} finally {
+			deletingArchivedSessionId = null;
 		}
 	}
 
@@ -4889,9 +4919,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{#if session.preview}<span>{session.preview}</span>{/if}
 										<small>{session.cwd ?? 'Unknown folder'} · {fmtSessionTimestamp(session.updatedAt)}</small>
 									</div>
-									<button class="mini" type="button" disabled={Boolean(restoringArchivedSessionId)} onclick={() => restoreArchivedSession(session)}>
-										{restoringArchivedSessionId === session.id ? 'Restoring…' : 'Restore'}
-									</button>
+									<div class="archive-browser-actions">
+										<button class="mini" type="button" disabled={Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => restoreArchivedSession(session)}>
+											{restoringArchivedSessionId === session.id ? 'Restoring…' : 'Restore'}
+										</button>
+										<button class="mini archive-delete" type="button" disabled={Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => deleteArchivedSession(session)}>
+											{deletingArchivedSessionId === session.id ? 'Deleting…' : 'Delete'}
+										</button>
+									</div>
 								</div>
 							{/each}
 						</div>
@@ -7016,6 +7051,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.archive-browser-copy span { color: var(--color-muted); font-size: var(--text-xs); }
 	.archive-browser-copy small { color: var(--color-muted); font-size: var(--text-2xs); }
 	.archive-browser-row .mini { flex: none; }
+
+	.archive-browser-actions {
+		display: flex;
+		flex: none;
+		gap: var(--space-2xs);
+	}
+
+	.archive-delete {
+		border-color: var(--color-error-soft);
+		color: var(--color-error);
+	}
 
 	.archive-browser-empty {
 		margin: var(--space-sm) 0 0;

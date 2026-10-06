@@ -529,6 +529,10 @@ fn dispatch(
       use _, cx <- with_codex(ctx, req, Some(id))
       simple_rpc(cx, "thread/archive", id)
     }
+    ["api", "threads", id, "delete"], Post -> {
+      use _, cx <- with_codex(ctx, req, Some(id))
+      delete_archived_thread(cx, id)
+    }
     ["api", "threads", id, "unsubscribe"], Post -> {
       use _, cx <- with_codex(ctx, req, Some(id))
       simple_rpc(cx, "thread/unsubscribe", id)
@@ -664,6 +668,23 @@ fn simple_rpc(
   thread_id: String,
 ) -> Response(ResponseData) {
   rpc(cx, method, json.object([#("threadId", json.string(thread_id))]))
+}
+
+/// Permanent deletion is exposed only for archived threads, never active ones.
+fn delete_archived_thread(cx: Codex, thread_id: String) -> Response(ResponseData) {
+  case codex.request(cx, "thread/list", thread_list_params(True)) {
+    Error(message) -> json_response(500, error_body(message))
+    Ok(result) -> {
+      let archived_ids =
+        decode.run(result, decode.at(["data"], decode.list(decode.dynamic)))
+        |> result.unwrap([])
+        |> list.filter_map(jsonx.field_string(_, ["id"]))
+      case list.contains(archived_ids, thread_id) {
+        True -> simple_rpc(cx, "thread/delete", thread_id)
+        False -> json_response(404, error_body("thread is not archived"))
+      }
+    }
+  }
 }
 
 // -- /api/events --------------------------------------------------------------
