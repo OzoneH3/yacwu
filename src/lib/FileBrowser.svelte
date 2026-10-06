@@ -8,6 +8,7 @@
 <script lang="ts">
 	import { onDestroy, tick, untrack } from 'svelte';
 	import { loadMonaco, monacoTheme, type Monaco } from '$lib/monaco';
+	import { workspacePathUrl } from '$lib/workspace-links';
 
 	interface FileEntry {
 		name: string;
@@ -57,6 +58,10 @@
 	let changeStats = $state<Record<string, FileChangeStats>>({});
 	let expanded = $state<Record<string, boolean>>({});
 	let selectedPath = $state<string | null>(null);
+	let selectedDirectory = $state<string | null>(null);
+	let treeEl = $state<HTMLElement | null>(null);
+	const directoryRequests = new Map<string, Promise<void>>();
+	let revealRequest = 0;
 	let file = $state<FileState | null>(null);
 	let monacoLoading = $state(false);
 	let viewerError = $state<string | null>(null);
@@ -95,23 +100,33 @@
 		return Boolean(file?.status === 'ready' && file.kind === 'text' && editorText !== savedContent);
 	}
 
-	async function loadDir(path: string, force = false) {
-		if (!force && dirs[path]) return;
-		dirs[path] = { status: 'loading' };
-		try {
-			const res = await fetch(
-				`/api/threads/${threadId}/files?path=${encodeURIComponent(path)}`
-			);
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? `failed to list directory (${res.status})`);
-			if (typeof data.root === 'string' && data.root) serverRoot = data.root;
-			dirs[path] = { status: 'ready', entries: (data.entries ?? []) as FileEntry[] };
-		} catch (error) {
-			dirs[path] = {
-				status: 'error',
-				message: error instanceof Error ? error.message : 'failed to list directory'
-			};
+	async function loadDir(path: string, force = false): Promise<void> {
+		const pending = directoryRequests.get(path);
+		if (pending) {
+			await pending;
+			if (force) return loadDir(path, true);
+			return;
 		}
+		if (!force && dirs[path]) return;
+		const work = (async () => {
+			dirs[path] = { status: 'loading' };
+			try {
+				const res = await fetch(workspacePathUrl(threadId, 'files', path, host));
+				const data = await res.json();
+				if (!res.ok) throw new Error(data.error ?? `failed to list directory (${res.status})`);
+				if (typeof data.root === 'string' && data.root) serverRoot = data.root;
+				dirs[path] = { status: 'ready', entries: (data.entries ?? []) as FileEntry[] };
+			} catch (error) {
+				dirs[path] = {
+					status: 'error',
+					message: error instanceof Error ? error.message : 'failed to list directory'
+				};
+			} finally {
+				directoryRequests.delete(path);
+			}
+		})();
+		directoryRequests.set(path, work);
+		return work;
 	}
 
 	async function loadChangeStats() {
@@ -136,6 +151,7 @@
 	async function selectFile(path: string, line: number | null = null) {
 		if (editorIsDirty() && !window.confirm('Discard unsaved changes?')) return;
 		selectedPath = path;
+		selectedDirectory = null;
 		saveStatus = '';
 		saveError = null;
 		targetLine = line;
@@ -147,7 +163,7 @@
 		file = { status: 'loading', path };
 		try {
 			const res = await fetch(
-				`/api/threads/${threadId}/file?path=${encodeURIComponent(path)}`
+				workspacePathUrl(threadId, 'file', path, host)
 			);
 			const data = await res.json();
 			if (request !== fileRequest) return;
@@ -194,7 +210,7 @@
 		saveStatus = '';
 		saveError = null;
 		try {
-			const res = await fetch(`/api/threads/${threadId}/file?path=${encodeURIComponent(selectedPath)}`, {
+			const res = await fetch(workspacePathUrl(threadId, 'file', selectedPath, host), {
 				method: 'PUT',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ content })
@@ -216,16 +232,34 @@
 		}
 	}
 
-	// Expand every ancestor of a transcript file-change path, then open it.
+	// Expand ancestors, then reveal a folder or open a regular file.
 	async function revealPath(path: string, line: number | null = null) {
+		const request = ++revealRequest;
 		const parts = path.split('/').filter(Boolean);
+		await loadDir('', true);
+		if (request !== revealRequest) return;
 		let dir = '';
 		for (const part of parts.slice(0, -1)) {
 			dir = dir ? `${dir}/${part}` : part;
 			expanded[dir] = true;
-			await loadDir(dir);
+			await loadDir(dir, true);
+			if (request !== revealRequest) return;
 		}
-		await selectFile(parts.join('/'), line);
+		const target = parts.join('/');
+		const parent = dirs[dir];
+		const entry = parent?.status === 'ready' ? parent.entries.find((entry) => entry.name === parts.at(-1)) : null;
+		if (!parts.length || entry?.kind === 'dir') {
+			expanded[target] = true;
+			await loadDir(target, true);
+			if (request !== revealRequest) return;
+			if (editorIsDirty() && !window.confirm('Discard unsaved changes?')) return;
+			fileRequest++;
+			selectedDirectory = target;
+			selectedPath = null;
+			file = null;
+			await tick();
+			treeEl?.querySelector(`[data-path="${CSS.escape(target)}"]`)?.scrollIntoView({ block: 'nearest' });
+		} else await selectFile(target, line);
 	}
 
 	// Session root loads on mount; reveal/refresh props arrive as nonces so
@@ -375,6 +409,8 @@
 				<button
 					type="button"
 					class="fb-row dir"
+					class:active={selectedDirectory === path}
+					data-path={path}
 					class:dot={entry.name.startsWith('.')}
 					style:--fb-depth={depth}
 					aria-expanded={Boolean(expanded[path])}
@@ -451,12 +487,12 @@
 		</button>
 	</header>
 	<div class="fb-body">
-		<nav class="fb-tree" aria-label="Directory tree">
+		<nav class="fb-tree" aria-label="Directory tree" bind:this={treeEl}>
 			{@render dirRows('', 0)}
 		</nav>
 		<section class="fb-view" aria-label="File contents">
 			{#if !selectedPath || !file}
-				<div class="fb-placeholder">Select a file to view it.</div>
+				<div class="fb-placeholder">{selectedDirectory !== null ? `Folder: ${selectedDirectory || root}. ` : ''}Select a file to view it.</div>
 			{:else}
 				<div class="fb-view-header">
 					<button type="button" class="fb-back" onclick={closeFile} aria-label="Back to file list">

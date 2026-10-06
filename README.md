@@ -55,7 +55,8 @@ state lives entirely in Codex's own persistent sessions, read back via
 - 📁 Workspace browser rooted at the session folder, with a Monaco text editor
   (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
   links in assistant messages. The file and diff viewer state is kept per
-  session, and worktree-prefixed file links select the corresponding diff
+  session, directory links expand their folder and preview/copy its listing,
+  and worktree-prefixed file links select the corresponding diff
 - ± Git changes inspector with All, Staged, and Unstaged scopes, added/removed
   line counts in both the inspector and transcript file-change entries, lazy
   unified diffs, and a resizable split view

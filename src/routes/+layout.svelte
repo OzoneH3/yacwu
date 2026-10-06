@@ -33,6 +33,7 @@
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
+	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 	import { detectPromptKind, parseInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
@@ -3406,26 +3407,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function loadFileLinkPreview(path: string) {
 		if (!activeId) return;
+		const id = activeId;
 		fileLinkPreview = { path, content: 'Loading…' };
 		try {
-			const res = await fetch(`${threadApi(activeId ?? '', '/file')}?path=${encodeURIComponent(path)}`);
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? 'Could not load file');
-			const content = data.binary ? '[Binary file]' : data.tooLarge ? '[File is too large to preview]' : String(data.content ?? '');
-			if (fileLinkPreview?.path === path) fileLinkPreview = { path, content: content.slice(0, 2400) };
+			const data = await readWorkspaceLink(id, path, sessionHost(id));
+			if (activeId === id && fileLinkPreview?.path === path) fileLinkPreview = { path, content: data.content.slice(0, 2400) };
 		} catch (error) {
-			if (fileLinkPreview?.path === path) fileLinkPreview = { path, content: error instanceof Error ? error.message : 'Could not load file' };
+			if (activeId === id && fileLinkPreview?.path === path) fileLinkPreview = { path, content: error instanceof Error ? error.message : 'Could not load file' };
 		}
 	}
 
 	async function copyFileLinkContents(path: string) {
 		try {
 			if (!activeId) throw new Error('No active session');
-			const res = await fetch(`${threadApi(activeId ?? '', '/file')}?path=${encodeURIComponent(path)}`);
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? 'Could not read file');
-			if (data.binary || data.tooLarge) throw new Error('This file cannot be copied as text');
-			await navigator.clipboard.writeText(String(data.content ?? ''));
+			const data = await readWorkspaceLink(activeId, path, sessionHost(activeId));
+			if (!data.copyable) throw new Error('This file cannot be copied as text');
+			await navigator.clipboard.writeText(data.content);
 			copiedFileLink = path;
 			setTimeout(() => { if (copiedFileLink === path) copiedFileLink = null; }, 1400);
 		} catch (error) {
@@ -3470,10 +3467,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			candidate = withLine[1];
 			line = Number(withLine[2]) || null;
 		}
+		if (candidate.length > 1) candidate = candidate.replace(/\/+$/, '');
 		if (candidate.startsWith('/')) {
-			const cwd = (cwds[activeId] ?? activeSummary?.cwd)?.replace(/[\\/]+$/, '');
-			if (!cwd || !candidate.startsWith(`${cwd}/`)) return null;
-			candidate = candidate.slice(cwd.length + 1);
+			const rawCwd = cwds[activeId] ?? activeSummary?.cwd;
+			if (!rawCwd) return null;
+			const cwd = rawCwd.replace(/[\\/]+$/, '') || '/';
+			if (candidate === cwd) return { path: '', line: null };
+			const prefix = cwd === '/' ? '/' : `${cwd}/`;
+			if (!candidate.startsWith(prefix)) return null;
+			candidate = candidate.slice(prefix.length);
 		} else if (candidate.startsWith('./')) {
 			candidate = candidate.slice(2);
 		}
@@ -4108,7 +4110,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			{#if pathTarget !== null}
 				<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(pathTarget.path)} onmouseleave={() => fileLinkPreview?.path === pathTarget.path && (fileLinkPreview = null)}>
 					<button type="button" class="code-path" title={pathTarget.line ? `Open in file browser at line ${pathTarget.line}` : 'Open in file browser'} onclick={() => openFileInBrowser(pathTarget.path, pathTarget.line)}><code>{token.text}</code></button>
-					<button type="button" class="file-link-copy" aria-label={`Copy ${pathTarget.path}`} title={copiedFileLink === pathTarget.path ? 'Copied' : 'Copy file contents'} onclick={() => void copyFileLinkContents(pathTarget.path)}>{copiedFileLink === pathTarget.path ? '✓' : '⧉'}</button>
+					<button type="button" class="file-link-copy" aria-label={`Copy ${pathTarget.path}`} title={copiedFileLink === pathTarget.path ? 'Copied' : 'Copy file contents or folder listing'} onclick={() => void copyFileLinkContents(pathTarget.path)}>{copiedFileLink === pathTarget.path ? '✓' : '⧉'}</button>
 					{#if fileLinkPreview?.path === pathTarget.path}<span class="file-link-preview"><strong>{pathTarget.path}</strong><pre>{fileLinkPreview.content}</pre></span>{/if}
 				</span>
 			{:else}
@@ -4122,7 +4124,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				{#if fileTarget !== null}
 					<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(fileTarget.path)} onmouseleave={() => fileLinkPreview?.path === fileTarget.path && (fileLinkPreview = null)}>
 						<button type="button" class="link-path" title={fileTarget.line ? `Open ${fileTarget.path} at line ${fileTarget.line}` : `Open ${fileTarget.path} in file browser`} onclick={() => openFileInBrowser(fileTarget.path, fileTarget.line)}>{@render markdownInlines(token.children)}</button>
-						<button type="button" class="file-link-copy" aria-label={`Copy ${fileTarget.path}`} title={copiedFileLink === fileTarget.path ? 'Copied' : 'Copy file contents'} onclick={() => void copyFileLinkContents(fileTarget.path)}>{copiedFileLink === fileTarget.path ? '✓' : '⧉'}</button>
+						<button type="button" class="file-link-copy" aria-label={`Copy ${fileTarget.path}`} title={copiedFileLink === fileTarget.path ? 'Copied' : 'Copy file contents or folder listing'} onclick={() => void copyFileLinkContents(fileTarget.path)}>{copiedFileLink === fileTarget.path ? '✓' : '⧉'}</button>
 						{#if fileLinkPreview?.path === fileTarget.path}<span class="file-link-preview"><strong>{fileTarget.path}</strong><pre>{fileLinkPreview.content}</pre></span>{/if}
 					</span>
 				{:else}
