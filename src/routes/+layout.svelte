@@ -7036,7 +7036,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.archive-browser-dialog {
 		position: fixed;
 		inset: 0;
-		width: min(calc(100% - var(--space-lg)), 32rem);
+		width: min(calc(100% - var(--space-lg)), 40rem);
 		max-width: none;
 		max-height: calc(100dvh - var(--space-xl));
 		margin: auto;
@@ -7099,8 +7099,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.archive-delete {
-		border-color: var(--color-error-soft);
-		color: var(--color-error);
+		border-color: var(--color-error);
+		background: var(--color-error);
+		color: var(--color-paper);
+	}
+
+	.archive-delete:hover:not(:disabled) {
+		background: var(--color-error-strong, var(--color-error));
+		color: var(--color-paper);
 	}
 
 	.archive-browser-empty {
