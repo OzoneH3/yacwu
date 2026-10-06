@@ -475,8 +475,20 @@ stops after five minutes without stability. The runtime limit includes these
 settling periods. The controls show elapsed time, time until the runtime limit,
 completed turns and sampling status; turn-limit stops are labeled partial runs.
 The estimator also requires stable quota readings before learning token costs.
-Run each desired model/thinking combination separately; repeated runs may be
-needed for identifiable token weights and sufficient samples.
+Use **Models × Low / Medium** to run up to three models sequentially at both
+thinking levels. Economical mode targets 2 percentage points for the first
+combination, then 1 for each remaining combination: 7 points nominally for all
+six. Disable economical mode for 2 points each (12 total). Turn and runtime
+limits apply **per combination**, including settling; six combinations can take
+up to six times the selected runtime. The controls show the order, total target,
+current combination and separate results with links to each benchmark session.
+Each handoff carries the settled allowance baseline forward; if that reading
+changes during the handoff, the batch stops rather than attributing the change
+to the next model. A partial combination, error or manual stop prevents the
+remaining combinations from starting. Isolated benchmark boundaries allow 1-point
+observations without pooling different combinations or double-counting tokens.
+Integer rounding uncertainty still applies; repeated sweeps may be needed for
+identifiable token weights and sufficient samples.
 
 Benchmarks consume allowance only after you explicitly start them. Pause other
 Yacwu work first: a shared reservation permits only one benchmark across all

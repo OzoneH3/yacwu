@@ -5,7 +5,9 @@ import gleam/erlang/process
 import gleam/int
 import gleam/json.{type Json}
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
+import yacwu/benchmark_plan.{type Stage, Stage}
 import yacwu/benchmark_settling
 import yacwu/codex.{type Codex}
 import yacwu/hosts
@@ -97,23 +99,54 @@ pub fn start(
   max_turns: Int,
   minutes: Int,
 ) -> Result(Nil, String) {
-  case
-    target >= 2
-    && target <= 5
-    && max_turns >= 1
-    && max_turns <= 100
-    && minutes >= 3
-    && minutes <= 60
-  {
+  case target >= 2 && target <= 5 {
+    False -> Error("Choose a 2–5 percentage-point target")
+    True ->
+      start_plan(
+        registry,
+        host,
+        cx,
+        [Stage(model, effort, target)],
+        max_turns,
+        minutes,
+      )
+  }
+}
+
+pub fn start_batch(
+  registry: hosts.Registry,
+  host: String,
+  cx: Codex,
+  models: List(String),
+  economical: Bool,
+  max_turns: Int,
+  minutes: Int,
+) -> Result(Nil, String) {
+  use stages <- result.try(benchmark_plan.batch(models, economical))
+  start_plan(registry, host, cx, stages, max_turns, minutes)
+}
+
+fn start_plan(
+  registry: hosts.Registry,
+  host: String,
+  cx: Codex,
+  stages: List(Stage),
+  max_turns: Int,
+  minutes: Int,
+) -> Result(Nil, String) {
+  case max_turns >= 1 && max_turns <= 100 && minutes >= 3 && minutes <= 60 {
     False ->
       Error(
-        "Choose a 2–5 percentage-point target, 1–100 turns and 3–60 minutes",
+        "Choose 1–100 turns and 3–60 minutes per combination",
       )
     True -> {
       use catalog <- result.try(model_state.list_model_choices(cx))
       case
-        list.any(catalog.models, fn(choice) {
-          choice.id == model && list.contains(choice.efforts, effort)
+        list.all(stages, fn(stage) {
+          list.any(catalog.models, fn(choice) {
+            choice.id == stage.model
+            && list.contains(choice.efforts, stage.effort)
+          })
         })
       {
         False -> Error("Choose an available model and supported thinking level")
@@ -123,16 +156,48 @@ pub fn start(
             False ->
               case
                 launch(host, fn() {
+                  update(
+                    host,
+                    json.to_string(
+                      json.object([
+                        #("batchStartedAt", json.int(oauth.now())),
+                        #("stageTotal", json.int(list.length(stages))),
+                        #(
+                          "batchTargetPercent",
+                          json.int(
+                            list.fold(stages, 0, fn(sum, stage) {
+                              sum + stage.target
+                            }),
+                          ),
+                        ),
+                        #("batchUsedPercent", json.int(0)),
+                        #("results", json.preprocessed_array([])),
+                        #(
+                          "plan",
+                          json.preprocessed_array(
+                            list.map(stages, fn(stage) {
+                              json.object([
+                                #("model", json.string(stage.model)),
+                                #("effort", json.string(stage.effort)),
+                                #("targetPercent", json.int(stage.target)),
+                              ])
+                            }),
+                          ),
+                        ),
+                      ]),
+                    ),
+                  )
                   let result =
-                    run(
+                    run_plan(
                       registry,
                       host,
                       cx,
-                      model,
-                      effort,
-                      target,
+                      stages,
                       max_turns,
-                      oauth.now() + minutes * 60,
+                      minutes,
+                      None,
+                      [],
+                      0,
                     )
                   let final = case result {
                     Ok(details) -> details
@@ -171,6 +236,102 @@ pub fn start(
                   )
               }
           }
+      }
+    }
+  }
+}
+
+fn run_plan(
+  registry: hosts.Registry,
+  host: String,
+  cx: Codex,
+  stages: List(Stage),
+  max_turns: Int,
+  minutes: Int,
+  boundary: Option(#(Int, Int)),
+  results: List(Json),
+  spent: Int,
+) -> Result(Json, String) {
+  case stages {
+    [] ->
+      Ok(
+        json.object([
+          #("status", json.string("completed")),
+          #("message", json.string("All benchmark combinations completed")),
+          #("batchUsedPercent", json.int(spent)),
+          #("results", json.preprocessed_array(results)),
+        ]),
+      )
+    [stage, ..rest] -> {
+      use _ <- result.try(check(registry, host, "", oauth.now() + minutes * 60))
+      update(
+        host,
+        json.to_string(
+          json.object([
+            #("status", json.string("starting")),
+            #("stageIndex", json.int(list.length(results) + 1)),
+          ]),
+        ),
+      )
+      use details <- result.try(run(
+        registry,
+        host,
+        cx,
+        stage.model,
+        stage.effort,
+        stage.target,
+        max_turns,
+        oauth.now() + minutes * 60,
+        boundary,
+      ))
+      let assert Ok(data) = json.parse(json.to_string(details), decode.dynamic)
+      let reached = jsonx.field_bool(data, ["targetReached"]) == Ok(True)
+      let used = jsonx.field_int(data, ["usedPercent"]) |> result.unwrap(0)
+      let finished =
+        jsonx.object_with(data, [#("endedAt", json.int(oauth.now()))])
+      let results = list.append(results, [finished])
+      update(
+        host,
+        json.to_string(
+          json.object([
+            #(
+              "status",
+              json.string(case reached && rest != [] {
+                True -> "settling"
+                False ->
+                  case reached {
+                    True -> "completed"
+                    False -> "stopped"
+                  }
+              }),
+            ),
+            #("batchUsedPercent", json.int(spent + used)),
+            #("results", json.preprocessed_array(results)),
+          ]),
+        ),
+      )
+      usage.record(host, "benchmarkStageFinished", [#("summary", finished)])
+      case reached {
+        False ->
+          Error(
+            "Combination did not reach its target; remaining batch stages were not started",
+          )
+        True -> {
+          let assert Ok(final_used) =
+            jsonx.field_int(data, ["finalUsedPercent"])
+          let assert Ok(reset) = jsonx.field_int(data, ["resetsAt"])
+          run_plan(
+            registry,
+            host,
+            cx,
+            rest,
+            max_turns,
+            minutes,
+            Some(#(final_used, reset)),
+            results,
+            spent + used,
+          )
+        }
       }
     }
   }
@@ -228,6 +389,7 @@ fn run(
   target: Int,
   max_turns: Int,
   deadline: Int,
+  boundary: Option(#(Int, Int)),
 ) -> Result(Json, String) {
   update(
     host,
@@ -240,6 +402,12 @@ fn run(
         #("deadlineAt", json.int(deadline)),
         #("phase", json.string("baseline")),
         #("turns", json.int(0)),
+        #("threadId", json.null()),
+        #("usedPercent", json.int(0)),
+        #("settleElapsedSeconds", json.int(0)),
+        #("stableSeconds", json.int(0)),
+        #("targetReached", json.bool(False)),
+        #("settled", json.bool(False)),
         #("targetPercent", json.int(target)),
         #("workloadVersion", json.int(2)),
         #(
@@ -257,17 +425,36 @@ fn run(
       "account/read",
       json.object([#("refreshToken", json.bool(False))]),
     )
-  use first <- result.try(weekly(cx))
-  use initial <- result.try(sample_settle(
-    registry,
-    host,
-    cx,
-    "",
-    deadline,
-    first,
-    first.0,
-    60,
-  ))
+  use initial <- result.try(case boundary {
+    Some(reading) -> {
+      use current <- result.try(weekly(cx))
+      case current == reading {
+        True -> Ok(reading)
+        False ->
+          Error(
+            "Allowance changed during the model handoff; batch stopped to avoid misattributing usage",
+          )
+      }
+    }
+    None -> {
+      use first <- result.try(weekly(cx))
+      sample_settle(registry, host, cx, "", deadline, first, first.0, 60)
+    }
+  })
+  use _ <- result.try(case boundary {
+    Some(_) -> Ok(Nil)
+    None -> {
+      let required = case json.parse(status_text(host), decode.dynamic) {
+        Ok(data) ->
+          jsonx.field_int(data, ["batchTargetPercent"]) |> result.unwrap(target)
+        Error(_) -> target
+      }
+      case initial.0 + required <= 100 {
+        True -> Ok(Nil)
+        False -> Error("Not enough weekly allowance for the full batch target")
+      }
+    }
+  })
   case initial.0 + target <= 100 {
     False -> Error("Not enough weekly allowance for the selected target")
     True -> {
@@ -305,6 +492,13 @@ fn run(
         #("model", json.string(model)),
         #("effort", json.string(effort)),
         #("workloadVersion", json.int(2)),
+      ])
+      usage.record(host, "benchmarkBoundary", [
+        #("threadId", json.string(thread)),
+        #("model", json.string(model)),
+        #("effort", json.string(effort)),
+        #("usedPercent", json.int(initial.0)),
+        #("resetsAt", json.int(initial.1)),
       ])
       let subject = process.new_subject()
       codex.subscribe(cx, process.self(), subject)
@@ -374,6 +568,8 @@ fn rounds(
       ),
       #("targetReached", json.bool(used >= target)),
       #("baselineUsedPercent", json.int(initial.0)),
+      #("finalUsedPercent", json.int(current.0)),
+      #("resetsAt", json.int(current.1)),
       #("settled", json.bool(done)),
       #(
         "message",
@@ -388,12 +584,35 @@ fn rounds(
         }),
       ),
     ])
-  update(host, json.to_string(details))
+  // Only the plan coordinator publishes a terminal status for the whole batch.
+  let assert Ok(details_data) =
+    json.parse(json.to_string(details), decode.dynamic)
+  update(
+    host,
+    json.to_string(
+      jsonx.object_with(details_data, [
+        #(
+          "status",
+          json.string(case done {
+            True -> "settling"
+            False -> "running"
+          }),
+        ),
+      ]),
+    ),
+  )
   case current.1 != initial.1 {
     True -> Error("Weekly allowance reset; benchmark stopped")
     False ->
       case done {
-        True -> Ok(details)
+        True -> {
+          usage.record(host, "benchmarkBoundaryEnd", [
+            #("threadId", json.string(thread)),
+            #("usedPercent", json.int(current.0)),
+            #("resetsAt", json.int(current.1)),
+          ])
+          Ok(details)
+        }
         False -> {
           let prompt = workload(completed)
           use reply <- result.try(codex.request(

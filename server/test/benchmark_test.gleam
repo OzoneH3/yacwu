@@ -1,7 +1,9 @@
 import gleam/erlang/process
 import gleam/json
+import gleam/list
 import gleeunit/should
 import yacwu/benchmark
+import yacwu/benchmark_plan
 import yacwu/benchmark_settling
 
 @external(erlang, "yacwu_benchmark", "launch")
@@ -12,6 +14,31 @@ fn cancelled(label: String) -> Bool
 
 @external(erlang, "yacwu_benchmark", "finish")
 fn finish(label: String, status: String) -> Nil
+
+pub fn batch_plan_targets_and_order_test() {
+  let assert Ok(stages) = benchmark_plan.batch(["a", "b", "c"], True)
+  list.map(stages, fn(stage) { #(stage.model, stage.effort, stage.target) })
+  |> should.equal([
+    #("a", "low", 2),
+    #("a", "medium", 1),
+    #("b", "low", 1),
+    #("b", "medium", 1),
+    #("c", "low", 1),
+    #("c", "medium", 1),
+  ])
+  let assert Ok(conservative) = benchmark_plan.batch(["a", "b", "c"], False)
+  list.map(conservative, fn(stage) { stage.target })
+  |> should.equal([2, 2, 2, 2, 2, 2])
+}
+
+pub fn invalid_batch_plan_is_rejected_before_codex_work_test() {
+  let registry = process.new_name("unused_batch_registry")
+  let cx = process.new_name("unused_batch_codex")
+  list.each([[], [""], ["a", "a"], ["a", "b", "c", "d"]], fn(models) {
+    benchmark.start_batch(registry, "test", cx, models, True, 12, 20)
+    |> should.be_error
+  })
+}
 
 pub fn benchmark_limits_are_checked_before_any_codex_work_test() {
   let registry = process.new_name("unused_benchmark_registry")

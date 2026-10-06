@@ -100,15 +100,37 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 	let quotaPeak = 0;
 	let intervalIncomplete = false;
 	let excludedIntervals = 0;
+	let benchmarkInterval: string | null = null;
 	// Stored file order disambiguates notifications in the same millisecond.
 	for (const event of events) {
 		if (!Number.isFinite(event.at)) continue;
 		const id = event.threadId ? `${event.host}:${event.threadId}` : undefined;
 		if (event.event === 'benchmark' && id) benchmarks.add(id);
+		if (event.host === host && event.event === 'benchmarkBoundary' && id) {
+			const prior = quotas.at(-1);
+			if (prior?.accountKey === event.accountKey && prior.resetsAt === event.resetsAt && typeof event.usedPercent === 'number') {
+				baseline = { ...prior, at: event.at, usedPercent: event.usedPercent };
+				benchmarkInterval = id; intervalTokens = {}; intervalIncomplete = active.size > 0;
+			}
+			continue;
+		}
+		if (event.host === host && event.event === 'benchmarkBoundaryEnd' && benchmarkInterval === id && baseline) {
+			const delta = (event.usedPercent ?? 0) - (baseline.usedPercent ?? 0);
+			if (!intervalIncomplete && event.accountKey === baseline.accountKey && event.resetsAt === baseline.resetsAt && delta >= 1 && Object.values(intervalTokens).some((tokens) => tokens.totalTokens > 0)) {
+				observations.push({ percent: delta, tokens: intervalTokens });
+			} else excludedIntervals++;
+			baseline = { ...baseline, at: event.at, usedPercent: event.usedPercent };
+			intervalTokens = {}; intervalIncomplete = false; benchmarkInterval = null;
+			quotaStableSince = event.at; quotaPeak = event.usedPercent ?? 0; previousQuotaUsed = event.usedPercent ?? null;
+			continue;
+		}
+		if (event.host === host && event.event === 'benchmarkFinished' && benchmarkInterval) {
+			benchmarkInterval = null; baseline = null; intervalTokens = {}; intervalIncomplete = false;
+		}
 		if (event.event === 'collectorStarted' || event.event === 'connectionLost') {
 			for (const [key, task] of active) if (task.host === event.host) { task.endedAt = event.at; task.status = 'tracking gap'; task.partialTokens = true; active.delete(key); }
 			for (const key of totals.keys()) if (key.startsWith(`${event.host}:`)) totals.delete(key);
-			baseline = null; intervalTokens = {}; intervalIncomplete = false;
+			baseline = null; intervalTokens = {}; intervalIncomplete = false; benchmarkInterval = null;
 		} else if ((event.event === 'settings' || event.event === 'metadata') && id) {
 			const previous = settings.get(id);
 			settings.set(id, { model: event.model || previous?.model || 'Unknown', effort: event.effort || previous?.effort || 'Unknown', parent: event.parentThreadId || previous?.parent || null });
@@ -155,6 +177,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			if (delta > 0) lastTokenAt = event.at;
 			if (validTurn) for (const field of Object.keys(next) as (keyof TokenTotals)[]) task.tokens[field] += Math.max(0, next[field] - previous[field]);
 			if (baseline && delta > 0) {
+				if (benchmarkInterval && id !== benchmarkInterval) intervalIncomplete = true;
 				if (!validTurn || task.model === 'Unknown' || task.effort === 'Unknown') intervalIncomplete = true;
 				else {
 					const key = groupKey(task.model, task.effort), bucket = intervalTokens[key] ??= emptyTokens();
@@ -175,6 +198,12 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			if (calibrationScope && scope !== calibrationScope) observations.length = 0;
 			calibrationScope = scope;
 			const sameWindow = baseline && baseline.accountKey === event.accountKey && baseline.resetsAt === event.resetsAt && baseline.limitId === event.limitId && baseline.planType === event.planType;
+			// Explicit benchmark boundaries keep short stages separate and prevent double-counting
+			// the same token deltas through ordinary pooled quota observations.
+			if (benchmarkInterval) {
+				if (!sameWindow || event.usedPercent < (baseline?.usedPercent ?? 0)) intervalIncomplete = true;
+				continue;
+			}
 			if (!sameWindow) { quotaStableSince = event.at; quotaPeak = event.usedPercent; }
 			else {
 				if (previousQuotaUsed !== event.usedPercent) quotaStableSince = event.at;

@@ -7,6 +7,34 @@ const quota = (at: number, usedPercent: number, resetsAt = 1_000) => event(at, '
 const setup = (id: string, model: string): UsageEvent[] => [event(0, 'newThread', { threadId: id }), event(0, 'metadata', { threadId: id, model, effort: 'medium' }), event(1, 'turn/started', { threadId: id, turnId: id })];
 const tokens = (at: number, id: string, total: number) => event(at, 'tokens', { threadId: id, turnId: id, total: { totalTokens: total, inputTokens: total } });
 
+test('settled benchmark boundaries keep one-percent stages separate without double counting', () => {
+	const history: UsageEvent[] = [quota(0, 20)];
+	let used = 20;
+	for (const [index, amount] of [2, 1, 1].entries()) {
+		const id = `stage-${index}`, at = index * 100 + 1;
+		history.push(event(at, 'newThread', { threadId: id }), event(at, 'metadata', { threadId: id, model: id, effort: 'low' }),
+			event(at + 1, 'benchmarkBoundary', { threadId: id, usedPercent: used, resetsAt: 1000 }),
+			event(at + 2, 'turn/started', { threadId: id, turnId: id }), tokens(at + 3, id, 1000 * (index + 1)),
+			event(at + 4, 'turn/completed', { threadId: id, turnId: id }), quota(at + 5, used + amount),
+			event(at + 6, 'benchmarkBoundaryEnd', { threadId: id, usedPercent: used + amount, resetsAt: 1000 }));
+		used += amount;
+	}
+	const result = analyzeUsage(history);
+	expect(result.observations).toBe(3);
+	expect(result.rates.map((rate) => rate.tokens).sort((a, b) => a - b)).toEqual([1000, 2000, 3000]);
+	expect(result.excludedIntervals).toBe(0);
+});
+
+test('competing tokens contaminate a benchmark stage and cancellation discards an open interval', () => {
+	const history = [quota(0, 20), event(1, 'newThread', { threadId: 'a' }),
+		event(1, 'metadata', { threadId: 'a', model: 'a', effort: 'low' }),
+		event(2, 'benchmarkBoundary', { threadId: 'a', usedPercent: 20, resetsAt: 1000 }),
+		event(3, 'turn/started', { threadId: 'a', turnId: 'a' }), tokens(4, 'a', 100),
+		...setup('b', 'b').map((e) => ({ ...e, at: e.at + 5 })), tokens(7, 'b', 100)];
+	expect(analyzeUsage([...history, event(8, 'benchmarkBoundaryEnd', { threadId: 'a', usedPercent: 21, resetsAt: 1000 })]).observations).toBe(0);
+	expect(analyzeUsage([...history, event(8, 'benchmarkFinished'), quota(9, 22)]).observations).toBe(0);
+});
+
 test('learns separate model costs from independent overlapping usage mixtures', () => {
 	const result = analyzeUsage([
 		...setup('a', 'model-a'), ...setup('b', 'model-b'), quota(2, 0),

@@ -451,18 +451,31 @@ fn dispatch(
     ["api", "usage", "benchmark"], Post -> {
       use host, cx <- with_codex(ctx, req, None)
       let body = read_json_body(req)
-      case
-        benchmark.start(
-          ctx.registry,
-          host,
-          cx,
-          jsonx.field_string(body, ["model"]) |> result.unwrap(""),
-          jsonx.field_string(body, ["effort"]) |> result.unwrap(""),
-          jsonx.field_int(body, ["targetPercent"]) |> result.unwrap(2),
-          jsonx.field_int(body, ["maxTurns"]) |> result.unwrap(12),
-          jsonx.field_int(body, ["minutes"]) |> result.unwrap(20),
-        )
-      {
+      let outcome = case jsonx.field_bool(body, ["batch"]) == Ok(True) {
+        True ->
+          benchmark.start_batch(
+            ctx.registry,
+            host,
+            cx,
+            decode.run(body, decode.at(["models"], decode.list(decode.string)))
+              |> result.unwrap([]),
+            jsonx.field_bool(body, ["economical"]) |> result.unwrap(True),
+            jsonx.field_int(body, ["maxTurns"]) |> result.unwrap(12),
+            jsonx.field_int(body, ["minutes"]) |> result.unwrap(20),
+          )
+        False ->
+          benchmark.start(
+            ctx.registry,
+            host,
+            cx,
+            jsonx.field_string(body, ["model"]) |> result.unwrap(""),
+            jsonx.field_string(body, ["effort"]) |> result.unwrap(""),
+            jsonx.field_int(body, ["targetPercent"]) |> result.unwrap(2),
+            jsonx.field_int(body, ["maxTurns"]) |> result.unwrap(12),
+            jsonx.field_int(body, ["minutes"]) |> result.unwrap(20),
+          )
+      }
+      case outcome {
         Ok(_) -> json_response(202, benchmark.status(host))
         Error(message) -> json_response(400, error_body(message))
       }
