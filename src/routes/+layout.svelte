@@ -36,7 +36,8 @@
 	import { detectPromptKind, parseInteractiveChoice } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
-	import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
+import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
+import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-display';
 
 	let { children } = $props();
 
@@ -89,12 +90,6 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 		displayName: string;
 		defaultEffort: string;
 		efforts: string[];
-	}
-
-	interface ModelDisplayProfile {
-		capability: number;
-		efficiency: string;
-		valueRating: number;
 	}
 
 	interface TodoQueue {
@@ -348,10 +343,12 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	const activeModelChangedDuringTurn = $derived(
 		active?.status === 'running' && Boolean(activeTurnModel) && Boolean(activeConfig?.model) && activeTurnModel !== activeConfig?.model
 	);
-	const activeModels = $derived(activeId ? (sessionModels[activeId] ?? []) : []);
+	const activeModels = $derived(activeId ? filterAndSortModelChoices(sessionModels[activeId] ?? []) : []);
 	const activeEfforts = $derived(activeId ? (modelEfforts[activeId] ?? []) : []);
 	const activeModelChoice = $derived(
-		activeConfig ? (activeModels.find((choice) => choice.id === activeConfig.model) ?? null) : null
+		activeConfig && activeId
+			? (sessionModels[activeId]?.find((choice) => choice.id === activeConfig.model) ?? null)
+			: null
 	);
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
@@ -569,21 +566,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			promptDraftSessionId = id;
 		});
 	});
-
-	function modelDisplayProfile(choice: ModelChoice | null): ModelDisplayProfile | null {
-		if (!choice) return null;
-		const name = `${choice.displayName} ${choice.id}`.toLowerCase().replace(/[\s_-]+/g, ' ');
-		const profiles: Array<[RegExp, ModelDisplayProfile]> = [
-			[/gpt 6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional', valueRating: 5 }],
-			[/gpt 5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: 5 }],
-			[/gpt 6\.1 sol/, { capability: 93, efficiency: 'Excellent', valueRating: 5 }],
-			[/gpt 5\.6 terra/, { capability: 72, efficiency: 'Very good', valueRating: 4.5 }],
-			[/gpt 6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good', valueRating: 4.5 }],
-			[/gpt 5\.6 sol/, { capability: 79, efficiency: 'Good', valueRating: 3.5 }],
-			[/gpt 6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low', valueRating: 3.5 }]
-		];
-		return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
-	}
 
 	function upsertItem(
 		id: string,
@@ -5299,6 +5281,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											disabled={modelPending || effortPending || switchingPromptModel}
 											onchange={(event) => setComposerModel(event.currentTarget)}
 						>
+											{#if !activeModels.some((choice) => choice.id === activeConfig.model)}
+												<option value={activeConfig.model} disabled>{activeModelChoice?.displayName ?? activeConfig.model} · current</option>
+											{/if}
 							{#each activeModels as choice (choice.id)}
 								{@const profile = modelDisplayProfile(choice)}
 								<option value={choice.id}>
