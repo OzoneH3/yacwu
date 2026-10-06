@@ -4301,7 +4301,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			<nav class="sessions" data-loaded={sessionsLoaded}>
 				{#each topSessions as s (s.id)}
 					{@const sessionProgress = taskProgressForSession(s.id)}
-					{@const sessionTimeLeft = threads[s.id]?.status === 'running' && sessionProgress && sessionProgress.percent < 100
+					{@const sessionIsRunning = threads[s.id]?.status === 'running'}
+					{@const showSessionProgress = sessionIsRunning && (sessionProgress?.percent ?? 0) < 100}
+					{@const sessionTimeLeft = showSessionProgress && sessionProgress
 						? formatEstimatedRemaining(sessionProgress.remainingMinutes)
 						: null}
 				<div
@@ -4313,7 +4315,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				>
 					<button
 						class="session-drag-handle"
-						class:has-progress={Boolean(sessionTimeLeft)}
+						class:has-progress={showSessionProgress}
 					type="button"
 						aria-label={sessionTimeLeft ? `${sessionTimeLeft}; reorder ${shortLabel(s)}` : `Reorder ${shortLabel(s)}`}
 						title={sessionTimeLeft ?? undefined}
@@ -4328,8 +4330,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							}
 						}}
 					>
-						{#if sessionTimeLeft}
-							<span class="session-progress-percent" aria-hidden="true">{sessionProgress?.percent}%</span>
+						{#if showSessionProgress}
+							<span class="session-progress-percent" aria-hidden="true">{sessionProgress?.percent ?? 0}%</span>
 						{:else}
 							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3h1M10 3h1M5 8h1m4 0h1m-6 5h1m4 0h1" /></svg>
 						{/if}
