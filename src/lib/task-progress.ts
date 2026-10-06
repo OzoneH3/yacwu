@@ -39,6 +39,7 @@ export function separateTaskProgressEntries<T extends { type: string; id: string
 	items: T[]
 ): Array<T | TaskProgressTranscriptEntry> {
 	const result: Array<T | TaskProgressTranscriptEntry> = [];
+	let lastEstimate: TaskProgressEstimate | null = null;
 	for (const item of items) {
 		if (item.type !== 'agentMessage' || typeof item.text !== 'string') {
 			result.push(item);
@@ -47,7 +48,12 @@ export function separateTaskProgressEntries<T extends { type: string; id: string
 		const estimate = parseTaskProgress(item.text);
 		const visibleText = stripTaskProgressMarkers(item.text);
 		if (visibleText || !estimate) result.push({ ...item, text: visibleText });
-		if (estimate) result.push({ type: 'taskProgress', id: `progress-${item.id}`, ...estimate });
+		if (estimate) {
+			const isDuplicate = lastEstimate?.percent === estimate.percent
+				&& lastEstimate.remainingMinutes === estimate.remainingMinutes;
+			if (!isDuplicate) result.push({ type: 'taskProgress', id: `progress-${item.id}`, ...estimate });
+			lastEstimate = estimate;
+		}
 	}
 	return result;
 }

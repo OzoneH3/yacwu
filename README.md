@@ -28,7 +28,8 @@ state lives entirely in Codex's own persistent sessions, read back via
 - ⏱️ The Session bar keeps the current prompt visible, puts task progress and
   time-left estimates before the Session label, and shows 5-hour / 7-day usage
   on the right, with reset countdowns and local reset dates/times on hover.
-  Progress updates appear as their own transcript entries;
+  Progress updates appear as their own transcript entries, while repeated
+  identical estimates are omitted;
   elapsed time appears while work runs and on its completed response. The
   session list shows 0% until a running task reports progress, with time left
   available on hover once estimated
