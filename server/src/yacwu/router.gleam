@@ -935,6 +935,29 @@ fn thread_root(cx: Codex, thread_id: String) -> Result(String, String) {
   }
 }
 
+/// Resolve an optional explicit root used by absolute transcript file links.
+fn workspace_root(
+  host: String,
+  cx: Codex,
+  req: Request(Connection),
+  thread_id: String,
+) -> Result(String, String) {
+  case query_value(req, "root") {
+    "" -> thread_root(cx, thread_id)
+    root ->
+      case filepath.is_absolute(root) && !string.contains(root, "\u{0000}") {
+        False -> Error("invalid workspace root")
+        True -> {
+          let resolved = case hosts.is_local(host) {
+            True -> resolve_cwd(root)
+            False -> resolve_cwd_against(root, codex.info(cx).home)
+          }
+          Ok(resolved)
+      }
+      }
+  }
+}
+
 /// The sanitized `path` query parameter ("" is the session root).
 fn query_rel_path(req: Request(Connection)) -> Result(String, Nil) {
   request.get_query(req)
@@ -980,7 +1003,7 @@ fn list_files(
   case query_rel_path(req) {
     Error(_) -> json_response(400, error_body("invalid path"))
     Ok(rel) ->
-      case thread_root(cx, thread_id) {
+      case workspace_root(host, cx, req, thread_id) {
         Error(message) -> json_response(500, error_body(message))
         Ok(root) ->
           case
@@ -1011,7 +1034,7 @@ fn read_file(
     Error(_) -> json_response(400, error_body("invalid path"))
     Ok("") -> json_response(400, error_body("file path is required"))
     Ok(rel) ->
-      case thread_root(cx, thread_id) {
+      case workspace_root(host, cx, req, thread_id) {
         Error(message) -> json_response(500, error_body(message))
         Ok(root) -> {
           let meta = fn(size: Int) {
@@ -1048,7 +1071,7 @@ fn write_text_file(
                 error_body("file is too large to save from the browser"),
               )
             False ->
-              case thread_root(cx, thread_id) {
+              case workspace_root(host, cx, req, thread_id) {
                 Error(message) -> json_response(500, error_body(message))
                 Ok(root) ->
                   case
