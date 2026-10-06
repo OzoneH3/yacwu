@@ -175,6 +175,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	let sessionOpening = $state<Record<string, boolean>>({});
 	let interruptedSessions = $state<Record<string, boolean>>({});
 	let finishedSessions = $state<Record<string, boolean>>({});
+	let dismissedAttentionByThread = $state<Record<string, boolean>>({});
 	let recoveringSessions = $state<Record<string, boolean>>({});
 	let startupRecoveryComplete = $state(false);
 	let sessionConfigs = $state<Record<string, { model: string; effort: string; profile: string | null }>>({});
@@ -258,6 +259,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
 	const FINISHED_SESSIONS_KEY = 'yacwu-finished-sessions';
+	const DISMISSED_ATTENTION_KEY = 'yacwu-dismissed-attention';
 	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
 	const RESTART_CONTINUATION_PROMPT =
 		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
@@ -391,6 +393,7 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 			if (item.type === 'userMessage') return null;
 			if (item.type === 'agentMessage') {
 				const kind = detectPromptKind(String(item.text ?? ''));
+				if (kind === 'unknown' && dismissedAttentionByThread[threadId]) return null;
 				return kind === 'choice' ? 'choice' : kind === 'unknown' ? 'alert' : null;
 			}
 		}
@@ -811,6 +814,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			return;
 		}
 		clearFinishedSession(id);
+		markSessionAttentionRead(id);
 		closeSidebar(false);
 	}
 
@@ -819,6 +823,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const { [id]: _read, ...remaining } = finishedSessions;
 		finishedSessions = remaining;
 		localStorage.setItem(FINISHED_SESSIONS_KEY, JSON.stringify(remaining));
+	}
+
+	function markSessionAttentionRead(id: string) {
+		const threadIds = [id, ...agentsForSession(agents, id).map((agent) => agent.id)];
+		const next = { ...dismissedAttentionByThread };
+		for (const threadId of threadIds) {
+			if (!threads[threadId]?.error) next[threadId] = true;
+		}
+		dismissedAttentionByThread = next;
+		localStorage.setItem(DISMISSED_ATTENTION_KEY, JSON.stringify(next));
 	}
 
 	function markSessionFinished(id: string) {
@@ -842,6 +856,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			persistInterruptedSessions();
 		}
 		if (finishedSessions[id]) clearFinishedSession(id);
+		const relatedAttentionIds = [id, ...agentsForSession(agents, id).map((agent) => agent.id)];
+		const remainingAttention = { ...dismissedAttentionByThread };
+		for (const threadId of relatedAttentionIds) delete remainingAttention[threadId];
+		dismissedAttentionByThread = remainingAttention;
+		localStorage.setItem(DISMISSED_ATTENTION_KEY, JSON.stringify(remainingAttention));
 		for (const agent of Object.values(agents)) {
 			if (agentRootId(agents, agent) === id) {
 				delete agents[agent.id];
@@ -1217,6 +1236,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			case 'item/started':
 			case 'item/completed': {
 				if (tid && p.item?.id) {
+					if (msg.method === 'item/completed' && p.item.type === 'agentMessage' && dismissedAttentionByThread[tid]) {
+						const { [tid]: _read, ...remainingAttention } = dismissedAttentionByThread;
+						dismissedAttentionByThread = remainingAttention;
+						localStorage.setItem(DISMISSED_ATTENTION_KEY, JSON.stringify(remainingAttention));
+					}
 					if (p.item.type === 'userMessage') dropEchoedUserMessage(tid, p.item);
 					upsertItem(tid, p.item, true);
 				}
@@ -1678,6 +1702,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			unseenActivity = false;
 			if (!id) return;
 			clearFinishedSession(id);
+			markSessionAttentionRead(id);
 			// Stale browsing state must not leak across visits to a session.
 			composerHistories.get(id)?.resetNavigation();
 			slashDismissedToken = null;
@@ -3799,7 +3824,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch {
 			finishedSessions = {};
 		}
-		if (activeId) clearFinishedSession(activeId);
+		try {
+			const savedAttention = JSON.parse(localStorage.getItem(DISMISSED_ATTENTION_KEY) ?? '{}');
+			if (savedAttention && typeof savedAttention === 'object' && !Array.isArray(savedAttention)) {
+				dismissedAttentionByThread = Object.fromEntries(
+					Object.entries(savedAttention).filter((entry): entry is [string, boolean] => entry[1] === true)
+				);
+			}
+		} catch {
+			dismissedAttentionByThread = {};
+		}
+		if (activeId) {
+			clearFinishedSession(activeId);
+			markSessionAttentionRead(activeId);
+		}
 		try {
 			const savedOrder = JSON.parse(localStorage.getItem(SESSION_ORDER_KEY) ?? '[]');
 			if (Array.isArray(savedOrder)) sessionOrder = savedOrder.filter((id): id is string => typeof id === 'string');
@@ -4281,7 +4319,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							title={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
 						></span>
 		<span class="label">
-							{#if sessionAttentionById[s.id]}
+							{#if sessionAttentionById[s.id] && !(finishedSessions[s.id] && sessionAttentionById[s.id] === 'alert')}
 								<span
 									class="needs-input-indicator"
 									class:choice={sessionAttentionById[s.id] === 'choice'}
@@ -4290,7 +4328,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									title={sessionAttentionById[s.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
 								>{sessionAttentionById[s.id] === 'choice' ? '?' : '!'}</span>
 							{/if}
-							{#if finishedSessions[s.id]}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
+							{#if finishedSessions[s.id] && s.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
 					{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
 							{#if interruptedSessions[s.id]}<span class="session-interrupted">Interrupted</span>
 							{:else if recoveringSessions[s.id]}<span class="session-interrupted checking">Checking…</span>{/if}
@@ -4319,7 +4357,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								title={threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle'}
 							></span>
 							<span class="label">
-								{#if sessionAttentionById[side.id]}
+								{#if sessionAttentionById[side.id] && !(finishedSessions[side.id] && sessionAttentionById[side.id] === 'alert')}
 									<span
 										class="needs-input-indicator"
 										class:choice={sessionAttentionById[side.id] === 'choice'}
@@ -4328,7 +4366,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										title={sessionAttentionById[side.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
 									>{sessionAttentionById[side.id] === 'choice' ? '?' : '!'}</span>
 								{/if}
-								{#if finishedSessions[side.id]}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
+								{#if finishedSessions[side.id] && side.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
 								⎇ {shortLabel(side)}
 							</span>
 							{#if fastSessions[side.id]}{@render fastMark()}{/if}
