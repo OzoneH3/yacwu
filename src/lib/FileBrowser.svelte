@@ -31,6 +31,7 @@
 	let {
 		threadId,
 		cwd,
+		rootOverride = null,
 		host = '',
 		theme = 'light',
 		embedded = false,
@@ -41,6 +42,7 @@
 	}: {
 		threadId: string;
 		cwd: string;
+		rootOverride?: string | null;
 		/** Remote host serving this session's files ('' or 'local' for this machine). */
 		host?: string;
 		theme?: 'light' | 'dark';
@@ -53,7 +55,7 @@
 
 	// Prefer the root the server reports; the cwd prop covers the first paint.
 	let serverRoot = $state<string | null>(null);
-	const root = $derived(serverRoot ?? cwd);
+	const root = $derived(rootOverride ?? serverRoot ?? cwd);
 	let dirs = $state<Record<string, DirState>>({});
 	let changeStats = $state<Record<string, FileChangeStats>>({});
 	let expanded = $state<Record<string, boolean>>({});
@@ -111,7 +113,7 @@
 		const work = (async () => {
 			dirs[path] = { status: 'loading' };
 			try {
-				const res = await fetch(workspacePathUrl(threadId, 'files', path, host));
+				const res = await fetch(workspacePathUrl(threadId, 'files', path, host, rootOverride ?? undefined));
 				const data = await res.json();
 				if (!res.ok) throw new Error(data.error ?? `failed to list directory (${res.status})`);
 				if (typeof data.root === 'string' && data.root) serverRoot = data.root;
@@ -163,7 +165,7 @@
 		file = { status: 'loading', path };
 		try {
 			const res = await fetch(
-				workspacePathUrl(threadId, 'file', path, host)
+				workspacePathUrl(threadId, 'file', path, host, rootOverride ?? undefined)
 			);
 			const data = await res.json();
 			if (request !== fileRequest) return;
@@ -210,7 +212,7 @@
 		saveStatus = '';
 		saveError = null;
 		try {
-			const res = await fetch(workspacePathUrl(threadId, 'file', selectedPath, host), {
+			const res = await fetch(workspacePathUrl(threadId, 'file', selectedPath, host, rootOverride ?? undefined), {
 				method: 'PUT',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ content })
@@ -266,7 +268,11 @@
 	// repeated requests for the same path still take effect.
 	$effect(() => {
 		threadId;
+		rootOverride;
 		untrack(() => {
+			dirs = {};
+			expanded = {};
+			serverRoot = null;
 			void loadDir('');
 			void loadChangeStats();
 			void tick().then(() => closeEl?.focus());

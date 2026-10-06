@@ -209,7 +209,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	const internallyRemovedTitles = new WeakSet<Element>();
 	// Read-only file browser (FileBrowser.svelte), rooted at the session cwd.
 	let filesOpenBySession = $state<Record<string, boolean>>({});
-	let filesRevealBySession = $state<Record<string, { path: string; line: number | null; nonce: number } | null>>({});
+	let filesRevealBySession = $state<Record<string, { path: string; line: number | null; root?: string | null; nonce: number } | null>>({});
 	let fileChangeLineStats = $state<Record<string, { additions: number | null; deletions: number | null }>>({});
 	let fileChangeStatsRequest = 0;
 	let fileLinkPreview = $state<{ path: string; content: string } | null>(null);
@@ -3415,29 +3415,29 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	/** Open the file browser at a session-relative path, optionally on a line. */
-	function openFileInBrowser(rel: string, line: number | null = null) {
+	function openFileInBrowser(rel: string, line: number | null = null, root: string | null = null) {
 		if (!activeId) return;
 		changesOpenBySession[activeId] = false;
 		filesOpenBySession[activeId] = true;
-		filesRevealBySession[activeId] = { path: rel, line, nonce: ++localCounter };
+		filesRevealBySession[activeId] = { path: rel, line, root, nonce: ++localCounter };
 	}
 
-	async function loadFileLinkPreview(path: string) {
+	async function loadFileLinkPreview(path: string, root?: string | null) {
 		if (!activeId) return;
 		const id = activeId;
 		fileLinkPreview = { path, content: 'Loading…' };
 		try {
-			const data = await readWorkspaceLink(id, path, sessionHost(id));
+			const data = await readWorkspaceLink(id, path, sessionHost(id), fetch, root ?? undefined);
 			if (activeId === id && fileLinkPreview?.path === path) fileLinkPreview = { path, content: data.content.slice(0, 2400) };
 		} catch (error) {
 			if (activeId === id && fileLinkPreview?.path === path) fileLinkPreview = { path, content: error instanceof Error ? error.message : 'Could not load file' };
 		}
 	}
 
-	async function copyFileLinkContents(path: string) {
+	async function copyFileLinkContents(path: string, root?: string | null) {
 		try {
 			if (!activeId) throw new Error('No active session');
-			const data = await readWorkspaceLink(activeId, path, sessionHost(activeId));
+			const data = await readWorkspaceLink(activeId, path, sessionHost(activeId), fetch, root ?? undefined);
 			if (!data.copyable) throw new Error('This file cannot be copied as text');
 			await navigator.clipboard.writeText(data.content);
 			copiedFileLink = path;
@@ -3470,7 +3470,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function agentPathTarget(
 		text: string,
 		requireSeparator = true
-	): { path: string; line: number | null } | null {
+	): { path: string; line: number | null; root: string | null } | null {
 		if (!activeId) return null;
 		let candidate = text.trim();
 		try {
@@ -3479,6 +3479,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			/* not URL-encoded — use as written */
 		}
 		let line: number | null = null;
+		let root: string | null = null;
 		const withLine = candidate.match(/^(.*?):(\d+)(?::\d+)?$/);
 		if (withLine) {
 			candidate = withLine[1];
@@ -3487,12 +3488,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (candidate.length > 1) candidate = candidate.replace(/\/+$/, '');
 		if (candidate.startsWith('/')) {
 			const rawCwd = cwds[activeId] ?? activeSummary?.cwd;
-			if (!rawCwd) return null;
-			const cwd = rawCwd.replace(/[\\/]+$/, '') || '/';
-			if (candidate === cwd) return { path: '', line: null };
-			const prefix = cwd === '/' ? '/' : `${cwd}/`;
-			if (!candidate.startsWith(prefix)) return null;
-			candidate = candidate.slice(prefix.length);
+			const cwd = rawCwd?.replace(/[\\/]+$/, '') || '';
+			if (!cwd) {
+				const slash = candidate.lastIndexOf('/');
+				root = slash <= 0 ? '/' : candidate.slice(0, slash);
+				candidate = candidate.slice(slash + 1);
+			} else {
+			const normalizedCwd = cwd || '/';
+			if (candidate === normalizedCwd) return { path: '', line: null, root: null };
+			const prefix = normalizedCwd === '/' ? '/' : `${normalizedCwd}/`;
+			if (candidate.startsWith(prefix)) candidate = candidate.slice(prefix.length);
+			else {
+				const slash = candidate.lastIndexOf('/');
+				root = slash <= 0 ? '/' : candidate.slice(0, slash);
+				candidate = candidate.slice(slash + 1);
+			}
+			}
 		} else if (candidate.startsWith('./')) {
 			candidate = candidate.slice(2);
 		}
@@ -3504,7 +3515,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (!pattern.test(candidate)) return null;
 		// The character class admits dots, so rule out ".."-style segments.
 		if (candidate.split('/').some((segment) => /^\.+$/.test(segment))) return null;
-		return { path: candidate, line };
+		return { path: candidate, line, root };
 	}
 
 	function displayFileChangePath(ch: any): string {
@@ -4125,9 +4136,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{:else if token.type === 'code'}
 			{@const pathTarget = agentPathTarget(token.text)}
 			{#if pathTarget !== null}
-				<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(pathTarget.path)} onmouseleave={() => fileLinkPreview?.path === pathTarget.path && (fileLinkPreview = null)}>
-					<button type="button" class="code-path" title={pathTarget.line ? `Open in file browser at line ${pathTarget.line}` : 'Open in file browser'} onclick={() => openFileInBrowser(pathTarget.path, pathTarget.line)}><code>{token.text}</code></button>
-					<button type="button" class="file-link-copy" aria-label={`Copy ${pathTarget.path}`} title={copiedFileLink === pathTarget.path ? 'Copied' : 'Copy file contents or folder listing'} onclick={() => void copyFileLinkContents(pathTarget.path)}>{copiedFileLink === pathTarget.path ? '✓' : '⧉'}</button>
+				<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(pathTarget.path, pathTarget.root)} onmouseleave={() => fileLinkPreview?.path === pathTarget.path && (fileLinkPreview = null)}>
+					<button type="button" class="code-path" title={pathTarget.line ? `Open in file browser at line ${pathTarget.line}` : 'Open in file browser'} onclick={() => openFileInBrowser(pathTarget.path, pathTarget.line, pathTarget.root)}><code>{token.text}</code></button>
+					<button type="button" class="file-link-copy" aria-label={`Copy ${pathTarget.path}`} title={copiedFileLink === pathTarget.path ? 'Copied' : 'Copy file contents or folder listing'} onclick={() => void copyFileLinkContents(pathTarget.path, pathTarget.root)}>{copiedFileLink === pathTarget.path ? '✓' : '⧉'}</button>
 					{#if fileLinkPreview?.path === pathTarget.path}<span class="file-link-preview"><strong>{pathTarget.path}</strong><pre>{fileLinkPreview.content}</pre></span>{/if}
 				</span>
 			{:else}
@@ -4139,9 +4150,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			{#if token.href}
 				{@const fileTarget = token.external ? null : agentPathTarget(token.href, false)}
 				{#if fileTarget !== null}
-					<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(fileTarget.path)} onmouseleave={() => fileLinkPreview?.path === fileTarget.path && (fileLinkPreview = null)}>
-						<button type="button" class="link-path" title={fileTarget.line ? `Open ${fileTarget.path} at line ${fileTarget.line}` : `Open ${fileTarget.path} in file browser`} onclick={() => openFileInBrowser(fileTarget.path, fileTarget.line)}>{@render markdownInlines(token.children)}</button>
-						<button type="button" class="file-link-copy" aria-label={`Copy ${fileTarget.path}`} title={copiedFileLink === fileTarget.path ? 'Copied' : 'Copy file contents or folder listing'} onclick={() => void copyFileLinkContents(fileTarget.path)}>{copiedFileLink === fileTarget.path ? '✓' : '⧉'}</button>
+					<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(fileTarget.path, fileTarget.root)} onmouseleave={() => fileLinkPreview?.path === fileTarget.path && (fileLinkPreview = null)}>
+						<button type="button" class="link-path" title={fileTarget.line ? `Open ${fileTarget.path} at line ${fileTarget.line}` : `Open ${fileTarget.path} in file browser`} onclick={() => openFileInBrowser(fileTarget.path, fileTarget.line, fileTarget.root)}>{@render markdownInlines(token.children)}</button>
+						<button type="button" class="file-link-copy" aria-label={`Copy ${fileTarget.path}`} title={copiedFileLink === fileTarget.path ? 'Copied' : 'Copy file contents or folder listing'} onclick={() => void copyFileLinkContents(fileTarget.path, fileTarget.root)}>{copiedFileLink === fileTarget.path ? '✓' : '⧉'}</button>
 						{#if fileLinkPreview?.path === fileTarget.path}<span class="file-link-preview"><strong>{fileTarget.path}</strong><pre>{fileLinkPreview.content}</pre></span>{/if}
 					</span>
 				{:else}
@@ -4777,6 +4788,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<FileBrowser
 								threadId={activeId}
 								cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
+								rootOverride={filesReveal?.root ?? null}
 								host={activeHost}
 								embedded
 								{theme}

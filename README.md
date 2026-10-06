@@ -88,6 +88,8 @@ state lives entirely in Codex's own persistent sessions, read back via
   yacwu restarts while remote turns keep running. Full feature parity: the
   file browser, Git viewer, images, profiles, and in-use detection all
   operate on the remote machine. See [docs/remote.md](docs/remote.md)
+- 🔗 Transcript links to absolute files open at their linked folder, including
+  files outside the session's working directory
 - 🗄️ No storage layer — Codex is the source of truth
 
 ## Slash commands
