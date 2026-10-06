@@ -4277,9 +4277,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</button>
 			</div>
 		{/if}
-		<nav class="sessions" data-loaded={sessionsLoaded}>
-			{#each topSessions as s (s.id)}
-				{@const sessionProgress = taskProgressForSession(s.id)}
+			<nav class="sessions" data-loaded={sessionsLoaded}>
+				{#each topSessions as s (s.id)}
+					{@const sessionProgress = taskProgressForSession(s.id)}
+					{@const sessionTimeLeft = threads[s.id]?.status === 'running' && sessionProgress && sessionProgress.percent < 100
+						? formatEstimatedRemaining(sessionProgress.remainingMinutes)
+						: null}
 				<div
 					class="session-row"
 					data-session-row-id={s.id}
@@ -4291,8 +4294,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						class="session-drag-handle"
 						class:has-progress={Boolean(sessionProgress)}
 					type="button"
-						aria-label={sessionProgress ? `Estimated ${sessionProgress.percent}% complete, ${formatEstimatedRemaining(sessionProgress.remainingMinutes)}; reorder ${shortLabel(s)}` : `Reorder ${shortLabel(s)}`}
-						title={sessionProgress ? `Estimated ${sessionProgress.percent}% done · ${formatEstimatedRemaining(sessionProgress.remainingMinutes)} · drag to reorder; use arrow keys to move` : 'Drag to reorder; use arrow keys to move'}
+						aria-label={sessionTimeLeft ? `${sessionTimeLeft}; reorder ${shortLabel(s)}` : `Reorder ${shortLabel(s)}`}
+						title={sessionTimeLeft ?? undefined}
 						onpointerdown={(event) => startSessionDrag(event, s.id)}
 						onpointermove={moveSessionDrag}
 						onpointerup={finishSessionDrag}
