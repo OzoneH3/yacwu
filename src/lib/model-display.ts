@@ -11,12 +11,12 @@ export interface ModelChoiceSummary {
 
 const profiles: Array<[RegExp, ModelDisplayProfile]> = [
 	[/gpt 6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional', valueRating: 5 }],
-	[/gpt 5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: 5 }],
-	[/gpt 6\.1 sol/, { capability: 93, efficiency: 'Excellent', valueRating: 5 }],
-	[/gpt 5\.6 terra/, { capability: 72, efficiency: 'Very good', valueRating: 4.5 }],
-	[/gpt 6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good', valueRating: 4.5 }],
-	[/gpt 5\.6 sol/, { capability: 79, efficiency: 'Good', valueRating: 3.5 }],
-	[/gpt 6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low', valueRating: 3.5 }]
+	[/gpt 5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: 4.5 }],
+	[/gpt 6\.1 sol/, { capability: 93, efficiency: 'Excellent', valueRating: 3 }],
+	[/gpt 5\.6 terra/, { capability: 72, efficiency: 'Very good', valueRating: 3 }],
+	[/gpt 6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good', valueRating: 2.5 }],
+	[/gpt 5\.6 sol/, { capability: 79, efficiency: 'Good', valueRating: 2 }],
+	[/gpt 6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low', valueRating: 1 }]
 ];
 
 const efficiencyRank: Record<string, number> = {

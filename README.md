@@ -35,10 +35,12 @@ state lives entirely in Codex's own persistent sessions, read back via
   Previous group; agent transcripts are read-only, and agent activity links
   jump directly to the corresponding transcript
 - 🧠 Choose a model and reasoning effort per session. Model capability,
-  usage-efficiency, and value indicators appear in the model choices; after
-  selection, the picker shows only the model name. These are Yacwu display
-  estimates, not official benchmark scores. If you change models mid-turn, you
-  can stop and restart the current prompt on the newly selected model
+  usage-efficiency, and value indicators appear in the model choices. Value
+  ratings now emphasize capability per estimated 1% of Pro allowance used;
+  these are rough Yacwu comparisons, not official benchmark scores. After
+  selection, the picker shows only the model name. If you change models
+  mid-turn, you can stop and restart the current prompt on the newly selected
+  model
 - 💬 Interactive answers: direct questions and questions with listed options
   open a prompt dialog; answer or dismiss each to advance through the session's
   question queue, including questions from its agents

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { filterAndSortModelChoices } from '../../src/lib/model-display';
+import { filterAndSortModelChoices, modelDisplayProfile } from '../../src/lib/model-display';
 
 const models = [
 	{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
@@ -12,6 +12,18 @@ const models = [
 ];
 
 describe('model display ranking', () => {
+	test('rates value by capability per estimated allowance use', () => {
+		expect(models.map((model) => [model.id, modelDisplayProfile(model)?.valueRating])).toEqual([
+			['gpt-5.6-sol', 2],
+			['gpt-6-astra', 1],
+			['gpt-5.6-luna', 4.5],
+			['gpt-6.1-sol', 3],
+			['gpt-6-luna', 5],
+			['gpt-5.6-terra', 3],
+			['gpt-6-sol', 2.5]
+		]);
+	});
+
 	test('hides known dominated models and sorts by efficiency then capability', () => {
 		expect(filterAndSortModelChoices(models).map((model) => model.id)).toEqual([
 			'gpt-6-luna',
