@@ -33,7 +33,7 @@
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
-	import { detectPromptKind, parseInteractiveChoice } from '$lib/interactive-choice';
+	import { detectPromptKind, parseInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
@@ -321,7 +321,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 			const item = items[index] as any;
 			if (item.type === 'userMessage') return null;
 			if (item.type === 'agentMessage') {
-				const choice = parseInteractiveChoice(String(item.text ?? ''));
+				const choice = parseInteractiveQuestion(String(item.text ?? ''));
 				return choice ? { id: String(item.id), ...choice } : null;
 			}
 		}
@@ -4797,6 +4797,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</button>
 						</div>
 						<p id="interactive-choice-question">{pendingInteractiveChoice.question}</p>
+						{#if pendingInteractiveChoice.options.length > 0}
 						<div class="interactive-choice-options" aria-label="Choose a response">
 							{#each pendingInteractiveChoice.options as option, index (option)}
 								<button
@@ -4809,6 +4810,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								</button>
 							{/each}
 						</div>
+						{/if}
 						<form
 							class="interactive-choice-other"
 							onsubmit={(event) => {
@@ -4816,7 +4818,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								answerInteractiveChoice(choiceCustomAnswer);
 							}}
 						>
-							<label for="interactive-choice-custom">Other</label>
+							<label for="interactive-choice-custom">{pendingInteractiveChoice.options.length > 0 ? 'Other' : 'Your answer'}</label>
 							<textarea
 								id="interactive-choice-custom"
 								bind:value={choiceCustomAnswer}

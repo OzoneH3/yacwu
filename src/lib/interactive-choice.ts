@@ -30,8 +30,22 @@ export function parseInteractiveChoice(text: string): InteractiveChoice | null {
 	return { question, options };
 }
 
+/** Recognize a direct question even when the assistant adds a proposed default after it. */
+export function parseInteractiveQuestion(text: string): InteractiveChoice | null {
+	const choice = parseInteractiveChoice(text);
+	if (choice) return choice;
+	const normalized = text.trim();
+	const questionEnd = normalized.indexOf('?');
+	if (questionEnd < 0) return null;
+	const before = normalized.slice(0, questionEnd);
+	const boundary = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('\n'));
+	const question = normalized.slice(boundary + 1, questionEnd + 1).trim();
+	if (!question || !/^(?:what|which|where|when|who|whom|whose|why|how|can|could|would|should|will|do|does|did|is|are|am|was|were|have|has|had|may|might|shall)\b/i.test(question)) return null;
+	return { question, options: [] };
+}
+
 export function detectPromptKind(text: string): PromptKind {
-	if (parseInteractiveChoice(text)) return 'choice';
+	if (parseInteractiveQuestion(text)) return 'choice';
 	const finalText = text.trim().replace(/[\*_`~]+\s*$/, '').trim();
 	return finalText.endsWith('?') ? 'unknown' : null;
 }

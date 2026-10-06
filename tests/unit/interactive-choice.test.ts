@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { detectPromptKind, parseInteractiveChoice } from '../../src/lib/interactive-choice';
+import { detectPromptKind, parseInteractiveChoice, parseInteractiveQuestion } from '../../src/lib/interactive-choice';
 
 describe('parseInteractiveChoice', () => {
 	test('recognizes a question followed by numbered options', () => {
@@ -18,11 +18,18 @@ describe('parseInteractiveChoice', () => {
 
 	test('ignores ordinary questions and oversized option lists', () => {
 		expect(parseInteractiveChoice('Should I continue?')).toBeNull();
+		expect(parseInteractiveQuestion('Should I continue?')).toEqual({ question: 'Should I continue?', options: [] });
 		expect(parseInteractiveChoice('Which one?\n- A\n- B\n- C\n- D\n- E\n- F\n- G')).toBeNull();
 	});
 
-	test('classifies freeform questions as unknown prompts', () => {
-		expect(detectPromptKind('Which directory should I use?')).toBe('unknown');
+	test('recognizes freeform questions followed by a proposed default', () => {
+		const message = 'What is the measured distance from the mounting face to the metal grille? I can build an adjustable prototype assuming the flange sits 25 mm inside the grille.';
+		expect(parseInteractiveQuestion(message)).toEqual({
+			question: 'What is the measured distance from the mounting face to the metal grille?',
+			options: []
+		});
+		expect(detectPromptKind(message)).toBe('choice');
+		expect(detectPromptKind('Which directory should I use?')).toBe('choice');
 		expect(detectPromptKind('Which approach should I take?\n- Fix the bug\n- Add a test')).toBe('choice');
 		expect(detectPromptKind('The changes are ready.')).toBeNull();
 	});
