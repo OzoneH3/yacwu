@@ -218,6 +218,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let modelPending = $state(false);
 	let switchingPromptModel = $state(false);
 	let turnModels = $state<Record<string, string>>({});
+	let turnEfforts = $state<Record<string, string>>({});
 	let effortPending = $state(false);
 	let accountUsageByHost = $state<Record<string, AccountUsage>>({});
 	let accountUsageFetchedAt = $state<Record<string, number>>({});
@@ -340,9 +341,14 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	});
 	const activeConfig = $derived(activeId ? sessionConfigs[activeId] : null);
 	const activeTurnModel = $derived(activeId ? turnModels[activeId] : null);
+	const activeTurnEffort = $derived(activeId ? turnEfforts[activeId] : null);
 	const activeModelChangedDuringTurn = $derived(
 		active?.status === 'running' && Boolean(activeTurnModel) && Boolean(activeConfig?.model) && activeTurnModel !== activeConfig?.model
 	);
+	const activeEffortChangedDuringTurn = $derived(
+		active?.status === 'running' && Boolean(activeTurnEffort) && Boolean(activeConfig?.effort) && activeTurnEffort !== activeConfig?.effort
+	);
+	const activeSettingsChangedDuringTurn = $derived(activeModelChangedDuringTurn || activeEffortChangedDuringTurn);
 	const activeModels = $derived(activeId ? filterAndSortModelChoices(sessionModels[activeId] ?? []) : []);
 	const activeEfforts = $derived(activeId ? (modelEfforts[activeId] ?? []) : []);
 	const activeModelChoice = $derived(
@@ -1173,6 +1179,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					if (!turnModels[tid] && sessionConfigs[tid]?.model) {
 						turnModels = { ...turnModels, [tid]: sessionConfigs[tid].model };
 					}
+					if (!turnEfforts[tid] && sessionConfigs[tid]?.effort) {
+						turnEfforts = { ...turnEfforts, [tid]: sessionConfigs[tid].effort };
+					}
 					markTaskStarted(tid);
 					const t = ensureThread(tid);
 					t.status = 'running';
@@ -1192,6 +1201,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					if (turnModels[tid]) {
 						const { [tid]: _finishedTurnModel, ...remainingTurnModels } = turnModels;
 						turnModels = remainingTurnModels;
+					}
+					if (turnEfforts[tid]) {
+						const { [tid]: _finishedTurnEffort, ...remainingTurnEfforts } = turnEfforts;
+						turnEfforts = remainingTurnEfforts;
 					}
 					markTaskCompleted(tid);
 					const t = ensureThread(tid);
@@ -1743,6 +1756,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if ((threads[id]?.turnId || activeTurnBySession[id]) && !turnModels[id] && sessionConfigs[id]?.model) {
 			turnModels = { ...turnModels, [id]: sessionConfigs[id].model };
 		}
+		if ((threads[id]?.turnId || activeTurnBySession[id]) && !turnEfforts[id] && sessionConfigs[id]?.effort) {
+			turnEfforts = { ...turnEfforts, [id]: sessionConfigs[id].effort };
+		}
 	}
 
 	/** Composer model picker: the server preserves a compatible effort or uses the model default. */
@@ -1778,6 +1794,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const current = id ? sessionConfigs[id]?.effort : null;
 		const effort = select.value;
 		if (!id || !current || effort === current) return;
+		captureTurnModelBeforeConfigChange(id);
 		effortPending = true;
 		try {
 			const { ok, data } = await postCmd(id, 'model', { effort });
@@ -2624,6 +2641,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				delete activeTurnBySession[id];
 				const { [id]: _stoppedTurnModel, ...remainingTurnModels } = turnModels;
 				turnModels = remainingTurnModels;
+				const { [id]: _stoppedTurnEffort, ...remainingTurnEfforts } = turnEfforts;
+				turnEfforts = remainingTurnEfforts;
 				markTaskCompleted(id);
 			}
 		} catch (error) {
@@ -2654,9 +2673,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		throw new Error('The current turn did not stop in time. Try again once it is idle.');
 	}
 
-	async function restartPromptWithSelectedModel() {
+	async function restartPromptWithSelectedSettings() {
 		const id = activeId;
-		if (!id || !activeModelChangedDuringTurn || activeTodoQueue || switchingPromptModel || sendingMessage) return;
+		if (!id || !activeSettingsChangedDuringTurn || activeTodoQueue || switchingPromptModel || sendingMessage) return;
 		const latestUserMessage = [...itemsOf(threads[id])].reverse().find((item) => item.type === 'userMessage') as any;
 		const promptText = (latestUserMessage?.content ?? [])
 			.map((part: any) => typeof part?.text === 'string' ? visibleUserText(part.text) : '')
@@ -2664,6 +2683,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			.trim();
 		const prompt = promptText || 'Please repeat the request from my immediately preceding message.';
 		const modelName = activeModelChoice?.displayName ?? activeConfig?.model ?? 'the selected model';
+		const selectedEffort = activeConfig?.effort ?? '';
 		switchingPromptModel = true;
 		sendingMessage = true;
 		try {
@@ -2674,6 +2694,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			thread.turnStartedAt = Date.now();
 			thread.error = null;
 			turnModels = { ...turnModels, [id]: sessionConfigs[id]?.model ?? '' };
+			turnEfforts = { ...turnEfforts, [id]: sessionConfigs[id]?.effort ?? '' };
 			const echoId = addLocalUserMessage(id, prompt);
 			try {
 				const response = await sendMessageWithRetries(id, prompt, []);
@@ -2681,13 +2702,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const data = await response.json().catch(() => ({}));
 					throw new Error(data.error ?? `Could not restart prompt (${response.status})`);
 				}
-				addLocalNote(id, `Restarted the prompt on ${modelName}. The previous partial attempt remains in this transcript.`, 'info');
+				addLocalNote(id, `Restarted the prompt on ${modelName} with ${effortLabel(selectedEffort)} thinking. The previous partial attempt remains in this transcript.`, 'info');
 			} catch (error) {
 				thread.status = 'idle';
 				thread.turnStartedAt = null;
 				removeLocalItem(id, echoId);
 				const { [id]: _failedModel, ...remainingModels } = turnModels;
 				turnModels = remainingModels;
+				const { [id]: _failedEffort, ...remainingEfforts } = turnEfforts;
+				turnEfforts = remainingEfforts;
 				throw error;
 			}
 		} catch (error) {
@@ -5293,16 +5316,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</select>
 									</div>
 								{/if}
-								{#if activeModelChangedDuringTurn && !activeTodoQueue}
+								{#if activeSettingsChangedDuringTurn && !activeTodoQueue}
 									<button
 										class="switch-prompt-model"
 										type="button"
-										onclick={restartPromptWithSelectedModel}
+										onclick={restartPromptWithSelectedSettings}
 										disabled={switchingPromptModel || modelPending || sendingMessage || Boolean(activeId && stoppingSessions[activeId])}
-										aria-label={`Stop the current turn and restart its prompt with ${activeModelChoice?.displayName ?? activeConfig?.model}`}
-										title="Model changes do not affect a running turn. This stops it and starts the prompt again with the selected model."
+										aria-label={`Stop the current turn and restart its prompt with ${activeModelChoice?.displayName ?? activeConfig?.model} at ${effortLabel(activeConfig?.effort ?? '')} thinking strength`}
+										title="Model and thinking-strength changes do not affect a running turn. This stops it and starts the prompt again with the selected settings."
 									>
-										{switchingPromptModel ? 'Restarting…' : 'Restart on selected model'}
+										{switchingPromptModel ? 'Restarting…' : 'Restart on selected settings'}
 									</button>
 								{/if}
 								{#if activeConfig && activeEfforts.length > 0}
