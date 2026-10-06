@@ -219,6 +219,8 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 	let sessionModels = $state<Record<string, ModelChoice[]>>({});
 	let modelEfforts = $state<Record<string, string[]>>({});
 	let modelPending = $state(false);
+	let switchingPromptModel = $state(false);
+	let turnModels = $state<Record<string, string>>({});
 	let effortPending = $state(false);
 	let accountUsageByHost = $state<Record<string, AccountUsage>>({});
 	let accountUsageFetchedAt = $state<Record<string, number>>({});
@@ -338,6 +340,10 @@ import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarker
 		if (interactiveChoiceDialog && !interactiveChoiceDialog.open) interactiveChoiceDialog.showModal();
 	});
 	const activeConfig = $derived(activeId ? sessionConfigs[activeId] : null);
+	const activeTurnModel = $derived(activeId ? turnModels[activeId] : null);
+	const activeModelChangedDuringTurn = $derived(
+		active?.status === 'running' && Boolean(activeTurnModel) && Boolean(activeConfig?.model) && activeTurnModel !== activeConfig?.model
+	);
 	const activeModels = $derived(activeId ? (sessionModels[activeId] ?? []) : []);
 	const activeEfforts = $derived(activeId ? (modelEfforts[activeId] ?? []) : []);
 	const activeModelChoice = $derived(
@@ -1145,6 +1151,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 			case 'turn/started': {
 				if (tid) {
+					if (!turnModels[tid] && sessionConfigs[tid]?.model) {
+						turnModels = { ...turnModels, [tid]: sessionConfigs[tid].model };
+					}
 					markTaskStarted(tid);
 					const t = ensureThread(tid);
 					t.status = 'running';
@@ -1158,7 +1167,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 			case 'turn/completed': {
-				if (tid) {
+				const completedTurnId = typeof p.turn?.id === 'string' ? p.turn.id : null;
+				const currentTurnId = tid ? threads[tid]?.turnId : null;
+				if (tid && !(completedTurnId && currentTurnId && completedTurnId !== currentTurnId)) {
+					if (turnModels[tid]) {
+						const { [tid]: _finishedTurnModel, ...remainingTurnModels } = turnModels;
+						turnModels = remainingTurnModels;
+					}
 					markTaskCompleted(tid);
 					const t = ensureThread(tid);
 					t.status = 'idle';
@@ -1694,12 +1709,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return effort.charAt(0).toUpperCase() + effort.slice(1);
 	}
 
+	function captureTurnModelBeforeConfigChange(id: string) {
+		if ((threads[id]?.turnId || activeTurnBySession[id]) && !turnModels[id] && sessionConfigs[id]?.model) {
+			turnModels = { ...turnModels, [id]: sessionConfigs[id].model };
+		}
+	}
+
 	/** Composer model picker: the server preserves a compatible effort or uses the model default. */
 	async function setComposerModel(select: HTMLSelectElement) {
 		const id = activeId;
 		const current = id ? sessionConfigs[id]?.model : null;
 		const model = select.value;
 		if (!id || !current || model === current) return;
+		captureTurnModelBeforeConfigChange(id);
 		modelPending = true;
 		try {
 			const { ok, data } = await postCmd(id, 'model', { model });
@@ -2247,6 +2269,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 
 			case 'model-set': {
+				captureTurnModelBeforeConfigChange(id);
 				const { ok, data } = await postCmd(id, 'model', {
 					...(parsed.model ? { model: parsed.model } : {}),
 					...(parsed.effort ? { effort: parsed.effort } : {})
@@ -2294,6 +2317,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 
 			case 'profile-set': {
+				captureTurnModelBeforeConfigChange(id);
 				const { ok, data } = await postCmd(id, 'profile', { profile: parsed.profile });
 				addLocalNote(
 					id,
@@ -2305,6 +2329,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 
 			case 'profile-clear': {
+				captureTurnModelBeforeConfigChange(id);
 				const { ok, data } = await postCmd(id, 'profile', { clear: true });
 				addLocalNote(
 					id,
@@ -2567,6 +2592,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				t.status = 'idle';
 				t.turnId = null;
 				delete activeTurnBySession[id];
+				const { [id]: _stoppedTurnModel, ...remainingTurnModels } = turnModels;
+				turnModels = remainingTurnModels;
 				markTaskCompleted(id);
 			}
 		} catch (error) {
@@ -2574,6 +2601,70 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			addLocalNote(id, `Could not stop task: ${error instanceof Error ? error.message : String(error)}`, 'err');
 		} finally {
 			delete stoppingSessions[id];
+		}
+	}
+
+	async function waitForTurnIdle(id: string) {
+		for (let attempt = 0; attempt < 40; attempt += 1) {
+			const url = new URL(threadApi(id), window.location.origin);
+			url.searchParams.set('turns', '1');
+			const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.error ?? `Could not verify stopped turn (${response.status})`);
+			if (!data.thread) throw new Error('Could not verify stopped turn: no thread returned');
+			syncThreadRuntime(id, data.thread);
+			if (data.thread.status?.type === 'idle' || data.thread.status?.type === 'notLoaded') {
+				// Give the matching turn/completed SSE notification a moment to land
+				// before starting another turn on the same thread.
+				await new Promise((resolve) => setTimeout(resolve, 250));
+				return;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+		throw new Error('The current turn did not stop in time. Try again once it is idle.');
+	}
+
+	async function restartPromptWithSelectedModel() {
+		const id = activeId;
+		if (!id || !activeModelChangedDuringTurn || activeTodoQueue || switchingPromptModel || sendingMessage) return;
+		const latestUserMessage = [...itemsOf(threads[id])].reverse().find((item) => item.type === 'userMessage') as any;
+		const promptText = (latestUserMessage?.content ?? [])
+			.map((part: any) => typeof part?.text === 'string' ? visibleUserText(part.text) : '')
+			.join('')
+			.trim();
+		const prompt = promptText || 'Please repeat the request from my immediately preceding message.';
+		const modelName = activeModelChoice?.displayName ?? activeConfig?.model ?? 'the selected model';
+		switchingPromptModel = true;
+		sendingMessage = true;
+		try {
+			await interrupt();
+			await waitForTurnIdle(id);
+			const thread = ensureThread(id);
+			thread.status = 'running';
+			thread.turnStartedAt = Date.now();
+			thread.error = null;
+			turnModels = { ...turnModels, [id]: sessionConfigs[id]?.model ?? '' };
+			const echoId = addLocalUserMessage(id, prompt);
+			try {
+				const response = await sendMessageWithRetries(id, prompt, []);
+				if (!response.ok) {
+					const data = await response.json().catch(() => ({}));
+					throw new Error(data.error ?? `Could not restart prompt (${response.status})`);
+				}
+				addLocalNote(id, `Restarted the prompt on ${modelName}. The previous partial attempt remains in this transcript.`, 'info');
+			} catch (error) {
+				thread.status = 'idle';
+				thread.turnStartedAt = null;
+				removeLocalItem(id, echoId);
+				const { [id]: _failedModel, ...remainingModels } = turnModels;
+				turnModels = remainingModels;
+				throw error;
+			}
+		} catch (error) {
+			addLocalNote(id, error instanceof Error ? error.message : 'Could not switch the running prompt', 'err');
+		} finally {
+			switchingPromptModel = false;
+			sendingMessage = false;
 		}
 	}
 
@@ -5131,7 +5222,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											class="composer-select"
 											aria-label="Model"
 											value={activeConfig.model}
-											disabled={modelPending || effortPending}
+											disabled={modelPending || effortPending || switchingPromptModel}
 											onchange={(event) => setComposerModel(event.currentTarget)}
 						>
 							{#each activeModels as choice (choice.id)}
@@ -5140,8 +5231,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									{choice.displayName || choice.id}{profile ? ` · Cap ~${profile.capability} · ${profile.efficiency} · ${profile.valueRating.toFixed(1)}` : ''}
 								</option>
 							{/each}
-										</select>
+									</select>
 									</div>
+								{/if}
+								{#if activeModelChangedDuringTurn && !activeTodoQueue}
+									<button
+										class="switch-prompt-model"
+										type="button"
+										onclick={restartPromptWithSelectedModel}
+										disabled={switchingPromptModel || modelPending || sendingMessage || Boolean(activeId && stoppingSessions[activeId])}
+										aria-label={`Stop the current turn and restart its prompt with ${activeModelChoice?.displayName ?? activeConfig?.model}`}
+										title="Model changes do not affect a running turn. This stops it and starts the prompt again with the selected model."
+									>
+										{switchingPromptModel ? 'Restarting…' : 'Restart on selected model'}
+									</button>
 								{/if}
 								{#if activeConfig && activeEfforts.length > 0}
 									<div class="effort" title={`Thinking strength: ${effortLabel(activeConfig.effort)}`}>
@@ -5153,7 +5256,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											class="composer-select"
 											aria-label="Thinking strength"
 											value={activeConfig.effort}
-											disabled={modelPending || effortPending}
+											disabled={modelPending || effortPending || switchingPromptModel}
 											onchange={(event) => setComposerEffort(event.currentTarget)}
 										>
 											{#each activeEfforts as choice (choice)}
@@ -8307,6 +8410,25 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		background: transparent;
 		color: var(--color-neutral);
 		font-size: var(--text-sm);
+	}
+
+	.switch-prompt-model {
+		flex: 0 1 auto;
+		max-width: 12rem;
+		min-height: var(--control-height-compact);
+		padding: 0.25rem 0.5rem;
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-input);
+		background: var(--color-accent-soft);
+		color: var(--color-neutral);
+		font-size: var(--text-xs);
+		line-height: 1.2;
+		white-space: normal;
+	}
+
+	.switch-prompt-model:hover:not(:disabled) {
+		background: var(--color-accent);
+		color: var(--color-accent-ink);
 	}
 
 	/* Model and thinking pickers use native selects over compact visible labels. */
