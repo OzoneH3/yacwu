@@ -190,6 +190,11 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let unseenActivity = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
+	let archiveBrowserDialog = $state<HTMLDialogElement | null>(null);
+	let archivedSessions = $state<ThreadSummary[]>([]);
+	let archivedSessionsLoading = $state(false);
+	let archivedSessionsError = $state<string | null>(null);
+	let restoringArchivedSessionId = $state<string | null>(null);
 	let interactiveChoiceDialog = $state<HTMLDialogElement | null>(null);
 	let resolvedInteractiveQuestionIds = $state<Record<string, boolean>>({});
 	let choiceCustomAnswer = $state('');
@@ -2894,6 +2899,48 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		archiveNotice = null;
 	}
 
+	async function openArchiveBrowser() {
+		archiveBrowserDialog?.showModal();
+		await loadArchivedSessions();
+	}
+
+	async function loadArchivedSessions() {
+		archivedSessionsLoading = true;
+		archivedSessionsError = null;
+		try {
+			const response = await fetch('/api/threads?archived=true');
+			const data = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(data.error ?? `Could not load archived sessions (${response.status})`);
+			archivedSessions = (data.data ?? []).filter((thread: ThreadSummary) => !thread.ephemeral);
+		} catch (error) {
+			archivedSessionsError = error instanceof Error ? error.message : String(error);
+		} finally {
+			archivedSessionsLoading = false;
+		}
+	}
+
+	async function restoreArchivedSession(session: ThreadSummary) {
+		if (restoringArchivedSessionId) return;
+		restoringArchivedSessionId = session.id;
+		try {
+			const response = await fetch(`/api/threads/${session.id}/unarchive${hostQuery(session.host)}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({})
+			});
+			const data = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(data.error ?? 'Could not restore the session.');
+			const restored = { ...session, ...(data.thread ?? {}) } as ThreadSummary;
+			upsertSession(restored);
+			archivedSessions = archivedSessions.filter((entry) => entry.id !== session.id);
+			showArchiveNotice({ tone: 'info', message: `Restored ${shortLabel(restored)}` });
+		} catch (error) {
+			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) }, 6000);
+		} finally {
+			restoringArchivedSessionId = null;
+		}
+	}
+
 	function onKeydown(e: KeyboardEvent) {
 		// The slash popup owns its keys while visible (codex TUI precedence:
 		// command popup before history navigation and submission).
@@ -4292,12 +4339,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{:else}
 			<div class="rail-heading">
 				<span>Sessions</span>
-				<button class="new" type="button" onclick={startCreating} aria-label="New session" title="New session">
-					<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-						<path d="M12 5v14" />
-						<path d="M5 12h14" />
-					</svg>
-				</button>
+				<div class="rail-actions">
+					<button class="new archive-browser-open" type="button" onclick={openArchiveBrowser} aria-label="Archived sessions" title="Archived sessions">
+						<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+							<path d="M4 5.5h16l-1 4H5zM6 9.5v9h12v-9M10 13h4" />
+						</svg>
+					</button>
+					<button class="new" type="button" onclick={startCreating} aria-label="New session" title="New session">
+						<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+							<path d="M12 5v14" />
+							<path d="M5 12h14" />
+						</svg>
+					</button>
+				</div>
 			</div>
 		{/if}
 			<nav class="sessions" data-loaded={sessionsLoaded}>
@@ -4801,6 +4855,45 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</button>
 								{/each}
 							</div>
+						</div>
+					{/if}
+				</div>
+			</dialog>
+
+			<dialog
+				class="archive-browser-dialog"
+				bind:this={archiveBrowserDialog}
+				aria-labelledby="archive-browser-title"
+				onclick={(event) => { if (event.target === archiveBrowserDialog) archiveBrowserDialog?.close(); }}
+			>
+				<div class="archive-browser-panel">
+					<div class="session-info-heading">
+						<h2 id="archive-browser-title">Archived sessions</h2>
+						<button class="mini ghost" type="button" onclick={loadArchivedSessions} disabled={archivedSessionsLoading}>Refresh</button>
+						<button class="session-info-close" type="button" onclick={() => archiveBrowserDialog?.close()} aria-label="Close archived sessions" title="Close">
+							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
+						</button>
+					</div>
+					{#if archivedSessionsLoading && archivedSessions.length === 0}
+						<p class="archive-browser-empty">Loading archived sessions…</p>
+					{:else if archivedSessionsError}
+						<p class="archive-browser-empty error" role="alert">{archivedSessionsError}</p>
+					{:else if archivedSessions.length === 0}
+						<p class="archive-browser-empty">No archived sessions.</p>
+					{:else}
+						<div class="archive-browser-list">
+							{#each archivedSessions as session (session.id)}
+								<div class="archive-browser-row">
+									<div class="archive-browser-copy">
+										<strong>{shortLabel(session)}</strong>
+										{#if session.preview}<span>{session.preview}</span>{/if}
+										<small>{session.cwd ?? 'Unknown folder'} · {fmtSessionTimestamp(session.updatedAt)}</small>
+									</div>
+									<button class="mini" type="button" disabled={Boolean(restoringArchivedSessionId)} onclick={() => restoreArchivedSession(session)}>
+										{restoringArchivedSessionId === session.id ? 'Restoring…' : 'Restore'}
+									</button>
+								</div>
+							{/each}
 						</div>
 					{/if}
 				</div>
@@ -5700,6 +5793,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-neutral);
 		font-size: var(--text-sm);
 		font-weight: 600;
+	}
+
+	.rail-actions {
+		display: flex;
+		gap: var(--space-2xs);
+	}
+
+	.archive-browser-open {
+		background: var(--color-paper-2);
+		color: var(--color-ink);
 	}
 
 	.new,
@@ -6854,7 +6957,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		fill: currentColor;
 	}
 
-	.session-info-dialog {
+	.session-info-dialog,
+	.archive-browser-dialog {
 		position: fixed;
 		inset: 0;
 		width: min(calc(100% - var(--space-lg)), 32rem);
@@ -6870,9 +6974,56 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-ink);
 	}
 
-	.session-info-dialog::backdrop {
+	.session-info-dialog::backdrop,
+	.archive-browser-dialog::backdrop {
 		background: var(--color-overlay);
 	}
+
+	.archive-browser-panel { padding: var(--space-sm); }
+
+	.archive-browser-panel .session-info-heading { margin-block-end: var(--space-sm); }
+
+	.archive-browser-list {
+		display: grid;
+		max-height: min(65dvh, 38rem);
+		overflow: auto;
+		border-block-start: var(--rule-hair) solid var(--color-rule);
+	}
+
+	.archive-browser-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-sm);
+		padding: var(--space-xs) 0;
+		border-block-end: var(--rule-hair) solid var(--color-rule);
+	}
+
+	.archive-browser-copy {
+		display: grid;
+		gap: var(--space-3xs);
+		min-width: 0;
+	}
+
+	.archive-browser-copy strong,
+	.archive-browser-copy span,
+	.archive-browser-copy small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.archive-browser-copy span { color: var(--color-muted); font-size: var(--text-xs); }
+	.archive-browser-copy small { color: var(--color-muted); font-size: var(--text-2xs); }
+	.archive-browser-row .mini { flex: none; }
+
+	.archive-browser-empty {
+		margin: var(--space-sm) 0 0;
+		color: var(--color-muted);
+		font-size: var(--text-sm);
+	}
+
+	.archive-browser-empty.error { color: var(--color-error); }
 
 	.interactive-choice-dialog {
 		position: fixed;

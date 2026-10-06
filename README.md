@@ -13,7 +13,8 @@ state lives entirely in Codex's own persistent sessions, read back via
 
 - 🖥️ Light and dark themes, with a responsive workspace for desktop and mobile
 - 🧵 Multi-session workspace: create sessions in chosen folders, rename and
-  reorder them, switch between them, and resume interrupted work
+  reorder them, switch between them, browse archived sessions and restore them,
+  and resume interrupted work
 - ✅ Background completion indicators mark finished sessions until you open
   them, so completed work is easy to spot in the session list
 - 🔒 In-use detection warns before opening a session another Codex process has

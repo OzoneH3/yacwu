@@ -1353,8 +1353,8 @@ fn post_profile(
 
 // -- /api/threads -------------------------------------------------------------
 
-fn thread_list_params() -> Json {
-  json.object([
+fn thread_list_params(archived: Bool) -> Json {
+  let params = [
     #("limit", json.int(100)),
     #("sortKey", json.string("updated_at")),
     // Unset (or null) restricts the listing to the *current* provider,
@@ -1362,7 +1362,11 @@ fn thread_list_params() -> Json {
     // explicit empty array means "all providers" (per the generated
     // schema; the prose protocol docs say otherwise).
     #("modelProviders", json.preprocessed_array([])),
-  ])
+  ]
+  case archived {
+    True -> json.object([#("archived", json.bool(True)), ..params])
+    False -> json.object(params)
+  }
 }
 
 /// One host's stored sessions, each entry tagged with the host it lives on.
@@ -1371,11 +1375,12 @@ fn host_thread_list(
   ctx: Context,
   host: String,
   cx: Codex,
+  archived: Bool,
 ) -> Result(List(#(Int, Json)), String) {
   use result <- result.try(codex.request(
     cx,
     "thread/list",
-    thread_list_params(),
+    thread_list_params(archived),
   ))
   let entries =
     decode.run(result, decode.at(["data"], decode.list(decode.dynamic)))
@@ -1406,10 +1411,11 @@ fn list_threads(
   ctx: Context,
   req: Request(Connection),
 ) -> Response(ResponseData) {
+  let archived = query_value(req, "archived") == "true"
   case host_hint(req) {
     Some(_) -> {
       use host, cx <- with_codex(ctx, req, None)
-      case host_thread_list(ctx, host, cx) {
+      case host_thread_list(ctx, host, cx, archived) {
         Error(message) -> json_response(500, error_body(message))
         Ok(entries) -> {
           let default_cwd = case hosts.is_local(host) {
@@ -1440,7 +1446,7 @@ fn list_threads(
         })
       let results =
         list.map(connected, fn(manager) {
-          #(manager.0, host_thread_list(ctx, manager.0, manager.1))
+          #(manager.0, host_thread_list(ctx, manager.0, manager.1, archived))
         })
       // A local failure keeps its old visibility; remote hiccups only cost
       // that host's entries (its state shows in /api/hosts and the stream).
