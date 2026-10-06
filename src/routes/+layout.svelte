@@ -4747,6 +4747,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						{/if}
 					</dl>
+					<button class="session-remove-action" type="button" onclick={() => { sessionInfoDialog?.close(); void deleteSession(activeId); }}>
+						{isSideChat(activeSummary) ? 'Remove side conversation' : 'Archive session'}
+					</button>
 					{#if activeAgents.length > 0}
 						<div class="session-info-agents">
 							<h3 id="session-info-agents-title">Agents</h3>
@@ -4772,9 +4775,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						</div>
 					{/if}
-					<button class="session-remove-action" type="button" onclick={() => { sessionInfoDialog?.close(); void deleteSession(activeId); }}>
-						{isSideChat(activeSummary) ? 'Remove side conversation' : 'Archive session'}
-					</button>
 				</div>
 			</dialog>
 
