@@ -4290,9 +4290,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<button
 						class="session-drag-handle"
 						class:has-progress={Boolean(sessionProgress)}
-						type="button"
-						aria-label={sessionProgress ? `Estimated ${sessionProgress.percent}% complete; reorder ${shortLabel(s)}` : `Reorder ${shortLabel(s)}`}
-						title={sessionProgress ? `Estimated ${sessionProgress.percent}% done · drag to reorder; use arrow keys to move` : 'Drag to reorder; use arrow keys to move'}
+					type="button"
+						aria-label={sessionProgress ? `Estimated ${sessionProgress.percent}% complete, ${formatEstimatedRemaining(sessionProgress.remainingMinutes)}; reorder ${shortLabel(s)}` : `Reorder ${shortLabel(s)}`}
+						title={sessionProgress ? `Estimated ${sessionProgress.percent}% done · ${formatEstimatedRemaining(sessionProgress.remainingMinutes)} · drag to reorder; use arrow keys to move` : 'Drag to reorder; use arrow keys to move'}
 						onpointerdown={(event) => startSessionDrag(event, s.id)}
 						onpointermove={moveSessionDrag}
 						onpointerup={finishSessionDrag}
