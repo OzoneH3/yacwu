@@ -49,6 +49,14 @@ state lives entirely in Codex's own persistent sessions, read back via
   selection, the picker shows only the model name. If you change models
   mid-turn, you can stop and restart the current prompt on the newly selected
   model without adding a duplicate prompt to the transcript
+- 💸 Thinking-level choices show learned weekly allowance cost per 100k tokens
+  for the selected model. Running task progress includes a projected total
+  allowance cost from completion estimates, or elapsed/remaining time when
+  progress is not yet available. Completed responses show estimated weekly
+  allowance used and recorded token totals, including agent turns started
+  under that prompt. Usage refreshes every 30 seconds and at turn boundaries;
+  partial recordings and insufficient calibration are labeled rather than
+  assigned a fabricated percentage
 - 📊 Task usage history: click the weekly allowance or open it from Session
   details to inspect recorded model, thinking level, cumulative token deltas,
   elapsed time, and weekly allowance readings. Backend recording continues

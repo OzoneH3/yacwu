@@ -34,6 +34,8 @@
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
+	import { analyzeUsage } from '$lib/usage-analysis';
+	import { summarizeTaskUsage, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
@@ -195,6 +197,10 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
 	let usageHistoryOpen = $state(false);
+	let activityClock = $state(Date.now());
+	let usageAnalysisByHost = $state<Record<string, ReturnType<typeof analyzeUsage>>>({});
+	const usageLoading = new Set<string>();
+	const usageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let archiveBrowserDialog = $state<HTMLDialogElement | null>(null);
 	let archivedSessions = $state<ThreadSummary[]>([]);
 	let archivedSessionsLoading = $state(false);
@@ -469,6 +475,68 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
 		return taskProgressForSession(activeId);
 	});
+	const activeUsageAnalysis = $derived(usageAnalysisByHost[activeHost] ?? null);
+	const activeTaskUsage = $derived.by(() => {
+		const task = activeUsageAnalysis?.tasks.find((task) => task.threadId === activeId && task.host === activeHost && task.turnId === active?.turnId);
+		return task && activeUsageAnalysis ? summarizeTaskUsage(activeUsageAnalysis.tasks, task) : null;
+	});
+	const projectedTaskUsage = $derived(projectTaskUsage(activeTaskUsage, activeTaskProgress, activityClock));
+	const completedUsageByItem = $derived.by(() => {
+		const result: Record<string, TaskUsageSummary> = {};
+		if (!activeUsageAnalysis || !viewedId) return result;
+		const finals = new Map<string, string>();
+		for (const item of itemsOf(viewed) as any[]) {
+			if (item.type === 'agentMessage' && item.phase !== 'commentary' && item._turnId && item.text?.trim()) finals.set(item._turnId, item.id);
+		}
+		for (const task of activeUsageAnalysis.tasks) {
+			if (task.host !== activeHost || task.threadId !== viewedId || task.endedAt === null) continue;
+			const itemId = finals.get(task.turnId);
+			if (itemId) result[itemId] = summarizeTaskUsage(activeUsageAnalysis.tasks, task);
+		}
+		return result;
+	});
+
+	async function refreshTaskUsage(host: string) {
+		if (usageLoading.has(host)) return;
+		usageLoading.add(host);
+		try {
+			const response = await fetch(`/api/usage${hostQuery(host)}`, { signal: AbortSignal.timeout(10_000) });
+			if (!response.ok) return;
+			const data = await response.json();
+			usageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host });
+		} catch { /* Retain the last learned rates if telemetry is unavailable. */ }
+		finally { usageLoading.delete(host); }
+	}
+
+	function scheduleTaskUsageRefresh(threadId: string) {
+		const rootId = agents[threadId] ? agentRootId(agents, agents[threadId]) : threadId;
+		const host = sessionHost(rootId);
+		if (host !== activeHost || usageRefreshTimers.has(host)) return;
+		usageRefreshTimers.set(host, setTimeout(() => {
+			usageRefreshTimers.delete(host);
+			void refreshTaskUsage(host);
+		}, 500));
+	}
+
+	function thinkingCostLabel(effort: string) {
+		const rate = activeUsageAnalysis?.rates.find((rate) => rate.model === activeConfig?.model && rate.effort === effort);
+		return rate?.percentPer100kTokens !== null && rate?.percentPer100kTokens !== undefined
+			? `${formatAllowancePercent(rate.percentPer100kTokens)} /100k` : 'Learning…';
+	}
+
+	function taskUsageTitle(summary: TaskUsageSummary) {
+		const cost = summary.percent === null ? 'Weekly allowance estimate unavailable until recording and calibration are sufficient.'
+			: `Estimated weekly allowance: ${formatAllowancePercent(summary.percent)} (${summary.low?.toFixed(3)}–${summary.high?.toFixed(3)}%).`;
+		return `${cost} ${summary.partial ? 'Partial token recording. ' : ''}Tokens include cached input and output, including reasoning once.${summary.agentTurns ? ` Includes ${summary.agentTurns} agent turns.` : ''}${summary.runningAgents ? ' Agent work is still running; totals will update.' : ''}`;
+	}
+
+	$effect(() => {
+		if (!activeId) return;
+		const host = activeHost;
+		void refreshTaskUsage(host);
+		const timer = setInterval(() => void refreshTaskUsage(host), 30_000);
+		return () => clearInterval(timer);
+	});
 	// Slash-command autocomplete: offered while the composer holds a bare
 	// command token ("/…" with no whitespace or newline yet), mirroring the
 	// codex TUI's command popup. Esc hides it until the token changes.
@@ -613,12 +681,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// Preserve any locally-accumulated streamed text across updates.
 		const prev = t.byId[item.id] as any;
 		const next = { ...item } as any;
+		if (next._turnId === undefined) next._turnId = historicalWorkOrderId ?? prev?._turnId ?? t.turnId;
 		if (prev) {
 			if (prev._completed) next._completed = true;
 			if (next.text === '' && prev.text) next.text = prev.text;
 			if (next._reason === undefined && prev._reason) next._reason = prev._reason;
 			if (next._out === undefined && prev._out) next._out = prev._out;
 			if (next._at === undefined && prev._at) next._at = prev._at;
+			if (next._turnDurationMs === undefined && prev._turnDurationMs !== undefined) next._turnDurationMs = prev._turnDurationMs;
 		} else if (stampTime) {
 			// The protocol has no per-item timestamps; live items are stamped
 			// with arrival time. Restored history stays unstamped.
@@ -960,7 +1030,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return `${seconds}s`;
 	}
 
-	let activityClock = $state(Date.now());
 	$effect(() => {
 		if (viewed?.status !== 'running') return;
 		const timer = window.setInterval(() => activityClock = Date.now(), 1000);
@@ -1275,6 +1344,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 			case 'turn/started': {
 				if (tid) {
+					scheduleTaskUsageRefresh(tid);
 					if (!turnModels[tid] && sessionConfigs[tid]?.model) {
 						turnModels = { ...turnModels, [tid]: sessionConfigs[tid].model };
 					}
@@ -1294,6 +1364,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 			case 'turn/completed': {
+				if (tid) scheduleTaskUsageRefresh(tid);
 				const completedTurnId = typeof p.turn?.id === 'string' ? p.turn.id : null;
 				const currentTurnId = tid ? threads[tid]?.turnId : null;
 				if (tid && !(completedTurnId && currentTurnId && completedTurnId !== currentTurnId)) {
@@ -1349,7 +1420,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						localStorage.setItem(DISMISSED_ATTENTION_KEY, JSON.stringify(remainingAttention));
 					}
 					if (p.item.type === 'userMessage') dropEchoedUserMessage(tid, p.item);
-					upsertItem(tid, p.item, true, undefined, msg.method === 'item/completed' && p.item.type === 'agentMessage');
+					upsertItem(tid, p.item, true, p.turnId, msg.method === 'item/completed' && p.item.type === 'agentMessage');
 				}
 				// The file browser refreshes what it is showing when the agent
 				// touches files in the viewed session.
@@ -4187,6 +4258,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			window.removeEventListener('scroll', dismissTooltipOnViewportChange, true);
 			window.removeEventListener('resize', dismissTooltipOnViewportChange);
 			clearInterval(accountUsageTimer);
+			for (const timer of usageRefreshTimers.values()) clearTimeout(timer);
+			usageRefreshTimers.clear();
 			if (archiveNoticeTimer) clearTimeout(archiveNoticeTimer);
 			if (agentCopyTimer) clearTimeout(agentCopyTimer);
 			mobileQuery.removeEventListener('change', updateMobileViewport);
@@ -4872,6 +4945,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else}
 								<span>Estimating…</span>
 							{/if}
+							<span class="task-cost" title={projectedTaskUsage
+								? `Projected total weekly allowance from ${projectedTaskUsage.basis === 'progress' ? 'estimated completion' : 'elapsed time and time remaining'}. ${formatAllowancePercent(activeTaskUsage?.percent ?? null)} used so far; ${formatAllowancePercent(projectedTaskUsage.remaining)} estimated remaining. Includes recorded agent work.`
+								: activeTaskUsage ? taskUsageTitle(activeTaskUsage) : 'Waiting for task usage recording and sufficient calibration.'}>
+								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : 'Cost learning…'}
+							</span>
 						</div>
 					{/if}
 					<span class="session-label" title={sessionContextTitle}>Session</span>
@@ -5254,6 +5332,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				{@const rawShown = Boolean(agentRawShown[agentRawKey(item)])}
 				{@const time = agentTime(item)}
 				{@const turnDuration = (item as any)._turnDurationMs}
+				{@const taskUsage = completedUsageByItem[item.id]}
 								<!-- The tap handler is a touch-only hover surrogate; keyboard
 								     users reach the toggle directly via focus. -->
 								<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
@@ -5283,6 +5362,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
 										{#if typeof turnDuration === 'number'}<span class="agent-duration" title="Time taken for this task">{formatDuration(turnDuration)}</span>{/if}
+										{#if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week`} · {taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
 										<button
 											type="button"
 											class="copy-agent"
@@ -5673,8 +5753,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</button>
 								{/if}
 								{#if activeConfig && activeEfforts.length > 0}
-									<div class="effort" title={`Thinking strength: ${effortLabel(activeConfig.effort)}`}>
-										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)}</span>
+									<div class="effort" title={`Thinking strength: ${effortLabel(activeConfig.effort)} · ${thinkingCostLabel(activeConfig.effort)} weekly allowance per 100k tokens, using the observed token mix`}>
+										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)} <span class="thinking-cost">{thinkingCostLabel(activeConfig.effort)}</span></span>
 										<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
 										</svg>
@@ -5686,7 +5766,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											onchange={(event) => setComposerEffort(event.currentTarget)}
 										>
 											{#each activeEfforts as choice (choice)}
-												<option value={choice}>{effortLabel(choice)}</option>
+												<option value={choice}>{effortLabel(choice)} · {thinkingCostLabel(choice)}</option>
 											{/each}
 										</select>
 									</div>
@@ -6821,12 +6901,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.agent-duration,
+	.agent-usage,
 	.working-duration {
 		color: var(--color-muted);
 		font-size: var(--text-2xs);
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
 	}
+
+	.thinking-cost { font-size: var(--text-xs); }
+	.task-cost { font-variant-numeric: tabular-nums; }
 
 	.original-prompt p {
 		flex: 1 1 auto;
@@ -7985,10 +8069,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: pre-wrap;
 	}
 
-	/* Message footer: timestamp always visible at the start, quiet controls
-	   after it; kept to a single compact line so message rhythm stays tight. */
+	/* Message footer: timestamp, task usage, then quiet controls. */
 	.agent-meta {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2xs);
 		justify-self: start;
