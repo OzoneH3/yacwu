@@ -285,6 +285,8 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
 	const RESTART_CONTINUATION_PROMPT =
 		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
+	const STOPPED_CONTINUATION_PROMPT =
+		'The previous task was stopped. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
 	let runningTasks: Record<string, string> = {};
 	let todoQueues = $state<Record<string, TodoQueue>>({});
 	let archiveNoticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -306,6 +308,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 			.replace(/\s+/g, ' ')
 			.trim())
 			.filter((prompt) => prompt !== RESTART_CONTINUATION_PROMPT)
+			.filter((prompt) => prompt !== STOPPED_CONTINUATION_PROMPT)
 			.filter(Boolean)
 	);
 	const originalPrompt = $derived(userPrompts[0] ?? '');
@@ -1232,7 +1235,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const t = ensureThread(id);
 		const noteId = `local-${++localCounter}`;
 		t.order.push(noteId);
-		t.byId[noteId] = { type: 'localNote', id: noteId, text, tone } as any;
+		t.byId[noteId] = { type: 'localNote', id: noteId, text, tone, resumeAvailable: text === 'Task stopped.' } as any;
 		if (shouldScroll) scrollToBottom();
 	}
 
@@ -3034,6 +3037,36 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		} catch (error) {
 			addLocalNote(id, error instanceof Error ? error.message : 'Could not reopen session', 'err');
+		} finally {
+			sendingMessage = false;
+		}
+	}
+
+	async function resumeStoppedTask(sessionId: string, noteId: string) {
+		if (sendingMessage || threads[sessionId]?.status === 'running') return;
+		sendingMessage = true;
+		try {
+			const thread = ensureThread(sessionId);
+			thread.status = 'running';
+			thread.turnStartedAt = Date.now();
+			thread.error = null;
+			const echoId = addLocalUserMessage(sessionId, STOPPED_CONTINUATION_PROMPT);
+			restartPromptEchoes[sessionId] = [...(restartPromptEchoes[sessionId] ?? []), STOPPED_CONTINUATION_PROMPT];
+			try {
+				const response = await sendMessageWithRetries(sessionId, STOPPED_CONTINUATION_PROMPT, []);
+				if (!response.ok) {
+					const data = await response.json().catch(() => ({}));
+					throw new Error(data.error ?? `Could not resume task (${response.status})`);
+				}
+				const note = threads[sessionId]?.byId[noteId] as any;
+				if (note) threads[sessionId].byId[noteId] = { ...note, resumeAvailable: false, text: 'Task resumed.' };
+			} catch (error) {
+				thread.status = 'idle';
+				thread.turnStartedAt = null;
+				removeLocalItem(sessionId, echoId);
+				restartPromptEchoes[sessionId] = (restartPromptEchoes[sessionId] ?? []).filter((prompt) => prompt !== STOPPED_CONTINUATION_PROMPT);
+				addLocalNote(sessionId, error instanceof Error ? error.message : 'Could not resume task', 'err');
+			}
 		} finally {
 			sendingMessage = false;
 		}
@@ -5629,7 +5662,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else if item.type === 'localNote'}
 								<div class="item note {(item as any).tone}">
 									<span class="gutter">/</span>
-									<div class="body">{(item as any).text}</div>
+									<div class="body">{(item as any).text}{#if (item as any).resumeAvailable}
+										<button class="mini ghost stopped-resume" type="button" disabled={sendingMessage} onclick={() => resumeStoppedTask(activeId, (item as any).id)}>Resume</button>
+									{/if}</div>
 								</div>
 							{:else if item.type === 'stalledWorkerPrompt'}
 								<div class="item note stalled-worker-prompt">
@@ -8938,6 +8973,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.item.generic .body {
 		font-family: var(--font-outlier);
 		line-height: 1.5;
+	}
+
+	.stopped-resume {
+		margin-left: var(--space-sm);
+		vertical-align: middle;
 	}
 
 	.item.note.err,

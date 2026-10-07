@@ -30,7 +30,8 @@ state lives entirely in Codex's own persistent sessions, read back via
   loaded, helping prevent two processes from modifying the same conversation
 - ⚡ Live streaming of assistant messages, reasoning, commands, plans, file
   changes, and current activity; send steering instructions while a turn runs,
-  or stop and resume it later; manual stops are recorded in the transcript.
+  or stop and resume it later from the Resume button beside the stop note;
+  manual stops are recorded in the transcript.
   A quiet-turn monitor posts a notice after two minutes without activity;
   it offers Keep waiting, Ask Codex for a status update, or Stop worker, and
   never stops a worker automatically
