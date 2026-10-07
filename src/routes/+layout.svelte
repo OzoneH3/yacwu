@@ -36,7 +36,7 @@
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
-import { detectPromptKind, parseInteractiveQuestions } from '$lib/interactive-choice';
+import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
@@ -270,6 +270,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
 	const FINISHED_SESSIONS_KEY = 'yacwu-finished-sessions';
 	const DISMISSED_ATTENTION_KEY = 'yacwu-dismissed-attention';
+	const RESOLVED_QUESTIONS_KEY = 'yacwu-resolved-questions';
 	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
 	const RESTART_CONTINUATION_PROMPT =
 		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
@@ -334,28 +335,9 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 		const threadIds = [activeId, ...agentsForSession(agents, activeId).map((agent) => agent.id)];
 		for (const threadId of threadIds) {
 			const items = itemsOf(threads[threadId] ?? null);
-			let latestUserIndex = -1;
-			for (let index = items.length - 1; index >= 0; index -= 1) {
-				if (items[index].type === 'userMessage') {
-					latestUserIndex = index;
-					break;
-				}
-			}
-			for (let index = latestUserIndex + 1; index < items.length; index += 1) {
-				const item = items[index] as any;
-				if (item.type !== 'agentMessage') continue;
-				// Deltas can briefly end in a question before the assistant has
-				// finished the message. Only offer a follow-up for a completed item.
-				if (!item._completed) continue;
-				const choices = parseInteractiveQuestions(String(item.text ?? ''));
-				choices.forEach((choice, index) => {
-					const questionId = `${String(item.id)}:${index}`;
-					const key = `${threadId}:${questionId}`;
-					if (!resolvedInteractiveQuestionIds[key]) queue.push({ id: questionId, threadId, ...choice });
-				});
-			}
+			queue.push(...pendingQuestionsForThread(items, threadId, resolvedInteractiveQuestionIds));
 		}
-		const combined = [...retainedInteractiveQuestions, ...queue];
+		const combined = [...retainedInteractiveQuestions.filter((question) => threadIds.includes(question.threadId)), ...queue];
 		const seen = new Set<string>();
 		return combined.filter((question) => {
 			const key = `${question.threadId}:${question.id}`;
@@ -430,6 +412,9 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	function threadAttention(threadId: string): 'choice' | 'alert' | null {
 		if (threads[threadId]?.error) return 'alert';
 		const items = itemsOf(threads[threadId] ?? null);
+		if (pendingQuestionsForThread(items, threadId, resolvedInteractiveQuestionIds).length
+			|| retainedInteractiveQuestions.some((question) => question.threadId === threadId
+				&& !resolvedInteractiveQuestionIds[`${threadId}:${question.id}`])) return 'choice';
 		for (let index = items.length - 1; index >= 0; index--) {
 			const item = items[index] as any;
 			if (item.type === 'userMessage') return null;
@@ -437,7 +422,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 				if (!item._completed) continue;
 				const kind = detectPromptKind(String(item.text ?? ''));
 				if (kind === 'unknown' && dismissedAttentionByThread[threadId]) return null;
-				return kind === 'choice' ? 'choice' : kind === 'unknown' ? 'alert' : null;
+				return kind === 'unknown' ? 'alert' : null;
 			}
 		}
 		return null;
@@ -2245,6 +2230,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			...resolvedInteractiveQuestionIds,
 			[`${question.threadId}:${question.id}`]: true
 		};
+		try { localStorage.setItem(RESOLVED_QUESTIONS_KEY, JSON.stringify(resolvedInteractiveQuestionIds)); } catch { /* Keep the in-memory dismissal when storage is unavailable. */ }
 	}
 
 	function dismissInteractiveChoice() {
@@ -4106,6 +4092,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		} catch {
 			dismissedAttentionByThread = {};
+		}
+		try {
+			const savedQuestions = JSON.parse(localStorage.getItem(RESOLVED_QUESTIONS_KEY) ?? '{}');
+			if (savedQuestions && typeof savedQuestions === 'object' && !Array.isArray(savedQuestions)) {
+				resolvedInteractiveQuestionIds = Object.fromEntries(Object.entries(savedQuestions).filter((entry): entry is [string, boolean] => entry[1] === true));
+			}
+		} catch {
+			resolvedInteractiveQuestionIds = {};
 		}
 		if (activeId) {
 			clearFinishedSession(activeId);

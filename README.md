@@ -70,7 +70,10 @@ state lives entirely in Codex's own persistent sessions, read back via
   question. Answers show confirmation after Codex accepts them, while the agent
   prepares a response.
   Answer or dismiss each to advance through the session's question queue,
-  including requests from agents
+  including requests from agents. Session question badges reflect that same
+  unresolved queue, and dismissed questions stay dismissed after refresh.
+  Choice lists require an adjacent request; report tables and code examples
+  do not become question prompts
 - 📁 Workspace browser rooted at the session folder, with a Monaco text editor
   (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
   links in assistant messages. The file and diff viewer state is kept per
