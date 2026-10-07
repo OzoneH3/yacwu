@@ -735,6 +735,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const t = ensureThread(id);
 		const runtimeStatus = thread.status?.type;
 		if (runtimeStatus === 'active') {
+			clearStoppedResumeActions(id);
 			t.status = 'running';
 			if (t.turnStartedAt === null) t.turnStartedAt = Date.now();
 			const turn = thread.turns?.findLast((turn) => turn.status === 'inProgress');
@@ -1015,6 +1016,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function markTaskStarted(threadId: string) {
+		clearStoppedResumeActions(threadId);
 		const agent = agents[threadId];
 		const sessionId = agent ? agentRootId(agents, agent) : threadId;
 		runningTasks[threadId] = sessionId;
@@ -1234,6 +1236,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		restartPromptEchoes[id] = queue.filter((_, index) => index !== match);
 		suppressedRestartItemIds[id] = [...suppressedIds, item.id];
 		return true;
+	}
+
+	function clearStoppedResumeActions(id: string) {
+		const thread = threads[id];
+		if (!thread) return;
+		for (const itemId of thread.order) {
+			const item = thread.byId[itemId] as any;
+			if (item?.type === 'localNote' && item.resumeAvailable) {
+				thread.byId[itemId] = { ...item, resumeAvailable: false };
+			}
+		}
 	}
 
 	/** Append a client-side note (slash-command echo / help / errors). */
@@ -5669,7 +5682,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else if item.type === 'localNote'}
 								<div class="item note {(item as any).tone}">
 									<span class="gutter">/</span>
-									<div class="body">{(item as any).text}{#if (item as any).resumeAvailable}
+									<div class="body">{(item as any).text}{#if (item as any).resumeAvailable && viewed?.status !== 'running'}
 										<button class="mini ghost stopped-resume" type="button" disabled={sendingMessage} onclick={() => resumeStoppedTask(activeId, (item as any).id)}>Resume</button>
 									{/if}</div>
 								</div>
