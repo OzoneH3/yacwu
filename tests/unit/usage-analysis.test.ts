@@ -253,6 +253,18 @@ test('active, failed, interrupted or generation-bearing reads cannot hide untrac
 	}
 });
 
+test('rereading a completed turn after collector restart preserves its complete token recording', () => {
+	const result = analyzeUsage([...setup('a', 'model'), quota(2, 10), tokens(3, 'a', 100),
+		event(4, 'turn/completed', { threadId: 'a', turnId: 'a', status: 'completed' }),
+		event(5, 'collectorStarted'),
+		event(6, 'snapshotReadStarted', { threadId: 'a', requestId: 7 }),
+		event(7, 'tokens', { threadId: 'a', turnId: 'a', total: { totalTokens: 100 } }),
+		event(8, 'snapshotReadCompleted', { threadId: 'a', requestId: 7, status: 'idle' })]);
+	expect(result.tasks[0].partialTokens).toBe(false);
+	expect(result.tasks[0].tokens.totalTokens).toBe(100);
+	expect(result.tasks[0].status).toBe('completed');
+});
+
 test('idle snapshots cannot conceal positive untracked deltas or rewind known counters', () => {
 	const history = [...setup('a', 'model'), event(1.1, 'tokens', { threadId: 'legacy', total: { totalTokens: 1000 } }), quota(2, 10), tokens(3, 'a', 100),
 		event(4, 'snapshotReadStarted', { threadId: 'legacy', requestId: 7 })];

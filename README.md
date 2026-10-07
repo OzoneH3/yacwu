@@ -72,7 +72,9 @@ state lives entirely in Codex's own persistent sessions, read back via
   assigned a fabricated percentage. If some contributing agent turns cannot
   be estimated, the header and completed response show the known subtotal
   marked “incomplete,” with a tooltip explaining the excluded turns. Incomplete
-  subtotals are never projected as the full task cost
+  subtotals are never projected as the full task cost.
+  Rereading a completed task after a collector restart preserves its recorded
+  totals rather than marking that historical task as a new recording gap.
 - 📊 Task usage history: click the weekly allowance or open it from Session
   details to inspect recorded model, thinking level, cumulative token deltas,
   elapsed time, and weekly allowance readings. Backend recording continues
@@ -360,6 +362,9 @@ bun run test:unit    # front-end unit tests (bun test)
 bun run test:server  # backend unit tests (gleeunit)
 bunx playwright test # end-to-end verification (builds the UI, runs the Gleam server, drives the live app)
 ```
+
+Test servers use a separate temporary usage directory so their collector
+startup events do not invalidate live task recordings or calibration.
 
 ## Architecture
 

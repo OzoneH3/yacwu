@@ -330,7 +330,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			const task = event.turnId ? tasksByTurn.get(`${id}:${event.turnId}`) : active.get(id);
 			const validTurn = task && (!event.turnId || event.turnId === task.turnId);
 			const completedAt = event.completedAt ?? (task?.status === 'completed' ? task.endedAt : null);
-			const storedSnapshot = !active.has(id) && ((event.counterSnapshot && !task)
+			const storedSnapshot = !active.has(id) && (event.counterSnapshot
 				|| (completedAt !== null && completedAt !== undefined && baseline && completedAt < baseline.at));
 			// A stale stored counter cannot rewind a newer known baseline.
 			if (storedSnapshot && previous && next.totalTokens <= previous.totalTokens) continue;
