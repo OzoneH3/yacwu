@@ -73,6 +73,8 @@ state lives entirely in Codex's own persistent sessions, read back via
   be estimated, the header and completed response show the known subtotal
   marked “incomplete,” with a tooltip explaining the excluded turns. Incomplete
   subtotals are never projected as the full task cost.
+  When a progress update omits its remaining time, Yacwu estimates it from the
+  current turn's elapsed time or the rate between progress updates.
   Rereading a completed task after a collector restart preserves its recorded
   totals rather than marking that historical task as a new recording gap.
 - 📊 Task usage history: click the weekly allowance or open it from Session

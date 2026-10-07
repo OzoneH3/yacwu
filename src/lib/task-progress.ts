@@ -6,6 +6,8 @@ export interface TaskProgressEstimate {
 export interface TaskProgressTranscriptEntry extends TaskProgressEstimate {
 	type: 'taskProgress';
 	id: string;
+	at?: number;
+	turnId?: string | null;
 	[key: string]: unknown;
 }
 
@@ -51,11 +53,20 @@ export function separateTaskProgressEntries<T extends { type: string; id: string
 		if (estimate) {
 			const isDuplicate = lastEstimate?.percent === estimate.percent
 				&& lastEstimate.remainingMinutes === estimate.remainingMinutes;
-			if (!isDuplicate) result.push({ type: 'taskProgress', id: `progress-${item.id}`, ...estimate });
+			if (!isDuplicate) result.push({ type: 'taskProgress', id: `progress-${item.id}`, at: (item as T & { _at?: number })._at,
+				turnId: (item as T & { _turnId?: string | null })._turnId, ...estimate });
 			lastEstimate = estimate;
 		}
 	}
 	return result;
+}
+
+/** Estimate remaining minutes from observed elapsed time when the agent omits it. */
+export function estimateRemainingMinutes(percent: number, explicitMinutes: number | null, elapsedMs: number): number | null {
+	if (explicitMinutes !== null) return explicitMinutes;
+	if (percent >= 100) return 0;
+	if (percent <= 0 || elapsedMs < 30_000) return null;
+	return Math.max(1, Math.ceil((elapsedMs * (100 - percent)) / percent / 60_000));
 }
 
 /** Keep protocol markers out of the visible assistant transcript. */

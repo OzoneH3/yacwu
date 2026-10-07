@@ -41,7 +41,7 @@
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
-import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
+import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-display';
 
@@ -479,7 +479,11 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	}
 	const activeTaskProgress = $derived.by(() => {
 		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
-		return taskProgressForSession(activeId);
+		const progress = taskProgressForSession(activeId);
+		const startedAt = threads[activeId]?.turnStartedAt;
+		return progress && startedAt !== null && startedAt !== undefined
+			? { ...progress, remainingMinutes: estimateRemainingMinutes(progress.percent, progress.remainingMinutes, activityClock - startedAt) }
+			: progress;
 	});
 	const activeUsageAnalysis = $derived(usageAnalysisByHost[activeHost] ?? null);
 	const activeTaskUsage = $derived.by(() => {
@@ -3517,6 +3521,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return remainder ? `~${hours}h ${remainder}m left` : `~${hours}h left`;
 	}
 
+	function progressEntryRemaining(item: any, index: number): number | null {
+		let elapsed = 0;
+		if (item.turnId && item.turnId === viewed?.turnId && viewed?.turnStartedAt !== null && viewed?.turnStartedAt !== undefined) {
+			elapsed = activityClock - viewed.turnStartedAt;
+		} else if (item.turnId && typeof item.at === 'number') {
+			for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+				const previous = viewedItems[previousIndex] as any;
+				if (previous.type === 'taskProgress' && previous.turnId === item.turnId && previous.percent < item.percent && typeof previous.at === 'number') {
+					elapsed = item.at - previous.at;
+					const gained = item.percent - previous.percent;
+					return Math.max(1, Math.ceil((elapsed * (100 - item.percent)) / gained / 60_000));
+				}
+			}
+		}
+		return estimateRemainingMinutes(item.percent, item.remainingMinutes, elapsed);
+	}
+
 	function chooseAttachments() {
 		imageInputEl?.click();
 	}
@@ -5507,7 +5528,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</div>
 								</div>
 							{:else if item.type === 'taskProgress'}
-								<div class="item task-progress-entry" role="status" aria-label={`Task progress ${(item as any).percent} percent, ${(item as any).percent >= 100 ? 'complete' : formatEstimatedRemaining((item as any).remainingMinutes)}`}>
+								<div class="item task-progress-entry" role="status" aria-label={`Task progress ${(item as any).percent} percent, ${(item as any).percent >= 100 ? 'complete' : formatEstimatedRemaining(progressEntryRemaining(item, viewedItems.findIndex((entry) => entry.id === item.id)))}`}>
 									<span class="gutter">↗</span>
 									<div class="message-progress">
 										<span class="message-progress-label">Progress</span>
@@ -5515,7 +5536,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										<strong>{(item as any).percent}%</strong>
 										<span class="message-progress-meter" aria-hidden="true"><span style={`width: ${(item as any).percent}%`}></span></span>
 										<span aria-hidden="true">·</span>
-										<span>{(item as any).percent >= 100 ? 'Complete' : formatEstimatedRemaining((item as any).remainingMinutes)}</span>
+										<span>{(item as any).percent >= 100 ? 'Complete' : formatEstimatedRemaining(progressEntryRemaining(item, viewedItems.findIndex((entry) => entry.id === item.id)))}</span>
 									</div>
 								</div>
 							{:else if item.type === 'reasoning'}
