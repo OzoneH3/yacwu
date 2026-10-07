@@ -461,7 +461,12 @@ server that owns their Codex child. Reload the browser after rebuilding.
 Spawn receipts provide evidence of new agent counters and their initial
 model/thinking settings, even if they arrive after the first turn. A matching
 first `total` and `last` token reading can also establish a fresh counter.
-Existing-session totals remain cumulative; connection gaps remain partial.
+Read/resume requests and their runtime replies are correlated automatically:
+stored counters from confirmed idle reads establish initial baselines without
+invalidating usage from other sessions. Active or failed reads, intervening
+turn activity, and unexplained positive deltas remain incomplete; stale stored
+snapshots cannot rewind a newer baseline. Existing-session totals remain
+cumulative; connection gaps remain partial.
 
 For older local recordings, `bun scripts/recover-usage.ts` previews repairs
 using exact turn contexts, first-agent token readings, and completed-turn

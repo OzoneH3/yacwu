@@ -75,3 +75,31 @@ pub fn records_spawn_creation_and_last_token_usage_test() {
     json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
   simplifile.delete(path) |> should.be_ok
 }
+
+pub fn correlates_idle_snapshot_reads_without_recording_thread_content_test() {
+  let label = "usage-snapshot-unit-test"
+  usage.snapshot_request(
+    label,
+    7,
+    "thread/resume",
+    json.object([
+      #("threadId", json.string("old-thread")),
+      #("developerInstructions", json.string("private instructions")),
+    ]),
+  )
+  let assert Ok(reply) =
+    json.parse(
+      "{\"thread\":{\"id\":\"old-thread\",\"status\":{\"type\":\"idle\"},\"turns\":[{\"items\":[{\"text\":\"private transcript\"}]}]}}",
+      decode.dynamic,
+    )
+  usage.snapshot_response(label, 7, "thread/resume", reply)
+  let saved = usage.history(label) |> json.to_string
+  string.contains(saved, "snapshotReadStarted") |> should.be_true
+  string.contains(saved, "snapshotReadCompleted") |> should.be_true
+  string.contains(saved, "requestId") |> should.be_true
+  string.contains(saved, "idle") |> should.be_true
+  string.contains(saved, "private") |> should.be_false
+  let path =
+    json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
+  simplifile.delete(path) |> should.be_ok
+}

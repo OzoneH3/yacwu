@@ -15,6 +15,8 @@ export interface UsageEvent {
 	last?: Partial<TokenTotals>;
 	snapshotAt?: number;
 	completedAt?: number;
+	requestId?: number;
+	counterSnapshot?: boolean;
 	usedPercent?: number;
 	resetsAt?: number;
 	limitId?: string | null;
@@ -121,9 +123,64 @@ function accountEvents(events: UsageEvent[], host: string) {
 	return annotated.filter((event) => event.accountKey === selected || event.accountKey === `unidentified:${host}`);
 }
 
+/** Confirm snapshots only inside a successful idle read/resume, with no turn
+ * lifecycle or connection gap during that request. Do not infer from silence. */
+function idleReadSnapshots(events: UsageEvent[]): Set<UsageEvent> {
+	const confirmed = new Set<UsageEvent>();
+	const idleReplies = new Map<string, { host: string; at: number }>();
+	const reads = new Map<string, { host: string; threadId: string; dirty: boolean; packets: UsageEvent[] }>();
+	const byThread = new Map<string, Set<string>>();
+	const threadKey = (event: UsageEvent) => JSON.stringify([event.host, event.threadId]);
+	const remove = (key: string) => {
+		const read = reads.get(key);
+		if (read) {
+			const group = JSON.stringify([read.host, read.threadId]);
+			byThread.get(group)?.delete(key);
+			if (!byThread.get(group)?.size) byThread.delete(group);
+		}
+		reads.delete(key);
+	};
+	for (const event of events) {
+		if (event.event === 'collectorStarted' || event.event === 'connectionLost') {
+			for (const [key, read] of reads) if (read.host === event.host) remove(key);
+			for (const [key, reply] of idleReplies) if (reply.host === event.host) idleReplies.delete(key);
+			continue;
+		}
+		const key = JSON.stringify([event.host, event.requestId]);
+		if (event.event === 'snapshotReadStarted' && event.threadId && Number.isFinite(event.requestId)) {
+			idleReplies.delete(threadKey(event));
+			remove(key);
+			reads.set(key, { host: event.host, threadId: event.threadId, dirty: false, packets: [] });
+			const group = byThread.get(threadKey(event)) ?? new Set<string>();
+			group.add(key); byThread.set(threadKey(event), group);
+		} else if (event.event === 'snapshotReadCompleted') {
+			const read = reads.get(key);
+			if (read && !read.dirty && event.threadId === read.threadId && (event.status === 'idle' || event.status === 'notLoaded')) {
+				for (const packet of read.packets) confirmed.add(packet);
+				idleReplies.set(threadKey(event), { host: event.host, at: event.at });
+			}
+			remove(key);
+		} else if (event.threadId) {
+			if (event.event === 'turn/started' || event.event === 'turn/completed') idleReplies.delete(threadKey(event));
+			// Codex may deliver the stored notification just after the RPC
+			// reply. Keep this explicit idle evidence briefly, never across
+			// another read, generation, or connection gap.
+			const idle = idleReplies.get(threadKey(event));
+			if (event.event === 'tokens' && idle && event.at - idle.at <= 5_000 && !byThread.has(threadKey(event))) confirmed.add(event);
+			for (const key of byThread.get(threadKey(event)) ?? []) {
+				const read = reads.get(key)!;
+				if (event.event === 'tokens') read.packets.push(event);
+				else if (event.event === 'turn/started' || event.event === 'turn/completed') read.dirty = true;
+			}
+		}
+	}
+	return confirmed;
+}
+
 /** Spawn receipts can arrive after the first child turn. Replay proven birth
  * and its settings before that turn, without zeroing a resumed/forked thread. */
 function resolveSpawnEvidence(events: UsageEvent[]): UsageEvent[] {
+	const idleSnapshots = idleReadSnapshots(events);
 	const firstTurns = new Map<string, UsageEvent>();
 	const firstTokens = new Map<string, UsageEvent>();
 	const births = new Map<string, UsageEvent>();
@@ -166,8 +223,9 @@ function resolveSpawnEvidence(events: UsageEvent[]): UsageEvent[] {
 	return [...recovered, ...events.map((event) => {
 		if (event.event !== 'tokens') return event;
 		const proof = snapshots.get(snapshotKey(event, event.at));
-		return proof && proof.total?.totalTokens === event.total?.totalTokens
-			? { ...event, completedAt: proof.completedAt } : event;
+		const historical = proof && proof.total?.totalTokens === event.total?.totalTokens;
+		return historical || idleSnapshots.has(event)
+			? { ...event, ...(historical ? { completedAt: proof.completedAt } : {}), counterSnapshot: idleSnapshots.has(event) } : event;
 	})].sort((a, b) => a.at - b.at);
 }
 
@@ -268,16 +326,19 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 				next[field] = typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 			}
 			const previous = totals.get(id);
-			totals.set(id, next);
 			const task = event.turnId ? tasksByTurn.get(`${id}:${event.turnId}`) : active.get(id);
 			const validTurn = task && (!event.turnId || event.turnId === task.turnId);
+			const completedAt = event.completedAt ?? (task?.status === 'completed' ? task.endedAt : null);
+			const storedSnapshot = !active.has(id) && ((event.counterSnapshot && !task)
+				|| (completedAt !== null && completedAt !== undefined && baseline && completedAt < baseline.at));
+			// A stale stored counter cannot rewind a newer known baseline.
+			if (storedSnapshot && previous && next.totalTokens <= previous.totalTokens) continue;
+			totals.set(id, next);
 			if (!previous || next.totalTokens < previous.totalTokens) {
 				// A completed turn predating this window can emit its stored
 				// cumulative count when read/resumed. It establishes a baseline,
 				// not untracked work in the current window.
-				const completedAt = event.completedAt ?? (task?.status === 'completed' ? task.endedAt : null);
-				if (!previous && completedAt !== null && completedAt !== undefined && baseline
-					&& completedAt < baseline.at && !active.has(id)) continue;
+				if (!previous && storedSnapshot) continue;
 				if (task) task.partialTokens = true;
 				if (baseline && next.totalTokens > 0) intervalIncomplete = true;
 				continue;

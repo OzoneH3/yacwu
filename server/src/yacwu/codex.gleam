@@ -698,6 +698,7 @@ fn send_request(
   let id = state.next_id
   let at = oauth.now()
   usage.request(state.label, method, params)
+  usage.snapshot_request(state.label, id, method, params)
   let turn_id =
     json.parse(json.to_string(params), decode.at(["turnId"], decode.string))
     |> result.unwrap(
@@ -1187,12 +1188,16 @@ fn on_response(
           let state = case reply {
             Ok(value) -> {
               usage.response(state.label, method, value)
+              usage.snapshot_response(state.label, id, method, value)
               State(
                 ..state,
                 activity: diagnostics.restore(state.activity, value, at),
               )
             }
-            Error(_) -> state
+            Error(_) -> {
+              usage.snapshot_response(state.label, id, method, dynamic.nil())
+              state
+            }
           }
           case reply_to {
             Caller(subject) -> process.send(subject, reply)

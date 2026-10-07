@@ -226,6 +226,56 @@ test('verified old snapshots seed counters without contaminating new work; curre
 	expect(analyzeUsage([...history, { ...proof, total: { totalTokens: 4999 } }]).observations).toBe(0);
 });
 
+test('loading an idle legacy session establishes its counter without excluding another session sample', () => {
+	const result = analyzeUsage([...setup('a', 'model'), quota(2, 10), tokens(3, 'a', 100),
+		event(4, 'snapshotReadStarted', { threadId: 'legacy', requestId: 7 }),
+		event(5, 'tokens', { threadId: 'legacy', turnId: 'historic', total: { totalTokens: 5_000_000 } }),
+		event(6, 'snapshotReadCompleted', { threadId: 'legacy', requestId: 7, status: 'idle' }), quota(7, 12),
+		event(8, 'metadata', { threadId: 'legacy', model: 'model', effort: 'medium' }),
+		event(9, 'turn/started', { threadId: 'legacy', turnId: 'new' }),
+		event(10, 'tokens', { threadId: 'legacy', turnId: 'new', total: { totalTokens: 5_000_200 } }), quota(11, 14)]);
+	expect(result.observations).toBe(2);
+	expect(result.rates[0].tokens).toBe(300);
+	expect(result.tasks.find((task) => task.threadId === 'legacy')!.tokens.totalTokens).toBe(200);
+});
+
+test('active, failed, interrupted or generation-bearing reads cannot hide untracked usage', () => {
+	for (const variant of ['active', 'failed', 'gap', 'generation']) {
+		const start = [...setup('a', 'model'), quota(2, 10), tokens(3, 'a', 100),
+			event(4, 'snapshotReadStarted', { threadId: 'legacy', requestId: 7 })];
+		const disruption = variant === 'gap' ? [event(4.1, 'connectionLost')]
+			: variant === 'generation' ? [event(4.1, 'turn/started', { threadId: 'legacy', turnId: 'historic' }), event(4.2, 'turn/completed', { threadId: 'legacy', turnId: 'historic' })] : [];
+		const result = analyzeUsage([...start, ...disruption,
+			event(5, 'tokens', { threadId: 'legacy', turnId: 'historic', total: { totalTokens: 1000 } }),
+			event(6, 'snapshotReadCompleted', { threadId: variant === 'failed' ? undefined : 'legacy', requestId: 7, status: variant === 'active' ? 'active' : variant === 'failed' ? undefined : 'idle' }), quota(7, 12)]);
+		expect(result.observations).toBe(0);
+	}
+});
+
+test('idle snapshots cannot conceal positive untracked deltas or rewind known counters', () => {
+	const history = [...setup('a', 'model'), event(1.1, 'tokens', { threadId: 'legacy', total: { totalTokens: 1000 } }), quota(2, 10), tokens(3, 'a', 100),
+		event(4, 'snapshotReadStarted', { threadId: 'legacy', requestId: 7 })];
+	const packet = event(5, 'tokens', { threadId: 'legacy', turnId: 'historic', total: { totalTokens: 1100 } });
+	const end = [event(6, 'snapshotReadCompleted', { threadId: 'legacy', requestId: 7, status: 'idle' }), quota(7, 12)];
+	expect(analyzeUsage([...history, packet, ...end]).observations).toBe(0);
+	const stale = analyzeUsage([...history, { ...packet, total: { totalTokens: 900 } }, ...end,
+		event(8, 'metadata', { threadId: 'legacy', model: 'model', effort: 'medium' }),
+		event(9, 'turn/started', { threadId: 'legacy', turnId: 'new' }),
+		event(10, 'tokens', { threadId: 'legacy', turnId: 'new', total: { totalTokens: 1200 } }), quota(11, 14)]);
+	expect(stale.observations).toBe(2);
+	expect(stale.rates[0].tokens).toBe(300);
+});
+
+test('stored notifications just after an idle reply are recognized, but not later work or old idle evidence', () => {
+	const history = [...setup('a', 'model'), quota(2, 10), tokens(3, 'a', 100),
+		event(4, 'snapshotReadStarted', { threadId: 'legacy', requestId: 7 }),
+		event(5, 'snapshotReadCompleted', { threadId: 'legacy', requestId: 7, status: 'idle' })];
+	const packet = event(6, 'tokens', { threadId: 'legacy', turnId: 'historic', total: { totalTokens: 5_000_000 } });
+	expect(analyzeUsage([...history, packet, quota(7, 12)]).observations).toBe(1);
+	expect(analyzeUsage([...history, { ...packet, at: 6000 }, quota(6001, 12)]).observations).toBe(0);
+	expect(analyzeUsage([...history, event(5.1, 'turn/started', { threadId: 'legacy', turnId: 'historic' }), packet, quota(7, 12)]).observations).toBe(0);
+});
+
 test('a transient quota increase does not train costs before repeated readings stabilize', () => {
 	const history = [...setup('a', 'model-a'), quota(2, 10), tokens(3, 'a', 100),
 		event(4, 'turn/completed', { threadId: 'a', turnId: 'a' }),

@@ -52,6 +52,46 @@ fn value(data: Dynamic, keys: List(String)) -> Json {
   |> result.unwrap(json.null())
 }
 
+/// Correlate token notifications emitted while loading stored thread state.
+/// A confirmed idle read can establish a baseline without claiming new usage.
+pub fn snapshot_request(
+  label: String,
+  id: Int,
+  method: String,
+  params: Json,
+) -> Nil {
+  case method {
+    "thread/read" | "thread/resume" -> {
+      case json.parse(json.to_string(params), decode.dynamic) {
+        Ok(data) ->
+          record(label, "snapshotReadStarted", [
+            #("requestId", json.int(id)),
+            #("threadId", value(data, ["threadId"])),
+          ])
+        Error(_) -> Nil
+      }
+    }
+    _ -> Nil
+  }
+}
+
+pub fn snapshot_response(
+  label: String,
+  id: Int,
+  method: String,
+  data: Dynamic,
+) -> Nil {
+  case method {
+    "thread/read" | "thread/resume" ->
+      record(label, "snapshotReadCompleted", [
+        #("requestId", json.int(id)),
+        #("threadId", value(data, ["thread", "id"])),
+        #("status", value(data, ["thread", "status", "type"])),
+      ])
+    _ -> Nil
+  }
+}
+
 pub fn request(label: String, method: String, params: Json) -> Nil {
   case method {
     "turn/start" -> {
