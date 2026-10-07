@@ -56,7 +56,8 @@ test('unchanged and one-percent readings accumulate rather than implying free ta
 	const result = analyzeUsage([...setup('a', 'model-a'), quota(2, 20), tokens(3, 'a', 100), quota(4, 20), tokens(5, 'a', 200), quota(6, 21), tokens(7, 'a', 300), quota(8, 22)]);
 	expect(result.observations).toBe(1);
 	expect(result.rates[0].tokens).toBe(300);
-	expect(result.tasks[0].estimatedWeeklyPercent).toBeNull();
+	expect(result.tasks[0].estimatedWeeklyPercent).toBe(2);
+	expect(result.tasks[0].estimate?.provisional).toBe(true);
 });
 
 test('a missing cumulative baseline never charges historic session tokens to a new task', () => {

@@ -43,3 +43,10 @@ test('usage projections use progress or sufficient elapsed time, and require cal
 	expect(formatAllowancePercent(null)).toBe('Learning…');
 	expect(formatAllowancePercent(0.003)).toBe('~0.003%');
 });
+
+test('early agent estimates remain labelled provisional in combined task totals', () => {
+	const root = task(), agent = task({ threadId: 'child', parentThreadId: 'root', estimate: { value: .1, low: .05, high: .15, samples: 1, weighted: false, provisional: true } });
+	const summary = summarizeTaskUsage([root, agent], root);
+	expect(summary.percent).toBeCloseTo(.2);
+	expect(summary.provisional).toBe(true);
+});

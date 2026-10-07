@@ -10,6 +10,7 @@ export interface TaskUsageSummary {
 	agentTurns: number;
 	runningAgents: boolean;
 	startedAt: number;
+	provisional: boolean;
 }
 
 /** Charge only descendant turns begun under this prompt, never another session. */
@@ -37,7 +38,8 @@ export function summarizeTaskUsage(tasks: UsageTask[], task: UsageTask): TaskUsa
 		high: estimated ? included.reduce((sum, other) => sum + (other.estimate?.high ?? 0), 0) : null,
 		agentTurns: included.length - 1,
 		runningAgents: included.some((other) => other !== task && other.endedAt === null),
-		startedAt: task.startedAt
+		startedAt: task.startedAt,
+		provisional: included.some((other) => other.estimate?.provisional)
 	};
 }
 

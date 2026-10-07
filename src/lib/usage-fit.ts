@@ -1,7 +1,7 @@
 import type { TokenTotals } from './usage-analysis';
 
 export interface UsageObservation { percent: number; tokens: Record<string, TokenTotals> }
-export interface CostEstimate { value: number; low: number; high: number; samples: number; weighted: boolean }
+export interface CostEstimate { value: number; low: number; high: number; samples: number; weighted: boolean; provisional?: boolean }
 type Category = 'total' | 'uncached' | 'cached' | 'output';
 interface Feature { group: string; category: Category }
 
@@ -68,6 +68,13 @@ function train(observations: UsageObservation[], features: Feature[]) {
 }
 
 export function learnTokenCosts(observations: UsageObservation[]) {
+	const pure = new Map<string, UsageObservation[]>();
+	for (const sample of observations) {
+		const keys = Object.keys(sample.tokens).filter((key) => sample.tokens[key].totalTokens > 0);
+		if (keys.length !== 1 || !Number.isFinite(sample.percent) || sample.percent <= 0) continue;
+		const key = keys[0], samples = pure.get(key) ?? [];
+		samples.push(sample); pure.set(key, samples);
+	}
 	let groups = [...new Set(observations.flatMap((sample) => Object.keys(sample.tokens)))].filter((group) => observations.filter((sample) => (sample.tokens[group]?.totalTokens ?? 0) > 0).length >= 3);
 	// A newly observed model must not erase established estimates; don't assign its unknown cost to known models.
 	let eligible: UsageObservation[] = [];
@@ -80,6 +87,14 @@ export function learnTokenCosts(observations: UsageObservation[]) {
 	const samples = (group: string) => eligible.filter((sample) => (sample.tokens[group]?.totalTokens ?? 0) > 0).length;
 	const fallback = train(eligible, groups.map((group) => ({ group, category: 'total' as const })));
 	const categories: Category[] = ['uncached', 'cached', 'output'];
+	// A clean model must not be blocked by an unrelated rank-deficient mixture.
+	const independent = new Map<string, { total: ReturnType<typeof train>; weighted: ReturnType<typeof train> }>();
+	for (const [group, samples] of pure) {
+		const total = train(samples, [{ group, category: 'total' }]);
+		const complete = samples.every((sample) => { const t = sample.tokens[group]; return Math.abs(t.inputTokens + t.outputTokens - t.totalTokens) <= 1; });
+		const features = categories.filter((category) => samples.some((sample) => amount(sample.tokens[group], category) > 0)).map((category) => ({ group, category }));
+		independent.set(group, { total, weighted: complete ? train(samples, features) : null });
+	}
 	let weighted = fallback;
 	// Upgrade identifiable groups independently; another group's collinear mix keeps its labeled fallback.
 	for (const group of groups) {
@@ -91,24 +106,43 @@ export function learnTokenCosts(observations: UsageObservation[]) {
 		weighted = train(eligible, candidate) ?? weighted;
 	}
 	function estimate(group: string, tokens: TokenTotals): CostEstimate | null {
-		let fit = weighted;
+		const local = independent.get(group);
+		let fit = weighted?.features.some((feature) => feature.group === group) ? weighted : local?.weighted ?? local?.total ?? null;
 		const hasWeights = fit?.features.some((feature) => feature.group === group && feature.category !== 'total');
 		if (fit && hasWeights && categories.some((category) => amount(tokens, category) > 0 && !fit!.features.some((f) => f.group === group && f.category === category))) fit = null;
 		if (fit && Math.abs(tokens.inputTokens + tokens.outputTokens - tokens.totalTokens) > 1) fit = null;
-		fit ??= fallback;
-		if (!fit || !fit.features.some((f) => f.group === group)) return null;
+		fit ??= fallback?.features.some((feature) => feature.group === group) ? fallback : local?.total ?? null;
+		if (!fit || !fit.features.some((f) => f.group === group)) {
+			const single = pure.get(group) ?? [];
+			if (!single.length || tokens.totalTokens <= 0) return null;
+			const totals = single.reduce((sum, sample) => {
+				const t = sample.tokens[group];
+				return { tokens: sum.tokens + t.totalTokens, cached: sum.cached + t.cachedInputTokens, output: sum.output + t.outputTokens, percent: sum.percent + sample.percent };
+			}, { tokens: 0, cached: 0, output: 0, percent: 0 });
+			// Early total-token rates only extrapolate to broadly similar mixes.
+			// Sparse evidence cannot price an uncached/output-heavy task from a
+			// cached-input-heavy observation.
+			if (Math.abs(tokens.cachedInputTokens / tokens.totalTokens - totals.cached / totals.tokens) > 0.15
+				|| Math.abs(tokens.outputTokens / tokens.totalTokens - totals.output / totals.tokens) > 0.15) return null;
+			const scale = tokens.totalTokens / totals.tokens;
+			return { value: totals.percent * scale, low: Math.max(0, totals.percent - single.length) * scale,
+				high: (totals.percent + single.length) * scale, samples: single.length, weighted: false, provisional: true };
+		}
 		const vector = fit.features.map((f) => f.group === group ? amount(tokens, f.category) / 100_000 : 0);
 		const value = vector.reduce((sum, feature, i) => sum + feature * fit.beta[i], 0);
 		const uncertainty = Math.sqrt(Math.max(0, fit.variance * vector.reduce((sum, feature, i) => sum + feature * vector.reduce((s, other, j) => s + other * fit!.covariance[i][j], 0), 0)));
-		return { value, low: Math.max(0, value - 1.96 * uncertainty), high: value + 1.96 * uncertainty, samples: samples(group), weighted: fit.features.some((feature) => feature.group === group && feature.category !== 'total') };
+		return { value, low: Math.max(0, value - 1.96 * uncertainty), high: value + 1.96 * uncertainty,
+			samples: fit === weighted || fit === fallback ? samples(group) : pure.get(group)?.length ?? 0,
+			weighted: fit.features.some((feature) => feature.group === group && feature.category !== 'total') };
 	}
 	function weights(group: string): Record<'uncached' | 'cached' | 'output', number | null> {
 		const result = { uncached: null, cached: null, output: null } as Record<'uncached' | 'cached' | 'output', number | null>;
-		if (weighted) for (const category of categories) {
-			const index = weighted.features.findIndex((f) => f.group === group && f.category === category);
-			if (index >= 0) result[category as keyof typeof result] = weighted.beta[index];
+		const fit = weighted?.features.some((feature) => feature.group === group) ? weighted : independent.get(group)?.weighted;
+		if (fit) for (const category of categories) {
+			const index = fit.features.findIndex((f) => f.group === group && f.category === category);
+			if (index >= 0) result[category as keyof typeof result] = fit.beta[index];
 		}
 		return result;
 	}
-	return { estimate, weights, calibrated: Boolean(fallback || weighted) };
+	return { estimate, weights, calibrated: Boolean(fallback || weighted || [...independent.values()].some((fit) => fit.total || fit.weighted)) };
 }

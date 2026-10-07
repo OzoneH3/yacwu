@@ -59,7 +59,12 @@ state lives entirely in Codex's own persistent sessions, read back via
   progress is not yet available. Completed responses show estimated weekly
   allowance used and recorded token totals, including agent turns started
   under that prompt. Usage refreshes every 30 seconds and at turn boundaries;
-  partial recordings and insufficient calibration are labeled rather than
+  the open history dialog also refreshes automatically. One clean single-setting
+  observation provides an explicitly provisional “early” rate with rounding
+  uncertainty, for tasks with a broadly similar token mix. More independent
+  evidence upgrades it to fitted costs; unrelated sparse or inseparable mixed
+  models do not block a separately calibrated model.
+  Partial recordings and insufficient calibration are labeled rather than
   assigned a fabricated percentage
 - 📊 Task usage history: click the weekly allowance or open it from Session
   details to inspect recorded model, thinking level, cumulative token deltas,
@@ -496,7 +501,10 @@ settling period for delayed quota updates. It learns nonnegative weights for
 uncached input, cached input, and output when independently identifiable;
 reasoning is counted within output once. Insufficient or indistinguishable
 token breakdowns use a labeled total-token fallback. Multiple independent
-observations are required. Whole-percent differences are treated as ranges
+observations are required for fitted weights. Before that, clean single-setting
+windows provide provisional total-token rates with explicit rounding ranges;
+they do not invent costs from mixed-only evidence or extrapolate cached-heavy
+samples to substantially different token mixes. Whole-percent differences are treated as ranges
 (up to one percentage point either side), and displayed uncertainty combines
 rounding and fit variation. The ranges are indicative, not guaranteed bounds.
 

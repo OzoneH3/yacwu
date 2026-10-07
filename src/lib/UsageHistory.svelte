@@ -45,6 +45,7 @@
 		return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 	}
 	async function refresh() {
+		if (loading) return;
 		loading = true; error = '';
 		try {
 			const response = await fetch(`/api/usage${hostQuery(host)}`);
@@ -54,7 +55,11 @@
 		} catch (e) { error = e instanceof Error ? e.message : String(e); }
 		finally { loading = false; }
 	}
-	onMount(() => { dialog?.showModal(); void refresh(); });
+	onMount(() => {
+		dialog?.showModal(); void refresh();
+		const timer = setInterval(() => void refresh(), 30_000);
+		return () => clearInterval(timer);
+	});
 </script>
 
 <dialog bind:this={dialog} aria-labelledby="usage-history-title" oncancel={onclose} onclick={(event) => { if (event.target === dialog) onclose(); }}>
@@ -68,13 +73,14 @@
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		<BenchmarkControls {host} {models} {selectedModel} {selectedEffort} oncomplete={() => void refresh()} />
 		<h3>Model and thinking level</h3>
+		<p class="meta">A clean single-setting window supplies a provisional rate immediately, including rounding uncertainty. It applies only to a similar token mix and upgrades to a fitted estimate with sufficient independent evidence. Mixed windows alone cannot identify a model's individual cost.</p>
 		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded. Ordinary intervals close after at least 2% used, stable readings, and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
 		<div class="table-wrap">
 			<table>
 				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>Weekly cost / 100k (observed mix)</th><th>Uncached / cached / output per 100k</th></tr></thead>
 				<tbody>
 					{#each analysis.rates as rate}
-						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}</td><td>{tokens(rate.tokens)}</td><td>{range(rate.estimate)}{#if rate.estimate}<small>{rate.estimate.weighted ? 'Separate token weights' : 'Total-token fallback'}</small>{/if}</td><td>{percent(rate.weights.uncached)} / {percent(rate.weights.cached)} / {percent(rate.weights.output)}</td></tr>
+						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}<small>{rate.singleSettingSamples} single-setting</small></td><td>{tokens(rate.tokens)}</td><td>{range(rate.estimate)}{#if rate.estimate}<small>{rate.estimate.provisional ? `Provisional · ${rate.estimate.samples} single-setting samples` : rate.estimate.weighted ? 'Separate token weights' : 'Total-token fallback'}</small>{/if}</td><td>{percent(rate.weights.uncached)} / {percent(rate.weights.cached)} / {percent(rate.weights.output)}</td></tr>
 					{:else}<tr><td colspan="6">No tasks recorded yet. Recording begins after the updated backend starts.</td></tr>{/each}
 				</tbody>
 			</table>
@@ -148,7 +154,7 @@
 							<td title={`Input ${tokens(task.tokens.inputTokens)}, cached ${tokens(task.tokens.cachedInputTokens)}, output ${tokens(task.tokens.outputTokens)}, reasoning ${tokens(task.tokens.reasoningOutputTokens)}`}>{tokens(task.tokens.totalTokens)}{task.partialTokens ? ' (partial)' : ''}</td>
 							<td>{duration(task.startedAt, task.endedAt)}</td>
 							<td>{task.weeklyLeftBefore ?? '—'}% → {task.weeklyLeftAfter ?? '—'}%</td>
-							<td>{task.partialTokens ? 'Partial recording' : range(task.estimate)}{#if task.estimate}<small>{task.estimate.samples} samples · {task.estimate.weighted ? 'weighted' : 'total-token fallback'}</small>{/if}</td>
+							<td>{task.partialTokens ? 'Partial recording' : range(task.estimate)}{#if task.estimate}<small>{task.estimate.samples} samples · {task.estimate.provisional ? 'provisional, similar token mix' : task.estimate.weighted ? 'weighted' : 'total-token fallback'}</small>{/if}</td>
 						</tr>
 					{:else}<tr><td colspan="6">No recorded tasks for this selection.</td></tr>{/each}
 				</tbody>

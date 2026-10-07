@@ -61,6 +61,7 @@ export interface UsageRate {
 	model: string;
 	effort: string;
 	samples: number;
+	singleSettingSamples: number;
 	tokens: number;
 	percentPer100kTokens: number | null;
 	estimate: CostEstimate | null;
@@ -412,7 +413,9 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		const normalized = { ...total };
 		for (const field of Object.keys(total) as (keyof TokenTotals)[]) normalized[field] = total.totalTokens ? total[field] / total.totalTokens * 100_000 : 0;
 		const estimate = learned.estimate(key, normalized);
-		return { model, effort, samples: samples.length, tokens: total.totalTokens, percentPer100kTokens: estimate?.value ?? null, estimate, weights: learned.weights(key) };
+		return { model, effort, samples: samples.length,
+			singleSettingSamples: samples.filter((sample) => Object.values(sample.tokens).filter((tokens) => tokens.totalTokens > 0).length === 1).length,
+			tokens: total.totalTokens, percentPer100kTokens: estimate?.value ?? null, estimate, weights: learned.weights(key) };
 	});
 	for (const task of tasks) {
 		const accountQuotas = quotas.filter((quota) => quota.accountKey === task.accountKey);
