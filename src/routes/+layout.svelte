@@ -146,6 +146,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 
 	let sessions = $state<ThreadSummary[]>([]);
 	const SESSION_ORDER_KEY = 'yacwu-session-order';
+	const EMPTY_SESSION_HOSTS_KEY = 'yacwu-empty-session-hosts';
 	const WORKSPACE_SPLIT_KEY = 'yacwu-workspace-split';
 	const DISMISSED_GOALS_KEY = 'yacwu-dismissed-goals';
 	let sessionOrder = $state<string[]>([]);
@@ -939,6 +940,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function removeSession(id: string) {
+		rememberEmptySession(id, null);
 		sessions = sessions.filter((s) => s.id !== id);
 		sessionOrder = sessionOrder.filter((sessionId) => sessionId !== id);
 		localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
@@ -1632,6 +1634,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	// Codex may not index a new thread until its first prompt. Remember routing
+	// only; recovery must still verify that Codex has the thread loaded.
+	function emptySessionHosts(): Record<string, string> {
+		try {
+			const value = JSON.parse(localStorage.getItem(EMPTY_SESSION_HOSTS_KEY) ?? '{}');
+			return value && typeof value === 'object' && !Array.isArray(value)
+				? Object.fromEntries(Object.entries(value).filter(([, host]) => typeof host === 'string')) as Record<string, string> : {};
+		} catch { return {}; }
+	}
+
+	function rememberEmptySession(id: string, host: string | null) {
+		const saved = emptySessionHosts();
+		if (host === null) delete saved[id];
+		else saved[id] = host;
+		try { localStorage.setItem(EMPTY_SESSION_HOSTS_KEY, JSON.stringify(saved)); } catch { /* storage unavailable */ }
+	}
+
 	// Ephemeral side chats are never persisted, so thread/list omits them.
 	// Re-attach any still loaded in codex memory to their parent sessions.
 	// Codex only reports forkedFromId in the thread/fork response, so the
@@ -1641,6 +1660,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	// thread/list defaults to interactive sources and omits them too.
 	async function recoverSideChats() {
 		try {
+			const emptyHosts = emptySessionHosts();
+			// Also recover an empty replacement created before this fix when its
+			// URL is still open. Never recreate a thread or send a dummy prompt.
+			if (activeId) emptyHosts[activeId] ??= activeHost;
 			const res = await fetch('/api/threads/loaded');
 			const data = await res.json();
 			const loaded: string[] = data.data ?? [];
@@ -1649,7 +1672,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			);
 			for (const id of missing) {
 				try {
-					const res = await fetch(`/api/threads/${id}`);
+					const host = emptyHosts[id];
+					const res = await fetch(`/api/threads/${id}${host ? hostQuery(host) : ''}`);
 					const data = await res.json();
 					const thr = data.thread;
 					if (isSubAgentThread(thr)) {
@@ -1659,6 +1683,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const parentId = thr?.id ? sessionStorage.getItem(sideParentKey(thr.id)) : null;
 					if (thr?.ephemeral && parentId) {
 						upsertSession({ ...thr, forkedFromId: thr.forkedFromId ?? parentId ?? null });
+					} else if (thr?.id && !thr.ephemeral && host) {
+						upsertSession({ ...thr, host });
+						rememberEmptySession(id, host);
 					}
 				} catch {
 					/* unreadable thread — skip */
@@ -1868,6 +1895,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		creating = false;
 		const id = data.thread?.id;
 		if (id) {
+			rememberEmptySession(id, data.host ?? host);
 			const thread = ensureThread(id);
 			thread.status = data.thread?.status?.type === 'active' ? 'running' : 'idle';
 			// thread/start already gave us an empty transcript. Avoid immediately
@@ -3074,6 +3102,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					clearReplacementId = createdId;
 					clearCreationSnapshot = null;
 					if (createdId) {
+						rememberEmptySession(createdId, host);
 						const thread = ensureThread(createdId);
 						thread.tokens = 0;
 						sessionHistoryLoaded[createdId] = true;

@@ -20,6 +20,8 @@ state lives entirely in Codex's own persistent sessions, read back via
   model/thinking, profile, fast mode and list position, and archives the old
   history for restoration. The replacement stays hidden while being prepared,
   then appears in the original list position without a temporary new-session row.
+  Empty sessions survive page refresh before their first prompt by recovering
+  their verified, still-loaded Codex thread, even before Codex indexes it.
   Available after the session and its agents stop;
   previously consumed account allowance is unchanged
 - ✅ Background completion indicators mark finished sessions until you open
