@@ -51,3 +51,27 @@ pub fn persists_usage_without_conversation_content_test() {
     json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
   simplifile.delete(path) |> should.be_ok
 }
+
+pub fn records_spawn_creation_and_last_token_usage_test() {
+  let label = "usage-spawn-unit-test"
+  let assert Ok(spawn) =
+    json.parse(
+      "{\"params\":{\"threadId\":\"parent\",\"item\":{\"type\":\"collabAgentToolCall\",\"tool\":\"spawnAgent\",\"receiverThreadIds\":[\"child\"],\"model\":\"model\",\"reasoningEffort\":\"medium\",\"prompt\":\"private spawn prompt\"}}}",
+      decode.dynamic,
+    )
+  usage.notification(label, "item/completed", spawn)
+  let assert Ok(tokens) =
+    json.parse(
+      "{\"params\":{\"threadId\":\"child\",\"turnId\":\"turn\",\"tokenUsage\":{\"total\":{\"totalTokens\":50},\"last\":{\"totalTokens\":50}}}}",
+      decode.dynamic,
+    )
+  usage.notification(label, "thread/tokenUsage/updated", tokens)
+  let saved = usage.history(label) |> json.to_string
+  string.contains(saved, "spawnedThread") |> should.be_true
+  string.contains(saved, "parentThreadId") |> should.be_true
+  string.contains(saved, "\"last\"") |> should.be_true
+  string.contains(saved, "private spawn prompt") |> should.be_false
+  let path =
+    json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
+  simplifile.delete(path) |> should.be_ok
+}

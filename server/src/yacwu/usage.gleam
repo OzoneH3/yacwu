@@ -153,7 +153,9 @@ pub fn notification(label: String, method: String, msg: Dynamic) -> Nil {
                 )
                 |> result.unwrap([])
               list.each(receivers, fn(thread) {
-                record(label, "metadata", [
+                // This proves creation even when Codex only reports the
+                // receiver after the child's first turn has completed.
+                record(label, "spawnedThread", [
                   #("threadId", json.string(thread)),
                   #("parentThreadId", value(data, ["threadId"])),
                   #("model", value(data, ["item", "model"])),
@@ -169,6 +171,7 @@ pub fn notification(label: String, method: String, msg: Dynamic) -> Nil {
             #("threadId", value(data, ["threadId"])),
             #("turnId", value(data, ["turnId"])),
             #("total", value(data, ["tokenUsage", "total"])),
+            #("last", value(data, ["tokenUsage", "last"])),
           ])
         "turn/started" | "turn/completed" ->
           record(label, method, [

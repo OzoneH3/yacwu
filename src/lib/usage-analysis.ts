@@ -12,6 +12,9 @@ export interface UsageEvent {
 	parentThreadId?: string | null;
 	status?: string;
 	total?: Partial<TokenTotals>;
+	last?: Partial<TokenTotals>;
+	snapshotAt?: number;
+	completedAt?: number;
 	usedPercent?: number;
 	resetsAt?: number;
 	limitId?: string | null;
@@ -118,10 +121,60 @@ function accountEvents(events: UsageEvent[], host: string) {
 	return annotated.filter((event) => event.accountKey === selected || event.accountKey === `unidentified:${host}`);
 }
 
+/** Spawn receipts can arrive after the first child turn. Replay proven birth
+ * and its settings before that turn, without zeroing a resumed/forked thread. */
+function resolveSpawnEvidence(events: UsageEvent[]): UsageEvent[] {
+	const firstTurns = new Map<string, UsageEvent>();
+	const firstTokens = new Map<string, UsageEvent>();
+	const births = new Map<string, UsageEvent>();
+	const seenThreads = new Set<string>();
+	const recovered: UsageEvent[] = [];
+	const snapshots = new Map<string, UsageEvent>();
+	const snapshotKey = (event: UsageEvent, at: number) => JSON.stringify([event.host, event.threadId, event.turnId, at]);
+	const gaps = events.filter((event) => event.event === 'collectorStarted' || event.event === 'connectionLost');
+	const crossesGap = (host: string, start: number, end: number) => gaps.some((event) => event.host === host
+		&& event.at >= Math.min(start, end) && event.at <= Math.max(start, end));
+	for (const event of events) {
+		if (!event.threadId) continue;
+		const key = `${event.host}:${event.threadId}`;
+		if (event.event === 'tokens' && !firstTokens.has(key)) firstTokens.set(key, event);
+		if (event.event === 'historicalSnapshot' && Number.isFinite(event.snapshotAt) && Number.isFinite(event.completedAt)) {
+			snapshots.set(snapshotKey(event, event.snapshotAt!), event);
+		}
+		if (event.event === 'spawnedThread') {
+			const previous = births.get(key);
+			births.set(key, previous ? { ...previous, model: previous.model || event.model, effort: previous.effort || event.effort } : event);
+		}
+		if (!seenThreads.has(key) && event.event === 'turn/started') firstTurns.set(key, event);
+		// Metadata does not prove prior usage; a prior token counter does.
+		if (event.event === 'tokens' || event.event === 'newThread' || event.event === 'turn/started') seenThreads.add(key);
+	}
+	for (const [key, birth] of births) {
+		const turn = firstTurns.get(key);
+		if (!turn) continue;
+		// Never bridge a connection/collector gap while inferring creation.
+		if (crossesGap(birth.host, turn.at, birth.at)) continue;
+		recovered.push({ ...birth, at: turn.at, event: 'newThread' }, { ...birth, at: turn.at, event: 'metadata' });
+	}
+	for (const [key, packet] of firstTokens) {
+		const turn = firstTurns.get(key);
+		if (!turn || births.has(key) || packet.turnId !== turn.turnId || !packet.total?.totalTokens
+			|| packet.total.totalTokens !== packet.last?.totalTokens) continue;
+		if (!crossesGap(packet.host, turn.at, packet.at)) recovered.push({ ...packet, at: turn.at, event: 'newThread' });
+	}
+	// Synthetic birth events precede the real turn when timestamps tie.
+	return [...recovered, ...events.map((event) => {
+		if (event.event !== 'tokens') return event;
+		const proof = snapshots.get(snapshotKey(event, event.at));
+		return proof && proof.total?.totalTokens === event.total?.totalTokens
+			? { ...event, completedAt: proof.completedAt } : event;
+	})].sort((a, b) => a.at - b.at);
+}
+
 export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; settleMs?: number } = {}) {
 	const host = options.host ?? 'local';
 	const settleMs = options.settleMs ?? 60_000;
-	const events = accountEvents(rawEvents, host);
+	const events = resolveSpawnEvidence(accountEvents(rawEvents, host));
 	const tasks: UsageTask[] = [];
 	const tasksByTurn = new Map<string, UsageTask>();
 	const active = new Map<string, UsageTask>();
@@ -159,7 +212,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		if (event.event === 'benchmark' && id) benchmarks.add(id);
 		if (event.host === host && event.event === 'benchmarkBoundary' && id) {
 			const prior = quotas.at(-1);
-			if (prior?.accountKey === event.accountKey && sameResetWindow(prior.resetsAt, event.resetsAt) && typeof event.usedPercent === 'number') {
+			if (prior && prior.accountKey === event.accountKey && sameResetWindow(prior.resetsAt, event.resetsAt) && typeof event.usedPercent === 'number') {
 				baseline = { ...prior, at: event.at, usedPercent: event.usedPercent };
 				benchmarkInterval = id; intervalTokens = {}; intervalTasks = new Map(); intervalIncomplete = active.size > 0;
 			}
@@ -183,7 +236,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			for (const [key, task] of active) if (task.host === event.host) { task.endedAt = event.at; task.status = 'tracking gap'; task.partialTokens = true; active.delete(key); }
 			for (const key of totals.keys()) if (key.startsWith(`${event.host}:`)) totals.delete(key);
 			baseline = null; intervalTokens = {}; intervalTasks = new Map(); intervalIncomplete = false; benchmarkInterval = null;
-		} else if ((event.event === 'settings' || event.event === 'metadata') && id) {
+		} else if ((event.event === 'settings' || event.event === 'metadata' || event.event === 'spawnedThread') && id) {
 			const previous = settings.get(id);
 			settings.set(id, { model: event.model || previous?.model || 'Unknown', effort: event.effort || previous?.effort || 'Unknown', parent: event.parentThreadId || previous?.parent || null });
 			const task = active.get(id);
@@ -219,6 +272,12 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			const task = event.turnId ? tasksByTurn.get(`${id}:${event.turnId}`) : active.get(id);
 			const validTurn = task && (!event.turnId || event.turnId === task.turnId);
 			if (!previous || next.totalTokens < previous.totalTokens) {
+				// A completed turn predating this window can emit its stored
+				// cumulative count when read/resumed. It establishes a baseline,
+				// not untracked work in the current window.
+				const completedAt = event.completedAt ?? (task?.status === 'completed' ? task.endedAt : null);
+				if (!previous && completedAt !== null && completedAt !== undefined && baseline
+					&& completedAt < baseline.at && !active.has(id)) continue;
 				if (task) task.partialTokens = true;
 				if (baseline && next.totalTokens > 0) intervalIncomplete = true;
 				continue;

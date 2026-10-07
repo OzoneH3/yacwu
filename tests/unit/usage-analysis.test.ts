@@ -171,6 +171,61 @@ test('sequential workers in a pooled interval are not labelled concurrent', () =
 	expect(result.pools[0].groups[0].workerMs).toBe(4);
 });
 
+test('a delayed spawn receipt recovers the first child turn without losing its initial tokens', () => {
+	const history = [quota(0, 10), event(1, 'turn/started', { threadId: 'child', turnId: 'child' }),
+		tokens(2, 'child', 100), tokens(3, 'child', 200),
+		event(4, 'turn/completed', { threadId: 'child', turnId: 'child' }),
+		event(5, 'spawnedThread', { threadId: 'child', parentThreadId: 'parent', model: 'model', effort: 'medium' }), quota(6, 12)];
+	const result = analyzeUsage(history);
+	expect(result.tasks[0].tokens.totalTokens).toBe(200);
+	expect(result.tasks[0].model).toBe('model');
+	expect(result.tasks[0].effort).toBe('medium');
+	expect(result.tasks[0].partialTokens).toBe(false);
+	expect(result.observations).toBe(1);
+	expect(result.pools[0].status).toBe('settled');
+});
+
+test('spawn receipts never zero a pre-existing counter or bridge a collection gap', () => {
+	const receipt = event(5, 'spawnedThread', { threadId: 'child', model: 'model', effort: 'medium' });
+	const existing = analyzeUsage([event(0, 'tokens', { threadId: 'child', total: { totalTokens: 1000 } }),
+		quota(1, 10), event(2, 'turn/started', { threadId: 'child', turnId: 'child' }), tokens(3, 'child', 1100), receipt, quota(6, 12)]);
+	expect(existing.tasks[0].tokens.totalTokens).toBe(100);
+	const gap = analyzeUsage([quota(0, 10), event(1, 'turn/started', { threadId: 'child', turnId: 'child' }),
+		event(2, 'connectionLost'), tokens(3, 'child', 1000), receipt, quota(6, 12)]);
+	expect(gap.tasks[0].partialTokens).toBe(true);
+	expect(gap.observations).toBe(0);
+});
+
+test('a repeated spawn receipt supplies missing settings without resetting accumulated tokens', () => {
+	const result = analyzeUsage([quota(0, 10), event(1, 'spawnedThread', { threadId: 'child' }),
+		event(2, 'turn/started', { threadId: 'child', turnId: 'child' }), tokens(3, 'child', 100),
+		event(4, 'spawnedThread', { threadId: 'child', model: 'model', effort: 'low' }), tokens(5, 'child', 200), quota(6, 12)]);
+	expect(result.tasks[0].tokens.totalTokens).toBe(200);
+	expect(result.tasks[0].effort).toBe('low');
+	expect(result.observations).toBe(1);
+});
+
+test('matching total and last usage prove a fresh counter, while a lifetime total cannot', () => {
+	const history = [quota(0, 10), event(1, 'metadata', { threadId: 'a', model: 'model', effort: 'low' }),
+		event(2, 'turn/started', { threadId: 'a', turnId: 'a' })];
+	const fresh = analyzeUsage([...history, event(3, 'tokens', { threadId: 'a', turnId: 'a', total: { totalTokens: 100 }, last: { totalTokens: 100 } }), quota(4, 12)]);
+	expect(fresh.tasks[0].tokens.totalTokens).toBe(100);
+	expect(fresh.tasks[0].partialTokens).toBe(false);
+	expect(fresh.observations).toBe(1);
+	const resumed = analyzeUsage([...history, event(3, 'tokens', { threadId: 'a', turnId: 'a', total: { totalTokens: 10000 }, last: { totalTokens: 100 } }), quota(4, 12)]);
+	expect(resumed.tasks[0].tokens.totalTokens).toBe(0);
+	expect(resumed.tasks[0].partialTokens).toBe(true);
+});
+
+test('verified old snapshots seed counters without contaminating new work; current-window work still counts', () => {
+	const history = [...setup('a', 'model'), quota(2, 10), tokens(3, 'a', 100),
+		event(4, 'tokens', { threadId: 'old', turnId: 'old', total: { totalTokens: 5000 } }), quota(5, 12)];
+	const proof = event(6, 'historicalSnapshot', { threadId: 'old', turnId: 'old', snapshotAt: 4, completedAt: 1, total: { totalTokens: 5000 } });
+	expect(analyzeUsage([...history, proof]).observations).toBe(1);
+	expect(analyzeUsage([...history, { ...proof, completedAt: 3 }]).observations).toBe(0);
+	expect(analyzeUsage([...history, { ...proof, total: { totalTokens: 4999 } }]).observations).toBe(0);
+});
+
 test('a transient quota increase does not train costs before repeated readings stabilize', () => {
 	const history = [...setup('a', 'model-a'), quota(2, 10), tokens(3, 'a', 100),
 		event(4, 'turn/completed', { threadId: 'a', turnId: 'a' }),

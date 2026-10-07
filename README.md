@@ -60,6 +60,9 @@ state lives entirely in Codex's own persistent sessions, read back via
   each account allowance change once. Single-setting windows show a direct
   observed cost per 100k tokens; mixed, pending, and incomplete windows are
   identified separately, with model/thinking and concurrency filters.
+  Agent spawn evidence recovers first-turn settings and token baselines even
+  when the spawn receipt arrives late; completed-turn snapshots do not charge
+  historical tokens to new work.
   Manual benchmarks provide bounded calibration workloads
 - 💬 Interactive answers: completed questions and action requests open a prompt
   dialog; multiple choice blocks in one message are queued separately and remain
@@ -439,6 +442,20 @@ starts with the next local child. Let active tasks finish before restarting a
 server that owns their Codex child. Reload the browser after rebuilding.
 
 ### Task allowance analysis
+
+Spawn receipts provide evidence of new agent counters and their initial
+model/thinking settings, even if they arrive after the first turn. A matching
+first `total` and `last` token reading can also establish a fresh counter.
+Existing-session totals remain cumulative; connection gaps remain partial.
+
+For older local recordings, `bun scripts/recover-usage.ts` previews repairs
+using exact turn contexts, first-agent token readings, and completed-turn
+snapshots from saved Codex rollouts. Add `--apply` to append verified metadata
+without replacing the original history. Use `--since <ISO-date>` to limit the
+period, `--usage-dir <path>` for another usage directory, or
+`--codex-home <path>` for another local Codex home. Recovery excludes prompts
+and responses and can be rerun without duplicating repairs. Remote histories
+are not repaired by this local utility.
 
 Usage metadata is stored per host in `$XDG_STATE_HOME/yacwu/usage` (default
 `~/.local/state/yacwu/usage`); `YACWU_USAGE_DIR` overrides the directory. Files
