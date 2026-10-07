@@ -530,7 +530,9 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	}
 
 	function taskUsageTitle(summary: TaskUsageSummary) {
-		const cost = summary.percent === null ? 'Weekly allowance estimate unavailable until recording and calibration are sufficient.'
+		const cost = summary.percent === null ? summary.knownPercent !== null
+			? `Known weekly allowance subtotal: ${formatAllowancePercent(summary.knownPercent)}. Excludes ${summary.unestimatedTurns} turn(s) with incomplete recording or uncalibrated model/thinking or token mix; this is not the full task cost.`
+			: 'Weekly allowance estimate unavailable until recording and calibration are sufficient.'
 			: `Estimated weekly allowance: ${formatAllowancePercent(summary.percent)} (${summary.low?.toFixed(3)}–${summary.high?.toFixed(3)}%).`;
 		return `${cost} ${summary.provisional ? 'Provisional estimate from single-setting observations with similar token mix. ' : ''}${summary.partial ? 'Partial token recording. ' : ''}Tokens include cached input and output, including reasoning once.${summary.agentTurns ? ` Includes ${summary.agentTurns} agent turns.` : ''}${summary.runningAgents ? ' Agent work is still running; totals will update.' : ''}`;
 	}
@@ -5025,7 +5027,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<span class="task-cost" title={projectedTaskUsage
 								? `Projected total weekly allowance from ${projectedTaskUsage.basis === 'progress' ? 'estimated completion' : 'elapsed time and time remaining'}. ${formatAllowancePercent(activeTaskUsage?.percent ?? null)} used so far; ${formatAllowancePercent(projectedTaskUsage.remaining)} estimated remaining. Includes recorded agent work.`
 								: activeTaskUsage ? taskUsageTitle(activeTaskUsage) : 'Waiting for task usage recording and sufficient calibration.'}>
-								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : 'Cost learning…'}{#if activeTaskUsage?.percent !== null && activeTaskUsage?.provisional} · early{/if}
+								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : activeTaskUsage?.knownPercent !== null && activeTaskUsage?.knownPercent !== undefined ? `${formatAllowancePercent(activeTaskUsage.knownPercent)} week · incomplete` : 'Cost learning…'}{#if activeTaskUsage?.knownPercent != null && activeTaskUsage.provisional} · early{/if}
 							</span>
 						</div>
 					{/if}
@@ -5446,7 +5448,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
 										{#if typeof turnDuration === 'number'}<span class="agent-duration" title="Time taken for this task">{formatDuration(turnDuration)}</span>{/if}
-										{#if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
+										{#if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? taskUsage.knownPercent !== null ? `${formatAllowancePercent(taskUsage.knownPercent)} week (incomplete${taskUsage.provisional ? ', early' : ''})` : 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
 										<button
 											type="button"
 											class="copy-agent"

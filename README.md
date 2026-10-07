@@ -67,7 +67,10 @@ state lives entirely in Codex's own persistent sessions, read back via
   evidence upgrades it to fitted costs; unrelated sparse or inseparable mixed
   models do not block a separately calibrated model.
   Partial recordings and insufficient calibration are labeled rather than
-  assigned a fabricated percentage
+  assigned a fabricated percentage. If some contributing agent turns cannot
+  be estimated, the header and completed response show the known subtotal
+  marked “incomplete,” with a tooltip explaining the excluded turns. Incomplete
+  subtotals are never projected as the full task cost
 - 📊 Task usage history: click the weekly allowance or open it from Session
   details to inspect recorded model, thinking level, cumulative token deltas,
   elapsed time, and weekly allowance readings. Backend recording continues

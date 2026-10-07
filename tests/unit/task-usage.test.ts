@@ -29,8 +29,15 @@ test('a partial or uncalibrated contributing agent prevents invented allowance t
 	expect(incomplete.partial).toBe(true);
 	expect(incomplete.percent).toBeNull();
 	expect(incomplete.tokens).toBe(2000);
+	expect(incomplete.knownPercent).toBeCloseTo(.1);
+	expect(incomplete.unestimatedTurns).toBe(1);
 	const unknown = summarizeTaskUsage([root, task({ threadId: 'child', parentThreadId: 'root', estimate: null })], root);
 	expect(unknown.percent).toBeNull();
+	expect(unknown.knownPercent).toBeCloseTo(.1);
+	expect(unknown.unestimatedTurns).toBe(1);
+	expect(projectTaskUsage(unknown, { percent: 50, remainingMinutes: 2 }, 61_000)).toBeNull();
+	const uncalibrated = task({ estimate: null });
+	expect(summarizeTaskUsage([uncalibrated], uncalibrated).knownPercent).toBeNull();
 });
 
 test('usage projections use progress or sufficient elapsed time, and require calibration', () => {

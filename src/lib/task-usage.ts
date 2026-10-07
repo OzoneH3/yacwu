@@ -7,6 +7,8 @@ export interface TaskUsageSummary {
 	percent: number | null;
 	low: number | null;
 	high: number | null;
+	knownPercent: number | null;
+	unestimatedTurns: number;
 	agentTurns: number;
 	runningAgents: boolean;
 	startedAt: number;
@@ -31,11 +33,14 @@ export function summarizeTaskUsage(tasks: UsageTask[], task: UsageTask): TaskUsa
 	const partial = included.some((other) => other.partialTokens);
 	const estimated = !partial && included.every((other) => other.estimate !== null || other.tokens.totalTokens === 0)
 		&& included.some((other) => other.estimate !== null);
+	const known = included.filter((other) => !other.partialTokens && other.estimate !== null);
 	return {
 		tokens: included.reduce((sum, other) => sum + other.tokens.totalTokens, 0), partial,
 		percent: estimated ? included.reduce((sum, other) => sum + (other.estimate?.value ?? 0), 0) : null,
 		low: estimated ? included.reduce((sum, other) => sum + (other.estimate?.low ?? 0), 0) : null,
 		high: estimated ? included.reduce((sum, other) => sum + (other.estimate?.high ?? 0), 0) : null,
+		knownPercent: known.length ? known.reduce((sum, other) => sum + other.estimate!.value, 0) : null,
+		unestimatedTurns: included.filter((other) => other.partialTokens || (other.tokens.totalTokens > 0 && other.estimate === null)).length,
 		agentTurns: included.length - 1,
 		runningAgents: included.some((other) => other !== task && other.endedAt === null),
 		startedAt: task.startedAt,
