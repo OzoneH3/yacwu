@@ -21,7 +21,12 @@ export function parseInteractiveChoice(text: string): InteractiveChoice | null {
 
 	const context = lines.slice(0, start + 1).join('\n').trim();
 	const questionEnd = context.lastIndexOf('?');
-	if (questionEnd < 0) return null;
+	if (questionEnd < 0) {
+		// Agents also pause for an action or observation, then offer response
+		// choices without phrasing the request as a literal question.
+		if (!/\b(?:tell me|let me know|report back|confirm|choose|select|respond with|reply with|answer with|please)\b/i.test(context)) return null;
+		return context ? { question: context, options } : null;
+	}
 	const paragraphBreak = context.lastIndexOf('\n\n', questionEnd);
 	const lineBreak = context.lastIndexOf('\n', questionEnd - 1);
 	const questionStart = paragraphBreak >= 0 ? paragraphBreak + 2 : lineBreak + 1;
