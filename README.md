@@ -69,7 +69,8 @@ state lives entirely in Codex's own persistent sessions, read back via
 - 🖼️ Attach images (PNG, JPEG, WebP, non-animated GIF), PDFs, and common
   text/code files through the picker or clipboard paste; image previews appear
   inline, while other files are staged temporarily and passed to Codex by path
-- 🧭 Transcript position rail for jumping between messages in long sessions
+- 🧭 Transcript position rail for jumping between messages, with a scroll-to-bottom
+  control whenever the latest message is out of view
 - ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
   prompt history with the Codex TUI's shell-style recall semantics
 - 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when

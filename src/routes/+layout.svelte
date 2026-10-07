@@ -191,6 +191,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let desktopSidebarHidden = $state(false);
 	let theme = $state<'light' | 'dark'>('light');
 	let unseenActivity = $state(false);
+	let showBottomJump = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
 	let usageHistoryOpen = $state(false);
@@ -1385,6 +1386,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		await tick();
 		if (!transcriptEl) return;
 		unseenActivity = false;
+		showBottomJump = false;
 		transcriptEl.scrollTop = transcriptEl.scrollHeight;
 		requestAnimationFrame(() => {
 			if (transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight;
@@ -1437,10 +1439,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (!transcriptEl) {
 			transcriptViewportHeight = 0;
 			transcriptScrollTop = 0;
+			showBottomJump = false;
 			return;
 		}
 		transcriptViewportHeight = transcriptEl.clientHeight;
 		transcriptScrollTop = transcriptEl.scrollTop;
+		showBottomJump = !isTranscriptAtBottom();
 	}
 
 	function onTranscriptScroll() {
@@ -5410,10 +5414,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					</nav>
 				{/if}
 				</div>
-				{#if unseenActivity}
+				{#if unseenActivity || showBottomJump}
 					<div class="activity-jump">
 						<button class="new-activity" type="button" onclick={scrollToBottom}>
-							New activity
+							{unseenActivity ? 'New activity' : 'Scroll to bottom'}
 							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v11M4 9l4 4 4-4" /></svg>
 						</button>
 					</div>
