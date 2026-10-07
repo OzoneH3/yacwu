@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { hostQuery } from './protocol';
-	import { analyzeUsage, type UsageEvent } from './usage-analysis';
+	import { analyzeUsage, type UsageEvent, type UsagePool } from './usage-analysis';
 	import BenchmarkControls from './BenchmarkControls.svelte';
 	import type { CostEstimate } from './usage-fit';
 	let { host, sessionId, models, selectedModel, selectedEffort, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; selectedModel?: string; selectedEffort?: string; onclose: () => void } = $props();
@@ -10,7 +10,13 @@
 	let loading = $state(false);
 	let error = $state('');
 	let onlySession = $state(true);
+	let onlyConcurrentPools = $state(false);
+	let poolSetting = $state('');
 	const analysis = $derived(analyzeUsage(events, { host }));
+	const pools = $derived(analysis.pools.filter((pool) =>
+		pool.groups.some((group) => (!poolSetting || JSON.stringify([group.model, group.effort]) === poolSetting)
+			&& (!onlyConcurrentPools || group.peakWorkers > 1))
+	).slice(0, 100));
 	const sessionThreads = $derived.by(() => {
 		const ids = new Set([sessionId]);
 		let changed = true;
@@ -24,6 +30,16 @@
 	const percent = (value: number | null) => value === null ? '—' : `~${value.toFixed(value > 0 && value < .01 ? 3 : 2)}%`;
 	const range = (estimate: CostEstimate | null) => estimate ? `${percent(estimate.value)} (${estimate.low.toFixed(3)}–${estimate.high.toFixed(3)}%)` : 'Learning…';
 	const tokens = (value: number) => value.toLocaleString();
+	const accountChange = (pool: UsagePool) => pool.weeklyLeftBefore - pool.weeklyLeftAfter;
+	function observedRate(pool: UsagePool, tokenCount: number) {
+		return pool.status === 'settled' && pool.groups.length === 1 && tokenCount > 0
+			? accountChange(pool) / tokenCount * 100_000 : null;
+	}
+	function roundingRange(pool: UsagePool, tokenCount: number) {
+		if (!tokenCount) return '';
+		const change = accountChange(pool);
+		return `Rounded endpoints allow roughly ${percent(Math.max(0, change - 1) / tokenCount * 100_000)}–${percent((change + 1) / tokenCount * 100_000)} per 100k tokens. External usage and reporting delay can add uncertainty.`;
+	}
 	function duration(start: number, end: number | null) {
 		const seconds = Math.max(0, Math.round(((end ?? Date.now()) - start) / 1000));
 		return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -52,7 +68,7 @@
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		<BenchmarkControls {host} {models} {selectedModel} {selectedEffort} oncomplete={() => void refresh()} />
 		<h3>Model and thinking level</h3>
-		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded. Intervals close after at least 2% used and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
+		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded. Ordinary intervals close after at least 2% used, stable readings, and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
 		<div class="table-wrap">
 			<table>
 				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>Weekly cost / 100k (observed mix)</th><th>Uncached / cached / output per 100k</th></tr></thead>
@@ -63,27 +79,82 @@
 				</tbody>
 			</table>
 		</div>
+		<h3>Combined observation windows</h3>
+		<p class="meta">All sessions on this account are included here. Sessions and agents using the same model and thinking level are added together; the weekly change is counted once per window. Single-setting windows provide a direct observed rate, even before enough samples exist for a fitted estimate.</p>
+		<div class="pool-filters">
+			<label>Model / thinking <select bind:value={poolSetting}>
+				<option value="">All combinations</option>
+				{#each analysis.rates as rate}<option value={JSON.stringify([rate.model, rate.effort])}>{rate.model} · {rate.effort}</option>{/each}
+			</select></label>
+			<label><input type="checkbox" bind:checked={onlyConcurrentPools} /> Concurrent workers only</label>
+		</div>
+		<div class="pool-list">
+			{#each pools as pool}
+				<details class="pool">
+					<summary>
+						<span>{new Date(pool.startedAt).toLocaleString()} → {new Date(pool.endedAt).toLocaleTimeString()}</span>
+						<span class="pool-state">{pool.status}{pool.benchmark ? ' · benchmark' : ''} · {pool.groups.length === 1 ? `${pool.groups[0].model} · ${pool.groups[0].effort}` : 'Mixed settings'}</span>
+						<span>{tokens(pool.groups.reduce((sum, group) => sum + group.tokens.totalTokens, 0))} tokens · {accountChange(pool)}% account change</span>
+						<span>{Math.max(...pool.groups.map((group) => group.peakWorkers))} concurrent workers in one setting</span>
+						{#if pool.groups.length === 1 && pool.status === 'settled'}
+							<span class="pool-rate" title={roundingRange(pool, pool.groups[0].tokens.totalTokens)}>{percent(observedRate(pool, pool.groups[0].tokens.totalTokens))} / 100k</span>
+						{/if}
+					</summary>
+					<p class="meta">Account week left: {pool.weeklyLeftBefore}% → {pool.weeklyLeftAfter}%. Window: {duration(pool.startedAt, pool.endedAt)}.
+						{#if pool.status === 'accumulating'}Waiting for enough usage and stable readings; this window is not used for calibration yet.
+						{:else if pool.status === 'excluded'}Incomplete or contaminated recording; excluded from calibration.
+						{:else if pool.groups.length > 1}The account change belongs to the whole window; separate model costs require independent mixtures.
+						{/if}
+					</p>
+					<div class="table-wrap">
+						<table>
+							<thead><tr><th>Model / thinking</th><th>Workers / turns</th><th>Combined tokens</th><th>Worker time</th><th>Observed weekly cost / 100k</th></tr></thead>
+							<tbody>
+								{#each pool.groups as group}
+									<tr>
+										<td>{group.model}<small>{group.effort}</small></td>
+										<td>{new Set(group.contributors.map(({ task }) => `${task.host}:${task.threadId}`)).size} workers · {group.contributors.length} turns<small>{group.peakWorkers} running at once</small></td>
+										<td title={`Input ${tokens(group.tokens.inputTokens)}, cached ${tokens(group.tokens.cachedInputTokens)}, output ${tokens(group.tokens.outputTokens)}, reasoning ${tokens(group.tokens.reasoningOutputTokens)}`}>{tokens(group.tokens.totalTokens)}<small>In {tokens(group.tokens.inputTokens)} · cached {tokens(group.tokens.cachedInputTokens)} · out {tokens(group.tokens.outputTokens)}</small></td>
+										<td>{duration(0, group.workerMs)}<small>Sum of workers' time within this window</small></td>
+										<td title={observedRate(pool, group.tokens.totalTokens) !== null ? roundingRange(pool, group.tokens.totalTokens) : undefined}>{pool.status !== 'settled' ? 'Pending / excluded' : pool.groups.length > 1 ? 'Shared across settings' : percent(observedRate(pool, group.tokens.totalTokens))}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<details class="contributors">
+						<summary>Contributing sessions and agents</summary>
+						{#each pool.groups as group}
+							{#each group.contributors as contributor}
+								<p class="meta" title={`Thread ${contributor.task.threadId} · turn ${contributor.task.turnId}`}>
+									{contributor.task.host} · {contributor.task.parentThreadId ? 'agent' : 'session'} {contributor.task.threadId.slice(-8)} · {group.model} / {group.effort} · {tokens(contributor.tokens.totalTokens)} tokens
+								</p>
+							{/each}
+						{/each}
+					</details>
+				</details>
+			{:else}<p class="meta">No observation windows for this selection yet.</p>{/each}
+		</div>
 		<h3>Recorded tasks</h3>
 		<label><input type="checkbox" bind:checked={onlySession} /> This session and its agents</label>
 		<div class="table-wrap">
 			<table>
-				<thead><tr><th>Started / status</th><th>Model / thinking</th><th>Tokens</th><th>Time</th><th>Week left</th><th>Account change</th><th>Task estimate</th></tr></thead>
+				<thead><tr><th>Started / status</th><th>Model / thinking</th><th>Tokens</th><th>Time</th><th>Account week left</th><th>Task estimate</th></tr></thead>
 				<tbody>
 					{#each tasks as task}
 						<tr>
-							<td>{new Date(task.startedAt).toLocaleString()}<small>{task.host} · {task.status}{task.benchmark ? ' · benchmark' : ''}{task.parentThreadId ? ' · agent' : ''}{task.overlapping ? ' · overlapping' : ''}{task.settling ? ' · settling' : ''}</small></td>
+							<td title={`Thread ${task.threadId} · turn ${task.turnId}`}>{new Date(task.startedAt).toLocaleString()}<small>{task.host} · {task.threadId.slice(-8)} · {task.status}{task.benchmark ? ' · benchmark' : ''}{task.parentThreadId ? ' · agent' : ''}{task.overlapping ? ' · overlapping' : ''}{task.settling ? ' · settling' : ''}</small></td>
 							<td>{task.model}<small>{task.effort}</small></td>
 							<td title={`Input ${tokens(task.tokens.inputTokens)}, cached ${tokens(task.tokens.cachedInputTokens)}, output ${tokens(task.tokens.outputTokens)}, reasoning ${tokens(task.tokens.reasoningOutputTokens)}`}>{tokens(task.tokens.totalTokens)}{task.partialTokens ? ' (partial)' : ''}</td>
 							<td>{duration(task.startedAt, task.endedAt)}</td>
 							<td>{task.weeklyLeftBefore ?? '—'}% → {task.weeklyLeftAfter ?? '—'}%</td>
-							<td>{task.sharedAllowanceDelta === null ? '—' : `${task.sharedAllowanceDelta}%`}</td>
 							<td>{task.partialTokens ? 'Partial recording' : range(task.estimate)}{#if task.estimate}<small>{task.estimate.samples} samples · {task.estimate.weighted ? 'weighted' : 'total-token fallback'}</small>{/if}</td>
 						</tr>
-					{:else}<tr><td colspan="7">No recorded tasks for this selection.</td></tr>{/each}
+					{:else}<tr><td colspan="6">No recorded tasks for this selection.</td></tr>{/each}
 				</tbody>
 			</table>
 		</div>
-		<p class="meta">Each task is one Codex turn; agents have their own rows. Account change includes a settling period and can overlap later work. Separate uncached input, cached input and output weights are learned when identifiable; reasoning is included in output only once. Partial recordings remain unestimated. Tool waiting time does not imply token use.</p>
+		<p class="meta">Each task is one Codex turn; agents have their own rows. Shared account changes appear once in the combined windows above. Account readings on task rows include a settling period and can overlap later work. Separate uncached input, cached input and output weights are learned when identifiable; reasoning is included in output only once. Partial recordings remain unestimated. Tool waiting time does not imply token use.</p>
 	</div>
 </dialog>
 
@@ -101,6 +172,15 @@
 	button { min-height: var(--control-height-compact); padding: var(--space-2xs) var(--space-xs); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink); cursor: pointer; }
 	button:disabled { opacity: .5; cursor: wait; }
 	.table-wrap { overflow: auto; max-height: 40dvh; margin-block: var(--space-xs); }
+	.pool-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+	select { max-width: 100%; padding: var(--space-2xs); color: var(--color-ink); background: var(--color-paper-2); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); }
+	.pool-list { max-height: 50dvh; overflow: auto; margin-block: var(--space-xs); }
+	.pool { padding: var(--space-xs); margin-block: var(--space-xs); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); }
+	summary { cursor: pointer; font-size: var(--text-xs); line-height: 1.6; }
+	.pool > summary span { margin-inline-end: var(--space-sm); }
+	.pool-state { color: var(--color-muted); }
+	.pool-rate { font-weight: 600; }
+	.contributors { padding-block: var(--space-xs); }
 	table { width: 100%; border-collapse: collapse; font-size: var(--text-xs); }
 	th, td { padding: var(--space-xs); border-block-end: var(--rule-hair) solid var(--color-rule); text-align: start; vertical-align: top; white-space: nowrap; }
 	th { position: sticky; top: 0; background: var(--color-paper-2); color: var(--color-muted); }

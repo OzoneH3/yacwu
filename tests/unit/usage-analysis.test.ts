@@ -23,6 +23,8 @@ test('settled benchmark boundaries keep one-percent stages separate without doub
 	expect(result.observations).toBe(3);
 	expect(result.rates.map((rate) => rate.tokens).sort((a, b) => a - b)).toEqual([1000, 2000, 3000]);
 	expect(result.excludedIntervals).toBe(0);
+	expect(result.pools).toHaveLength(3);
+	expect(result.pools.every((pool) => pool.benchmark && pool.status === 'settled')).toBe(true);
 });
 
 test('competing tokens contaminate a benchmark stage and cancellation discards an open interval', () => {
@@ -109,6 +111,64 @@ test('matching account hosts share token evidence but use one quota source', () 
 	expect(result.rates[0].tokens).toBe(300);
 	expect(result.hosts.sort()).toEqual(['local', 'remote']);
 	expect(result.tasks).toHaveLength(2);
+	expect(result.pools[0].groups[0].tokens.totalTokens).toBe(300);
+	expect(result.pools[0].groups[0].contributors).toHaveLength(2);
+});
+
+test('same-setting concurrent tasks expose one pooled quota change and per-window token contributions', () => {
+	const result = analyzeUsage([
+		...setup('a', 'model'), ...setup('b', 'model'), quota(2, 10),
+		tokens(3, 'a', 100), tokens(3, 'b', 200), quota(4, 12),
+		tokens(5, 'a', 150), tokens(5, 'b', 250), quota(6, 14)
+	]);
+	expect(result.pools).toHaveLength(2);
+	const latest = result.pools[0], first = result.pools[1];
+	expect(first.weeklyLeftBefore - first.weeklyLeftAfter).toBe(2);
+	expect(first.groups).toHaveLength(1);
+	expect(first.groups[0].tokens.totalTokens).toBe(300);
+	expect(first.groups[0].contributors.map((c) => c.tokens.totalTokens)).toEqual([100, 200]);
+	expect(first.groups[0].peakWorkers).toBe(2);
+	expect(first.groups[0].workerMs).toBe(4);
+	expect(latest.groups[0].tokens.totalTokens).toBe(100);
+	expect(latest.groups[0].contributors.map((c) => c.tokens.totalTokens)).toEqual([50, 50]);
+	expect(result.pools.every((pool) => pool.status === 'settled')).toBe(true);
+});
+
+test('different thinking levels stay in separate groups inside the same account window', () => {
+	const result = analyzeUsage([
+		...setup('a', 'model'), ...setup('b', 'model').map((e) => e.event === 'metadata' ? { ...e, effort: 'low' } : e),
+		quota(2, 10), tokens(3, 'a', 100), tokens(3, 'b', 200), quota(4, 12)
+	]);
+	expect(result.pools).toHaveLength(1);
+	expect(result.pools[0].groups.map((group) => [group.effort, group.tokens.totalTokens])).toEqual([['medium', 100], ['low', 200]]);
+	expect(result.observations).toBe(1);
+});
+
+test('unfinished and incomplete pools remain visible without becoming calibration samples', () => {
+	const pending = analyzeObservedUsage([
+		...setup('a', 'model'), quota(2, 10), tokens(3, 'a', 100), quota(4, 11), tokens(5, 'a', 200)
+	]);
+	expect(pending.observations).toBe(0);
+	expect(pending.pools[0].status).toBe('accumulating');
+	expect(pending.pools[0].endedAt).toBe(5);
+	expect(pending.pools[0].groups[0].tokens.totalTokens).toBe(200);
+	const partial = analyzeUsage([
+		...setup('a', 'model'), ...setup('b', 'model').filter((e) => e.event !== 'newThread'),
+		quota(2, 10), tokens(3, 'a', 100), tokens(3, 'b', 99999), quota(4, 12)
+	]);
+	expect(partial.observations).toBe(0);
+	expect(partial.pools[0].status).toBe('excluded');
+});
+
+test('sequential workers in a pooled interval are not labelled concurrent', () => {
+	const result = analyzeUsage([
+		...setup('a', 'model'), quota(2, 10), tokens(3, 'a', 100),
+		event(4, 'turn/completed', { threadId: 'a', turnId: 'a' }),
+		...setup('b', 'model').map((e) => ({ ...e, at: e.at + 4 })), tokens(6, 'b', 200), quota(7, 12)
+	]);
+	expect(result.pools[0].groups[0].contributors).toHaveLength(2);
+	expect(result.pools[0].groups[0].peakWorkers).toBe(1);
+	expect(result.pools[0].groups[0].workerMs).toBe(4);
 });
 
 test('a transient quota increase does not train costs before repeated readings stabilize', () => {

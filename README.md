@@ -55,7 +55,12 @@ state lives entirely in Codex's own persistent sessions, read back via
   with the browser closed; pooled observations learn estimated weekly cost
   per model/thinking level, including overlapping turns. Separate token weights,
   indicative uncertainty ranges, and matching-account hosts improve estimates;
-  manual benchmarks provide bounded calibration workloads
+  combined observation windows group concurrent sessions and agents by model
+  and thinking level, show their token contributions and runtime, and count
+  each account allowance change once. Single-setting windows show a direct
+  observed cost per 100k tokens; mixed, pending, and incomplete windows are
+  identified separately, with model/thinking and concurrency filters.
+  Manual benchmarks provide bounded calibration workloads
 - 💬 Interactive answers: completed questions and action requests open a prompt
   dialog; multiple choice blocks in one message are queued separately and remain
   queued while you answer earlier ones. Streamed partial text cannot close a
