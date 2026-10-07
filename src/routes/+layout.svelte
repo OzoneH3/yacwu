@@ -36,6 +36,7 @@
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { analyzeUsage } from '$lib/usage-analysis';
 	import { summarizeTaskUsage, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
+	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
@@ -197,6 +198,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
 	let usageHistoryOpen = $state(false);
+	let clearingSessionId = $state<string | null>(null);
 	let activityClock = $state(Date.now());
 	let usageAnalysisByHost = $state<Record<string, ReturnType<typeof analyzeUsage>>>({});
 	const usageLoading = new Set<string>();
@@ -2237,7 +2239,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function send(interactiveQuestion?: { id: string; threadId: string }) {
-		if (sendingMessage) return;
+		if (sendingMessage || clearingSessionId) return;
 		const draftInput = input;
 		const draftAttachments = selectedAttachments;
 		const text = draftInput.trim();
@@ -3028,6 +3030,68 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch (error) {
 			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not rename session' }, 6000);
 		}
+	}
+
+	async function clearSession(id: string) {
+		const session = sessions.find((entry) => entry.id === id);
+		if (!session || isSideChat(session) || clearingSessionId || sendingMessage) return;
+		const host = sessionHost(id);
+		const config = sessionConfigs[id] ? { ...sessionConfigs[id] } : null;
+		const cwd = cwds[id] ?? session.cwd;
+		const name = session.name;
+		const fast = Boolean(fastSessions[id]);
+		const originalOrder = topSessions.map((entry) => entry.id);
+		let createdId: string | null = null;
+		const request = async (url: string, body?: object) => {
+			const response = await fetch(url, body === undefined ? { signal: AbortSignal.timeout(15_000) } : {
+				method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000)
+			});
+			const data = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(data.error ?? `Clear session failed (${response.status})`);
+			return data;
+		};
+		clearingSessionId = id;
+		try {
+			const data = await replaceSessionWithEmptyThread({
+				assertIdle: async () => {
+					if (threads[id]?.status === 'running' || agentsForSession(agents, id).some(agentIsRunning)) {
+						throw new Error('Finish or stop this session and its agents before clearing it.');
+					}
+					const live = await request(threadApi(id));
+					if (!live.thread || live.thread.status?.type === 'active') throw new Error('The session is working; stop it before clearing it.');
+				},
+				create: async () => {
+					const fresh = await request('/api/threads', { host, cwd, ...(config ? { model: config.model, effort: config.effort, profile: config.profile } : {}) });
+					createdId = fresh.thread?.id ?? null;
+					if (createdId) {
+						const thread = ensureThread(createdId);
+						thread.tokens = 0;
+						sessionHistoryLoaded[createdId] = true;
+						upsertSession({ ...fresh.thread, host });
+					}
+					return fresh;
+				},
+				configure: async (newId) => {
+					if (config?.model) await request(threadApi(newId, '/model', host), { model: config.model, effort: config.effort });
+					if (config) sessionConfigs[newId] = { ...config };
+					if (name) {
+						await request(threadApi(newId, '/name', host), { name });
+						sessions = sessions.map((entry) => entry.id === newId ? { ...entry, name } : entry);
+					}
+					setFastSession(newId, fast);
+				},
+				archive: async () => { await request(threadApi(id, '/archive', host), {}); }
+			});
+			const newId = data.thread!.id!;
+			removeSession(id);
+			sessionOrder = [...originalOrder.map((entry) => entry === id ? newId : entry), ...sessionOrder.filter((entry) => entry !== newId && !originalOrder.includes(entry))];
+			localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
+			sessionInfoDialog?.close();
+			await goto(`/s/${newId}${hostQuery(host)}`);
+			showArchiveNotice({ tone: 'info', message: 'Session cleared to 0 conversation tokens. Previous history is in Archived sessions.' });
+		} catch (error) {
+			showArchiveNotice({ tone: 'error', message: `${error instanceof Error ? error.message : 'Could not clear session.'}${createdId ? ' The original history was kept; the new session is available in the list.' : ''}` });
+		} finally { clearingSessionId = null; }
 	}
 
 	async function deleteSession(id: string) {
@@ -5098,9 +5162,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{/if}
 					</dl>
 					<button class="mini" type="button" onclick={() => { sessionInfoDialog?.close(); usageHistoryOpen = true; }}>Task usage history</button>
-					<button class="session-remove-action" type="button" onclick={() => { sessionInfoDialog?.close(); void deleteSession(activeId); }}>
-						{isSideChat(activeSummary) ? 'Remove side conversation' : 'Archive session'}
-					</button>
+					<div class="session-detail-actions">
+						{#if !isSideChat(activeSummary)}
+							<button class="session-clear-action" type="button" disabled={Boolean(clearingSessionId || sendingMessage || modelPending || effortPending || switchingPromptModel || !activeConfig || active?.status === 'running' || activeAgents.some(agentIsRunning))}
+								title="Start an empty conversation with the same name, folder and settings; archive the previous history. Finish or stop active workers first. Used account allowance stays unchanged."
+								onclick={() => void clearSession(activeId)}>{clearingSessionId === activeId ? 'Clearing…' : 'Clear session'}</button>
+						{/if}
+						<button class="session-remove-action" type="button" disabled={Boolean(clearingSessionId)} onclick={() => { sessionInfoDialog?.close(); void deleteSession(activeId); }}>
+							{isSideChat(activeSummary) ? 'Remove side conversation' : 'Archive session'}
+						</button>
+					</div>
 					{#if activeAgents.length > 0}
 						<div class="session-info-agents">
 							<h3 id="session-info-agents-title">Agents</h3>
@@ -7448,6 +7519,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.session-remove-action { width: 100%; min-height: var(--control-height); margin-block-start: var(--space-sm); padding-inline: var(--space-sm); border: var(--rule-hair) solid color-mix(in srgb, var(--color-error) 38%, var(--color-rule)); border-radius: var(--radius-input); background: transparent; color: var(--color-error); cursor: pointer; font: inherit; text-align: center; }
 	.session-remove-action:hover { background: color-mix(in srgb, var(--color-error) 8%, var(--color-paper)); }
+	.session-detail-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block-start: var(--space-sm); }
+	.session-detail-actions > button { flex: 1; width: auto; margin-block-start: 0; }
+	.session-clear-action { min-height: var(--control-height); padding-inline: var(--space-sm); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink); cursor: pointer; font: inherit; text-align: center; }
+	.session-detail-actions > button:disabled { opacity: .5; cursor: default; }
 
 	.session-info-heading {
 		display: flex;

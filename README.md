@@ -15,7 +15,11 @@ state lives entirely in Codex's own persistent sessions, read back via
 - 🧵 Multi-session workspace: create sessions in chosen folders, rename and
   reorder them, switch between them, browse archived sessions, restore them, or
   permanently delete them in a wider archive browser, and resume interrupted
-  work
+  work. Clear session sits beside Archive in Session details: it starts an
+  empty conversation with 0 conversation tokens, keeps the name, folder,
+  model/thinking, profile, fast mode and list position, and archives the old
+  history for restoration. Available after the session and its agents stop;
+  previously consumed account allowance is unchanged
 - ✅ Background completion indicators mark finished sessions until you open
   them, so completed work is easy to spot in the session list
 - 🔒 In-use detection warns before opening a session another Codex process has
