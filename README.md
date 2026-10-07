@@ -55,10 +55,11 @@ state lives entirely in Codex's own persistent sessions, read back via
   per model/thinking level, including overlapping turns. Separate token weights,
   indicative uncertainty ranges, and matching-account hosts improve estimates;
   manual benchmarks provide bounded calibration workloads
-- 💬 Interactive answers: completed questions, action requests, and requests
-  with listed options open a prompt dialog; streamed partial text cannot close
-  it. Answer or dismiss each to advance through the session's question queue,
-  including requests from agents
+- 💬 Interactive answers: completed questions and action requests open a prompt
+  dialog; multiple choice blocks in one message are queued separately and remain
+  queued while you answer earlier ones. Streamed partial text cannot close a
+  question. Answer or dismiss each to advance through the session's question
+  queue, including requests from agents
 - 📁 Workspace browser rooted at the session folder, with a Monaco text editor
   (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
   links in assistant messages. The file and diff viewer state is kept per

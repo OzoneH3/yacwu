@@ -49,6 +49,34 @@ export function parseInteractiveQuestion(text: string): InteractiveChoice | null
 	return { question, options: [] };
 }
 
+/** Return each distinct question or action request with its adjacent choices. */
+export function parseInteractiveQuestions(text: string): InteractiveChoice[] {
+	const lines = text.trim().split(/\r?\n/);
+	const optionPattern = /^\s*(?:[-*+]\s+|\d+[.)]\s+)(.+?)\s*$/;
+	const choices: InteractiveChoice[] = [];
+	let previousOptionEnd = -1;
+	for (let index = 0; index < lines.length;) {
+		if (!optionPattern.test(lines[index])) {
+			index++;
+			continue;
+		}
+		const start = index;
+		while (index < lines.length && optionPattern.test(lines[index])) index++;
+		const end = index;
+		const count = end - start;
+		if (count >= 2 && count <= 6) {
+			const context = lines.slice(previousOptionEnd + 1, start).join('\n').trim();
+			const block = [...(context ? [context] : []), ...lines.slice(start, end)].join('\n');
+			const choice = parseInteractiveChoice(block);
+			if (choice) choices.push(choice);
+		}
+		previousOptionEnd = end - 1;
+	}
+	if (choices.length) return choices;
+	const question = parseInteractiveQuestion(text);
+	return question ? [question] : [];
+}
+
 export function detectPromptKind(text: string): PromptKind {
 	if (parseInteractiveQuestion(text)) return 'choice';
 	const finalText = text.trim().replace(/[\*_`~]+\s*$/, '').trim();

@@ -36,7 +36,7 @@
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
-	import { detectPromptKind, parseInteractiveQuestion } from '$lib/interactive-choice';
+import { detectPromptKind, parseInteractiveQuestions } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
@@ -203,6 +203,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let deletingArchivedSessionId = $state<string | null>(null);
 	let interactiveChoiceDialog = $state<HTMLDialogElement | null>(null);
 	let resolvedInteractiveQuestionIds = $state<Record<string, boolean>>({});
+	let retainedInteractiveQuestions = $state<Array<{ id: string; threadId: string; question: string; options: string[] }>>([]);
 	let choiceCustomAnswer = $state('');
 	let choicePromptId = $state<string | null>(null);
 	let instantTooltip = $state<{ text: string; left: number; top: number; wide: boolean } | null>(null);
@@ -346,14 +347,22 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 				// Deltas can briefly end in a question before the assistant has
 				// finished the message. Only offer a follow-up for a completed item.
 				if (!item._completed) continue;
-				const choice = parseInteractiveQuestion(String(item.text ?? ''));
-				const key = `${threadId}:${String(item.id)}`;
-				if (choice && !resolvedInteractiveQuestionIds[key]) {
-					queue.push({ id: String(item.id), threadId, ...choice });
-				}
+				const choices = parseInteractiveQuestions(String(item.text ?? ''));
+				choices.forEach((choice, index) => {
+					const questionId = `${String(item.id)}:${index}`;
+					const key = `${threadId}:${questionId}`;
+					if (!resolvedInteractiveQuestionIds[key]) queue.push({ id: questionId, threadId, ...choice });
+				});
 			}
 		}
-		return queue;
+		const combined = [...retainedInteractiveQuestions, ...queue];
+		const seen = new Set<string>();
+		return combined.filter((question) => {
+			const key = `${question.threadId}:${question.id}`;
+			if (resolvedInteractiveQuestionIds[key] || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
 	});
 	const pendingInteractiveChoice = $derived(pendingInteractiveQuestions[0] ?? null);
 	$effect(() => {
@@ -2179,6 +2188,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function answerInteractiveChoice(option: string) {
 		if (!pendingInteractiveChoice || sendingMessage || !option.trim()) return;
+		retainQuestionsAfter(pendingInteractiveChoice);
 		resolveInteractiveQuestion(pendingInteractiveChoice);
 		interactiveChoiceDialog?.close();
 		input = `I choose: ${option}`;
@@ -2193,8 +2203,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function dismissInteractiveChoice() {
-		if (pendingInteractiveChoice) resolveInteractiveQuestion(pendingInteractiveChoice);
+		if (pendingInteractiveChoice) {
+			retainQuestionsAfter(pendingInteractiveChoice);
+			resolveInteractiveQuestion(pendingInteractiveChoice);
+		}
 		interactiveChoiceDialog?.close();
+	}
+
+	function retainQuestionsAfter(question: { id: string; threadId: string }) {
+		const remaining = pendingInteractiveQuestions.filter((item) => item.id !== question.id || item.threadId !== question.threadId);
+		const retained = new Map<string, (typeof remaining)[number]>();
+		for (const item of [...retainedInteractiveQuestions, ...remaining]) retained.set(`${item.threadId}:${item.id}`, item);
+		retainedInteractiveQuestions = [...retained.values()];
 	}
 
 	function fmtDuration(sec: number): string {
