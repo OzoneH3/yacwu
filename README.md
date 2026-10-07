@@ -1,5 +1,8 @@
 # yacwu
 
+> [!NOTE]
+> This repository continues development of [the original Yacwu by AFK-surf](https://github.com/AFK-surf/yacwu), with additional features and fixes. Credit to the original authors; their MIT license and copyright notice are preserved.
+
 **Yet Another Codex Web UI** — a focused, editorial web front-end for
 [Codex](https://developers.openai.com/codex), with a **Gleam (BEAM/OTP)**
 backend and a **Svelte** SPA front-end.
