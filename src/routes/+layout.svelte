@@ -2137,7 +2137,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		void send();
 	}
 
-	async function send() {
+	async function send(interactiveQuestion?: { id: string; threadId: string }) {
 		if (sendingMessage) return;
 		const draftInput = input;
 		const draftAttachments = selectedAttachments;
@@ -2167,6 +2167,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const data = await res.json().catch(() => ({}));
 				throw new Error(data.error ?? `failed to send message (${res.status})`);
 			}
+			if (interactiveQuestion) {
+				resolveInteractiveQuestion(interactiveQuestion);
+				addLocalNote(id, 'Answer accepted by Codex; waiting for the agent to respond.');
+			}
 
 			if (input === draftInput) input = '';
 			if (input === '') promptDrafts[id] = '';
@@ -2188,11 +2192,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function answerInteractiveChoice(option: string) {
 		if (!pendingInteractiveChoice || sendingMessage || !option.trim()) return;
-		retainQuestionsAfter(pendingInteractiveChoice);
-		resolveInteractiveQuestion(pendingInteractiveChoice);
-		interactiveChoiceDialog?.close();
+		retainPendingInteractiveQuestions();
 		input = `I choose: ${option}`;
-		void send();
+		void send(pendingInteractiveChoice);
 	}
 
 	function resolveInteractiveQuestion(question: { id: string; threadId: string }) {
@@ -2204,16 +2206,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function dismissInteractiveChoice() {
 		if (pendingInteractiveChoice) {
-			retainQuestionsAfter(pendingInteractiveChoice);
+			retainPendingInteractiveQuestions();
 			resolveInteractiveQuestion(pendingInteractiveChoice);
 		}
 		interactiveChoiceDialog?.close();
 	}
 
-	function retainQuestionsAfter(question: { id: string; threadId: string }) {
-		const remaining = pendingInteractiveQuestions.filter((item) => item.id !== question.id || item.threadId !== question.threadId);
-		const retained = new Map<string, (typeof remaining)[number]>();
-		for (const item of [...retainedInteractiveQuestions, ...remaining]) retained.set(`${item.threadId}:${item.id}`, item);
+	function retainPendingInteractiveQuestions() {
+		const retained = new Map<string, (typeof pendingInteractiveQuestions)[number]>();
+		for (const item of [...retainedInteractiveQuestions, ...pendingInteractiveQuestions]) retained.set(`${item.threadId}:${item.id}`, item);
 		retainedInteractiveQuestions = [...retained.values()];
 	}
 
@@ -5626,7 +5627,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								<button
 									class="send"
 									type="button"
-									onclick={send}
+									onclick={() => send()}
 										disabled={sendingMessage || (!input.trim() && selectedAttachments.length === 0)}
 					aria-label={sendingMessage ? 'Sending message' : activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Steer active task' : 'Send message'}
 					title={activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Send guidance to the active task' : 'Send message'}
