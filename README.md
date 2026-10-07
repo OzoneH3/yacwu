@@ -18,7 +18,9 @@ state lives entirely in Codex's own persistent sessions, read back via
   work. Clear session sits beside Archive in Session details: it starts an
   empty conversation with 0 conversation tokens, keeps the name, folder,
   model/thinking, profile, fast mode and list position, and archives the old
-  history for restoration. Available after the session and its agents stop;
+  history for restoration. The replacement stays hidden while being prepared,
+  then appears in the original list position without a temporary new-session row.
+  Available after the session and its agents stop;
   previously consumed account allowance is unchanged
 - ✅ Background completion indicators mark finished sessions until you open
   them, so completed work is easy to spot in the session list

@@ -199,6 +199,8 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
 	let usageHistoryOpen = $state(false);
 	let clearingSessionId = $state<string | null>(null);
+	let clearReplacementId = $state<string | null>(null);
+	let clearCreationSnapshot = $state<Set<string> | null>(null);
 	let activityClock = $state(Date.now());
 	let usageAnalysisByHost = $state<Record<string, ReturnType<typeof analyzeUsage>>>({});
 	const usageLoading = new Set<string>();
@@ -396,7 +398,8 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	// they remain reachable.
 	const topSessions = $derived.by(() => {
 		const roots = sessions.filter(
-			(s) => !isSideChat(s) || !sessions.some((p) => p.id === s.forkedFromId)
+			(s) => s.id !== clearReplacementId && (!clearCreationSnapshot || clearCreationSnapshot.has(s.id))
+				&& (!isSideChat(s) || !sessions.some((p) => p.id === s.forkedFromId))
 		);
 		const positions = new Map(sessionOrder.map((id, index) => [id, index]));
 		return roots
@@ -3061,8 +3064,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					if (!live.thread || live.thread.status?.type === 'active') throw new Error('The session is working; stop it before clearing it.');
 				},
 				create: async () => {
+					// The thread/started SSE event can beat the HTTP creation reply.
+					// Stage additions until we know which ID is our replacement.
+					clearCreationSnapshot = new Set(sessions.map((entry) => entry.id));
 					const fresh = await request('/api/threads', { host, cwd, ...(config ? { model: config.model, effort: config.effort, profile: config.profile } : {}) });
 					createdId = fresh.thread?.id ?? null;
+					clearReplacementId = createdId;
+					clearCreationSnapshot = null;
 					if (createdId) {
 						const thread = ensureThread(createdId);
 						thread.tokens = 0;
@@ -3086,12 +3094,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			removeSession(id);
 			sessionOrder = [...originalOrder.map((entry) => entry === id ? newId : entry), ...sessionOrder.filter((entry) => entry !== newId && !originalOrder.includes(entry))];
 			localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
+			clearReplacementId = null;
 			sessionInfoDialog?.close();
 			await goto(`/s/${newId}${hostQuery(host)}`);
 			showArchiveNotice({ tone: 'info', message: 'Session cleared to 0 conversation tokens. Previous history is in Archived sessions.' });
 		} catch (error) {
 			showArchiveNotice({ tone: 'error', message: `${error instanceof Error ? error.message : 'Could not clear session.'}${createdId ? ' The original history was kept; the new session is available in the list.' : ''}` });
-		} finally { clearingSessionId = null; }
+		} finally {
+			clearCreationSnapshot = null;
+			clearReplacementId = null;
+			clearingSessionId = null;
+		}
 	}
 
 	async function deleteSession(id: string) {
