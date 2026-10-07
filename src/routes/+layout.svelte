@@ -480,6 +480,13 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 		}
 		return null;
 	}
+	function estimatedSessionTimeLeft(id: string, progress: ReturnType<typeof taskProgressForSession>): string | null {
+		if (!progress) return null;
+		const startedAt = threads[id]?.turnStartedAt;
+		const elapsed = threads[id]?.status === 'running' && startedAt !== null && startedAt !== undefined
+			? activityClock - startedAt : 0;
+		return formatEstimatedRemaining(estimateRemainingMinutes(progress.percent, progress.remainingMinutes, elapsed));
+	}
 	const activeTaskProgress = $derived.by(() => {
 		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
 		const progress = taskProgressForSession(activeId);
@@ -1047,7 +1054,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	$effect(() => {
-		if (viewed?.status !== 'running') return;
+		if (!sessions.some((session) => threads[session.id]?.status === 'running')) return;
 		const timer = window.setInterval(() => activityClock = Date.now(), 1000);
 		return () => window.clearInterval(timer);
 	});
@@ -4784,7 +4791,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{@const sessionIsRunning = threads[s.id]?.status === 'running'}
 					{@const showSessionProgress = sessionIsRunning && (sessionProgress?.percent ?? 0) < 100}
 					{@const sessionTimeLeft = showSessionProgress && sessionProgress
-						? formatEstimatedRemaining(sessionProgress.remainingMinutes)
+						? estimatedSessionTimeLeft(s.id, sessionProgress)
 						: null}
 				<div
 					class="session-row"

@@ -42,7 +42,7 @@ state lives entirely in Codex's own persistent sessions, read back via
   identical estimates are omitted;
   elapsed time appears while work runs and on its completed response. The
   session list shows 0% until a running task reports progress, with time left
-  available on hover once estimated
+  estimated from elapsed task time on hover when the progress marker omits it.
 - 🤝 Multi-agent visibility: switch between the session and spawned agents,
   see which agents are active, and browse finished agents in a separate
   Previous group; agent transcripts are read-only, and agent activity links
