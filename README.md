@@ -55,9 +55,10 @@ state lives entirely in Codex's own persistent sessions, read back via
   per model/thinking level, including overlapping turns. Separate token weights,
   indicative uncertainty ranges, and matching-account hosts improve estimates;
   manual benchmarks provide bounded calibration workloads
-- 💬 Interactive answers: direct questions and questions with listed options
-  open a prompt dialog; answer or dismiss each to advance through the session's
-  question queue, including questions from its agents
+- 💬 Interactive answers: completed direct questions and questions with listed
+  options open a prompt dialog; streamed partial text cannot close it. Answer or
+  dismiss each to advance through the session's question queue, including
+  questions from its agents
 - 📁 Workspace browser rooted at the session folder, with a Monaco text editor
   (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
   links in assistant messages. The file and diff viewer state is kept per

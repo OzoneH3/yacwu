@@ -343,6 +343,9 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 			for (let index = latestUserIndex + 1; index < items.length; index += 1) {
 				const item = items[index] as any;
 				if (item.type !== 'agentMessage') continue;
+				// Deltas can briefly end in a question before the assistant has
+				// finished the message. Only offer a follow-up for a completed item.
+				if (!item._completed) continue;
 				const choice = parseInteractiveQuestion(String(item.text ?? ''));
 				const key = `${threadId}:${String(item.id)}`;
 				if (choice && !resolvedInteractiveQuestionIds[key]) {
@@ -422,6 +425,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 			const item = items[index] as any;
 			if (item.type === 'userMessage') return null;
 			if (item.type === 'agentMessage') {
+				if (!item._completed) continue;
 				const kind = detectPromptKind(String(item.text ?? ''));
 				if (kind === 'unknown' && dismissedAttentionByThread[threadId]) return null;
 				return kind === 'choice' ? 'choice' : kind === 'unknown' ? 'alert' : null;
@@ -607,7 +611,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		id: string,
 		item: ThreadItem & { id: string },
 		stampTime = false,
-		historicalWorkOrderId?: string
+		historicalWorkOrderId?: string,
+		completed = false
 	) {
 		const t = ensureThread(id);
 		if (!t.byId[item.id]) t.order.push(item.id);
@@ -615,6 +620,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const prev = t.byId[item.id] as any;
 		const next = { ...item } as any;
 		if (prev) {
+			if (prev._completed) next._completed = true;
 			if (next.text === '' && prev.text) next.text = prev.text;
 			if (next._reason === undefined && prev._reason) next._reason = prev._reason;
 			if (next._out === undefined && prev._out) next._out = prev._out;
@@ -624,6 +630,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			// with arrival time. Restored history stays unstamped.
 			next._at = Date.now();
 		}
+		if (completed) next._completed = true;
 		t.byId[item.id] = next;
 		// Collaboration items reveal sub-agent threads; keep the registry live
 		// for both streamed items and restored history.
@@ -667,7 +674,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		pendingUserEchoes[id] = [];
 		for (const turn of turns) {
 			for (const item of turn.items ?? []) {
-				if ((item as any).id) upsertItem(id, item as any, false, turn.id);
+				if ((item as any).id) upsertItem(id, item as any, false, turn.id, turn.status !== 'inProgress');
 			}
 		}
 	}
@@ -1270,9 +1277,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					t.status = 'idle';
 					const duration = t.turnStartedAt === null ? null : Math.max(0, Date.now() - t.turnStartedAt);
 					t.turnStartedAt = null;
-				t.turnId = null;
+					t.turnId = null;
 				delete activeTurnBySession[tid];
-					touchSession(tid, p.turn?.completedAt);
+				if (p.turn?.status === 'completed') {
+					for (const itemId of t.order) {
+						const item = t.byId[itemId] as any;
+						if (item?.type === 'agentMessage' && !item._completed) {
+							t.byId[itemId] = { ...item, _completed: true };
+						}
+					}
+				}
+				touchSession(tid, p.turn?.completedAt);
 					if (p.turn?.status === 'failed' && p.turn?.error?.message) {
 						t.error = p.turn.error.message;
 					}
@@ -1297,7 +1312,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						localStorage.setItem(DISMISSED_ATTENTION_KEY, JSON.stringify(remainingAttention));
 					}
 					if (p.item.type === 'userMessage') dropEchoedUserMessage(tid, p.item);
-					upsertItem(tid, p.item, true);
+					upsertItem(tid, p.item, true, undefined, msg.method === 'item/completed' && p.item.type === 'agentMessage');
 				}
 				// The file browser refreshes what it is showing when the agent
 				// touches files in the viewed session.
