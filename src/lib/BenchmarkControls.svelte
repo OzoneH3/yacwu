@@ -13,9 +13,9 @@
 	let batch = $state(false);
 	let economical = $state(true);
 	let selectedBatchStages = $state<string[] | null>(null);
-	const eligibleModels = $derived(models.filter((choice) => choice.efforts.some((level) => ['low', 'medium'].includes(level))));
-	const eligibleStages = $derived(eligibleModels.flatMap((choice) => ['low', 'medium'].filter((level) => choice.efforts.includes(level)).map((level) => ({ key: `${choice.id}::${level}`, model: choice.id, effort: level }))));
-	const batchStages = $derived((selectedBatchStages ?? eligibleStages.slice(0, 6).map((stage) => stage.key)).flatMap((key) => { const stage = eligibleStages.find((item) => item.key === key); return stage ? [stage] : []; }));
+	const eligibleModels = $derived(models.filter((choice) => choice.efforts.length > 0));
+	const eligibleStages = $derived(eligibleModels.flatMap((choice) => choice.efforts.map((level) => ({ key: `${choice.id}::${level}`, model: choice.id, effort: level }))));
+	const batchStages = $derived((selectedBatchStages ?? eligibleStages.filter((stage) => ['low', 'medium'].includes(stage.effort)).slice(0, 6).map((stage) => stage.key)).flatMap((key) => { const stage = eligibleStages.find((item) => item.key === key); return stage ? [stage] : []; }));
 	const batchTarget = $derived(batchStages.length ? (economical ? batchStages.length + 1 : batchStages.length * 2) : 0);
 	let status = $state<Status>({ status: 'idle' });
 	let error = $state('');
@@ -72,13 +72,13 @@
 	<summary>Manual calibration benchmark</summary>
 	<p>Measures allowance use with text workloads in dedicated sessions. Only one benchmark can run across all hosts. Pause other work on the same account first.</p>
 	<form onsubmit={(event) => { event.preventDefault(); void submit(); }}>
-		<label>Mode <select bind:value={batch} disabled={running || pending}><option value={false}>Single combination</option><option value={true}>Models × Low / Medium</option></select></label>
+		<label>Mode <select bind:value={batch} disabled={running || pending}><option value={false}>Single combination</option><option value={true}>Models × Thinking levels</option></select></label>
 		{#if batch}
 			<fieldset disabled={running || pending}>
-				<legend>Choose model and thinking combinations</legend>
+				<legend>Choose model and thinking combinations (up to 6)</legend>
 				{#each eligibleModels as choice}
 					<div class="model-options"><span>{choice.displayName || choice.id}</span>
-						{#each ['low', 'medium'].filter((level) => choice.efforts.includes(level)) as level}
+						{#each choice.efforts as level}
 							{@const key = `${choice.id}::${level}`}
 							<label class="check"><input type="checkbox" checked={batchStages.some((stage) => stage.model === choice.id && stage.effort === level)} disabled={!batchStages.some((stage) => stage.model === choice.id && stage.effort === level) && batchStages.length >= 6} onchange={(event) => { const selected = batchStages.map((stage) => stage.key); selectedBatchStages = event.currentTarget.checked ? [...selected, key] : selected.filter((item) => item !== key); }} />{level}</label>
 						{/each}

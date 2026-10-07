@@ -549,8 +549,9 @@ stops after five minutes without stability. The runtime limit includes these
 settling periods. The controls show elapsed time, time until the runtime limit,
 completed turns and sampling status; turn-limit stops are labeled partial runs.
 The estimator also requires stable quota readings before learning token costs.
-Use **Models × Low / Medium** to check the supported model/thinking
-combinations you want and run them sequentially. Economical mode targets 2
+Use **Models × Thinking levels** to check up to six model/thinking
+combinations and run them sequentially. All thinking levels supported by each
+model are available; Low and Medium remain selected by default. Economical mode targets 2
 percentage points for the first selected combination, then 1 for each remaining
 combination. With all six selected this is 7 points nominally. Disable
 economical mode for 2 points each. Turn and runtime limits apply **per
