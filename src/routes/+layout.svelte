@@ -718,8 +718,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	/** Thread API URL carrying the session's host as a routing hint. */
-	function threadApi(id: string, path = ''): string {
-		return `/api/threads/${id}${path}${hostQuery(sessionHost(id))}`;
+	function threadApi(id: string, path = '', hostOverride?: string): string {
+		return `/api/threads/${id}${path}${hostQuery(hostOverride ?? sessionHost(id))}`;
 	}
 
 	function upsertSession(thr: any) {
@@ -1169,6 +1169,49 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (shouldScroll) scrollToBottom();
 	}
 
+	function addStalledWorkerPrompt(sessionId: string, workerId: string, turnId: string, worker: string, minutes: number) {
+		const shouldScroll = sessionId === activeId && isTranscriptAtBottom();
+		const t = ensureThread(sessionId);
+		const id = `stalled-${++localCounter}`;
+		t.order.push(id);
+		t.byId[id] = {
+			type: 'stalledWorkerPrompt', id, workerId, turnId, worker, minutes,
+			text: `${worker} has had no Codex activity for ${minutes} minutes. It may still be reasoning or waiting on a tool; Yacwu has not stopped it.`
+		} as any;
+		if (shouldScroll) scrollToBottom();
+	}
+
+	function dismissStalledWorkerPrompt(sessionId: string, id: string) {
+		removeLocalItem(sessionId, id);
+	}
+
+	async function askStalledWorkerStatus(sessionId: string, item: any) {
+		const agent = agents[item.workerId];
+		const prompt = agent
+			? `Please check on ${agentLabel(agent)} (${agent.path ?? item.workerId}), get a brief status, and report it. Keep waiting unless it is actually blocked; do not interrupt it.`
+			: 'Please provide a brief status update on your current work, then continue. Do not stop the task.';
+		const t = ensureThread(sessionId);
+		const wasRunning = t.status === 'running';
+		const echoId = addLocalUserMessage(sessionId, prompt);
+		try {
+			const response = await sendMessageWithRetries(sessionId, prompt, [], wasRunning ? t.turnId : null);
+			if (!response.ok) {
+				const data = await response.json().catch(() => ({}));
+				throw new Error(data.error ?? `Status request failed (${response.status})`);
+			}
+			dismissStalledWorkerPrompt(sessionId, item.id);
+			addLocalNote(sessionId, 'Status request sent to Codex.');
+		} catch (error) {
+			removeLocalItem(sessionId, echoId);
+			addLocalNote(sessionId, `Could not send status request: ${error instanceof Error ? error.message : String(error)}`, 'err');
+		}
+	}
+
+	async function stopStalledWorker(sessionId: string, item: any) {
+		const stopped = await interruptThread(item.workerId, sessionHost(sessionId));
+		if (stopped) dismissStalledWorkerPrompt(sessionId, item.id);
+	}
+
 	function handleNotification(msg: JsonRpcNotification) {
 		const p: any = msg.params ?? {};
 		const tid: string | undefined = p.threadId;
@@ -1182,12 +1225,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const silentSeconds = Math.max(120, Number(p.silentSeconds) || 120);
 				const minutes = Math.floor(silentSeconds / 60);
 				const agent = agents[workerId];
+				const sessionId = agent ? agentRootId(agents, agent) : workerId;
 				const worker = agent ? agentLabel(agent) : 'Worker';
-				addLocalNote(
-					workerId,
-					`${worker} has had no Codex activity for ${minutes} minutes. It may still be reasoning or waiting on a tool; Yacwu has not stopped it.`,
-					'info'
+				const duplicate = itemsOf(threads[sessionId] ?? null).some((item: any) =>
+					item.type === 'stalledWorkerPrompt' && item.workerId === workerId && item.turnId === String(p.turnId ?? '')
 				);
+				if (!duplicate) addStalledWorkerPrompt(sessionId, workerId, String(p.turnId ?? ''), worker, minutes);
 				break;
 			}
 			case 'yacwu/host/status': {
@@ -2732,12 +2775,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function interrupt() {
 		const id = activeId;
 		if (!id || stoppingSessions[id]) return;
+		await interruptThread(id, sessionHost(id));
+	}
+
+	async function interruptThread(id: string, host: string): Promise<boolean> {
+		if (stoppingSessions[id]) return false;
 		stoppingSessions[id] = true;
-		reportDiagnostics(id, 'stop_requested');
+		void fetch(threadApi(id, '/diagnostics', host), {
+			method: 'POST', headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ event: 'stop_requested', connected, visible: document.visibilityState === 'visible' }),
+			signal: AbortSignal.timeout(3_000)
+		}).catch(() => {});
 		try {
 			// Re-read the live turn: restored history or a missed SSE event can
 			// leave the UI's turn ID missing or out of date.
-			const url = new URL(threadApi(id), window.location.origin);
+			const url = new URL(threadApi(id, '', host), window.location.origin);
 			url.searchParams.set('turns', '1');
 			const read = await fetch(url, { signal: AbortSignal.timeout(15_000) });
 			const data = await read.json();
@@ -2746,13 +2798,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (!thread) throw new Error('Could not check current turn: no thread returned');
 			syncThreadRuntime(id, thread);
 			if (thread.status?.type === 'idle' || thread.status?.type === 'notLoaded') {
-				reportDiagnostics(id, 'stop_succeeded');
 				addLocalNote(id, 'Task was already stopped.');
-				return;
+				return false;
 			}
 			const turnId = thread.turns?.findLast((turn: Turn) => turn.status === 'inProgress')?.id;
 			if (!turnId) throw new Error('Could not find the running turn. Try Stop again.');
-			const response = await fetch(threadApi(id, '/interrupt'), {
+			const response = await fetch(threadApi(id, '/interrupt', host), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ turnId }),
@@ -2762,7 +2813,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const error = await response.json().catch(() => ({}));
 				throw new Error(error.error ?? `Stop failed (${response.status})`);
 			}
-			reportDiagnostics(id, 'stop_succeeded');
+			void fetch(threadApi(id, '/diagnostics', host), {
+				method: 'POST', headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ event: 'stop_succeeded', connected, visible: document.visibilityState === 'visible' }),
+				signal: AbortSignal.timeout(3_000)
+			}).catch(() => {});
 			addLocalNote(id, 'Task stopped.');
 			// A new turn may have started while the cancellation was in flight.
 			const t = ensureThread(id);
@@ -2776,9 +2831,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				turnEfforts = remainingTurnEfforts;
 				markTaskCompleted(id);
 			}
+			return true;
 		} catch (error) {
-			reportDiagnostics(id, 'stop_failed');
+			void fetch(threadApi(id, '/diagnostics', host), {
+				method: 'POST', headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ event: 'stop_failed', connected, visible: document.visibilityState === 'visible' }),
+				signal: AbortSignal.timeout(3_000)
+			}).catch(() => {});
 			addLocalNote(id, `Could not stop task: ${error instanceof Error ? error.message : String(error)}`, 'err');
+			return false;
 		} finally {
 			delete stoppingSessions[id];
 		}
@@ -5360,6 +5421,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<span class="gutter">/</span>
 									<div class="body">{(item as any).text}</div>
 								</div>
+							{:else if item.type === 'stalledWorkerPrompt'}
+								<div class="item note stalled-worker-prompt">
+									<span class="gutter">…</span>
+									<div class="body">
+										<div>{(item as any).text}</div>
+										<div class="stall-actions">
+											<button class="mini ghost" type="button" onclick={() => dismissStalledWorkerPrompt(activeId, (item as any).id)}>Keep waiting</button>
+											<button class="mini ghost" type="button" onclick={() => askStalledWorkerStatus(activeId, item)}>Ask Codex for a status update</button>
+											<button class="mini danger" type="button" disabled={Boolean(stoppingSessions[(item as any).workerId])} onclick={() => stopStalledWorker(activeId, item)}>Stop worker</button>
+										</div>
+									</div>
+								</div>
 							{:else if item.type === 'enteredReviewMode'}
 								<div class="item note">
 									<span class="gutter">⚑</span>
@@ -5948,6 +6021,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.rail-actions {
 		display: flex;
 		gap: var(--space-2xs);
+	}
+
+	.stall-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2xs);
+		margin-top: var(--space-xs);
 	}
 
 	.archive-browser-open {
