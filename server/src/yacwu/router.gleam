@@ -457,8 +457,14 @@ fn dispatch(
             ctx.registry,
             host,
             cx,
-            decode.run(body, decode.at(["models"], decode.list(decode.string)))
-              |> result.unwrap([]),
+            decode.run(body, decode.at(["stages"], decode.list(decode.dynamic)))
+              |> result.unwrap([])
+              |> list.map(fn(stage) {
+                #(
+                  jsonx.field_string(stage, ["model"]) |> result.unwrap(""),
+                  jsonx.field_string(stage, ["effort"]) |> result.unwrap(""),
+                )
+              }),
             jsonx.field_bool(body, ["economical"]) |> result.unwrap(True),
             jsonx.field_int(body, ["maxTurns"]) |> result.unwrap(12),
             jsonx.field_int(body, ["minutes"]) |> result.unwrap(20),
@@ -966,7 +972,7 @@ fn workspace_root(
             False -> resolve_cwd_against(root, codex.info(cx).home)
           }
           Ok(resolved)
-      }
+        }
       }
   }
 }

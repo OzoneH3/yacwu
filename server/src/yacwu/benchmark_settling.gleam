@@ -16,7 +16,10 @@ pub fn observe(
   used: Int,
   reset: Int,
 ) -> Result(Reading, String) {
-  case reset != previous.reset {
+  // The upstream reset timestamp moves by a second between reads even within
+  // the same allowance window. A real weekly reset is days away, so tolerate
+  // small timestamp jitter while still rejecting an actual window change.
+  case int.max(reset, previous.reset) - int.min(reset, previous.reset) > 60 {
     True -> Error("Weekly allowance reset during sampling; benchmark stopped")
     False ->
       Ok(

@@ -16,7 +16,15 @@ fn cancelled(label: String) -> Bool
 fn finish(label: String, status: String) -> Nil
 
 pub fn batch_plan_targets_and_order_test() {
-  let assert Ok(stages) = benchmark_plan.batch(["a", "b", "c"], True)
+  let combinations = [
+    #("a", "low"),
+    #("a", "medium"),
+    #("b", "low"),
+    #("b", "medium"),
+    #("c", "low"),
+    #("c", "medium"),
+  ]
+  let assert Ok(stages) = benchmark_plan.batch(combinations, True)
   list.map(stages, fn(stage) { #(stage.model, stage.effort, stage.target) })
   |> should.equal([
     #("a", "low", 2),
@@ -26,7 +34,7 @@ pub fn batch_plan_targets_and_order_test() {
     #("c", "low", 1),
     #("c", "medium", 1),
   ])
-  let assert Ok(conservative) = benchmark_plan.batch(["a", "b", "c"], False)
+  let assert Ok(conservative) = benchmark_plan.batch(combinations, False)
   list.map(conservative, fn(stage) { stage.target })
   |> should.equal([2, 2, 2, 2, 2, 2])
 }
@@ -34,10 +42,13 @@ pub fn batch_plan_targets_and_order_test() {
 pub fn invalid_batch_plan_is_rejected_before_codex_work_test() {
   let registry = process.new_name("unused_batch_registry")
   let cx = process.new_name("unused_batch_codex")
-  list.each([[], [""], ["a", "a"], ["a", "b", "c", "d"]], fn(models) {
-    benchmark.start_batch(registry, "test", cx, models, True, 12, 20)
-    |> should.be_error
-  })
+  list.each(
+    [[], [#("", "low")], [#("a", "low"), #("a", "low")], [#("a", "high")]],
+    fn(stages) {
+      benchmark.start_batch(registry, "test", cx, stages, True, 12, 20)
+      |> should.be_error
+    },
+  )
 }
 
 pub fn benchmark_limits_are_checked_before_any_codex_work_test() {
@@ -92,4 +103,6 @@ pub fn delayed_and_backwards_quota_readings_must_settle_test() {
   benchmark_settling.ready(recovered, 234, 90) |> should.be_false
   benchmark_settling.ready(recovered, 235, 90) |> should.be_true
   benchmark_settling.observe(recovered, 240, 0, 2000) |> should.be_error
+  benchmark_settling.observe(recovered, 240, 81, 1001) |> should.be_ok
+  benchmark_settling.observe(recovered, 240, 81, 1061) |> should.be_error
 }

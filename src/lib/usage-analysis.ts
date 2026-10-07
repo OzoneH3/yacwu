@@ -64,6 +64,7 @@ export interface UsageRate {
 
 const emptyTokens = (): TokenTotals => ({ totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 });
 const groupKey = (model: string, effort: string) => JSON.stringify([model, effort]);
+const sameResetWindow = (a: number | undefined, b: number | undefined) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= 60;
 
 /** Keep legacy host-only history, and combine known matching accounts without guessing identity. */
 function accountEvents(events: UsageEvent[], host: string) {
@@ -108,7 +109,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		if (event.event === 'benchmark' && id) benchmarks.add(id);
 		if (event.host === host && event.event === 'benchmarkBoundary' && id) {
 			const prior = quotas.at(-1);
-			if (prior?.accountKey === event.accountKey && prior.resetsAt === event.resetsAt && typeof event.usedPercent === 'number') {
+			if (prior?.accountKey === event.accountKey && sameResetWindow(prior.resetsAt, event.resetsAt) && typeof event.usedPercent === 'number') {
 				baseline = { ...prior, at: event.at, usedPercent: event.usedPercent };
 				benchmarkInterval = id; intervalTokens = {}; intervalIncomplete = active.size > 0;
 			}
@@ -116,7 +117,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		}
 		if (event.host === host && event.event === 'benchmarkBoundaryEnd' && benchmarkInterval === id && baseline) {
 			const delta = (event.usedPercent ?? 0) - (baseline.usedPercent ?? 0);
-			if (!intervalIncomplete && event.accountKey === baseline.accountKey && event.resetsAt === baseline.resetsAt && delta >= 1 && Object.values(intervalTokens).some((tokens) => tokens.totalTokens > 0)) {
+			if (!intervalIncomplete && event.accountKey === baseline.accountKey && sameResetWindow(event.resetsAt, baseline.resetsAt) && delta >= 1 && Object.values(intervalTokens).some((tokens) => tokens.totalTokens > 0)) {
 				observations.push({ percent: delta, tokens: intervalTokens });
 			} else excludedIntervals++;
 			baseline = { ...baseline, at: event.at, usedPercent: event.usedPercent };
@@ -197,7 +198,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			for (const task of active.values()) if (!task.quotaScope) task.quotaScope = scope;
 			if (calibrationScope && scope !== calibrationScope) observations.length = 0;
 			calibrationScope = scope;
-			const sameWindow = baseline && baseline.accountKey === event.accountKey && baseline.resetsAt === event.resetsAt && baseline.limitId === event.limitId && baseline.planType === event.planType;
+			const sameWindow = baseline && baseline.accountKey === event.accountKey && sameResetWindow(baseline.resetsAt, event.resetsAt) && baseline.limitId === event.limitId && baseline.planType === event.planType;
 			// Explicit benchmark boundaries keep short stages separate and prevent double-counting
 			// the same token deltas through ordinary pooled quota observations.
 			if (benchmarkInterval) {

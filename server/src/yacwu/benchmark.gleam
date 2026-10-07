@@ -117,12 +117,12 @@ pub fn start_batch(
   registry: hosts.Registry,
   host: String,
   cx: Codex,
-  models: List(String),
+  combinations: List(#(String, String)),
   economical: Bool,
   max_turns: Int,
   minutes: Int,
 ) -> Result(Nil, String) {
-  use stages <- result.try(benchmark_plan.batch(models, economical))
+  use stages <- result.try(benchmark_plan.batch(combinations, economical))
   start_plan(registry, host, cx, stages, max_turns, minutes)
 }
 
@@ -135,10 +135,7 @@ fn start_plan(
   minutes: Int,
 ) -> Result(Nil, String) {
   case max_turns >= 1 && max_turns <= 100 && minutes >= 3 && minutes <= 60 {
-    False ->
-      Error(
-        "Choose 1–100 turns and 3–60 minutes per combination",
-      )
+    False -> Error("Choose 1–100 turns and 3–60 minutes per combination")
     True -> {
       use catalog <- result.try(model_state.list_model_choices(cx))
       case
@@ -363,6 +360,10 @@ fn weekly(cx: Codex) -> Result(#(Int, Int), String) {
   Ok(#(used, reset))
 }
 
+fn same_reset(left: Int, right: Int) -> Bool {
+  int.max(left, right) - int.min(left, right) <= 60
+}
+
 fn check(
   registry: hosts.Registry,
   host: String,
@@ -428,7 +429,7 @@ fn run(
   use initial <- result.try(case boundary {
     Some(reading) -> {
       use current <- result.try(weekly(cx))
-      case current == reading {
+      case current.0 == reading.0 && same_reset(current.1, reading.1) {
         True -> Ok(reading)
         False ->
           Error(
@@ -537,7 +538,7 @@ fn rounds(
   completed: Int,
 ) -> Result(Json, String) {
   use _ <- result.try(check(registry, host, thread, deadline))
-  use _ <- result.try(case current.1 == initial.1 {
+  use _ <- result.try(case same_reset(current.1, initial.1) {
     True -> Ok(Nil)
     False -> Error("Weekly allowance reset; benchmark stopped")
   })
@@ -601,7 +602,7 @@ fn rounds(
       ]),
     ),
   )
-  case current.1 != initial.1 {
+  case !same_reset(current.1, initial.1) {
     True -> Error("Weekly allowance reset; benchmark stopped")
     False ->
       case done {
@@ -752,7 +753,7 @@ fn sample_settle(
 ) -> Result(#(Int, Int), String) {
   use _ <- result.try(check(registry, host, thread, deadline))
   use first <- result.try(weekly(cx))
-  case first.1 != reference.1 {
+  case !same_reset(first.1, reference.1) {
     True -> Error("Weekly allowance reset; benchmark stopped")
     False ->
       sample_until_stable(

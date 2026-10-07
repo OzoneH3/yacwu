@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import { hostQuery } from './protocol';
 	interface Choice { id: string; displayName: string; efforts: string[] }
-	interface Status { status: string; message?: string; threadId?: string; turns?: number; usedPercent?: number; targetPercent?: number; model?: string; effort?: string; startedAt?: number; endedAt?: number; deadlineAt?: number; phase?: string; stableSeconds?: number; settleElapsedSeconds?: number; sampledAt?: number; stageIndex?: number; stageTotal?: number; batchUsedPercent?: number; batchTargetPercent?: number; results?: Status[]; plan?: { model: string; effort: string; targetPercent: number }[] }
+	interface StageChoice { model: string; effort: string; targetPercent?: number }
+	interface Status { status: string; message?: string; threadId?: string; turns?: number; usedPercent?: number; targetPercent?: number; model?: string; effort?: string; startedAt?: number; endedAt?: number; deadlineAt?: number; phase?: string; stableSeconds?: number; settleElapsedSeconds?: number; sampledAt?: number; stageIndex?: number; stageTotal?: number; batchUsedPercent?: number; batchTargetPercent?: number; results?: Status[]; plan?: StageChoice[] }
 	let { host, models, selectedModel, selectedEffort, oncomplete }: { host: string; models: Choice[]; selectedModel?: string; selectedEffort?: string; oncomplete: () => void } = $props();
 	let model = $state('');
 	let effort = $state('');
@@ -11,10 +12,11 @@
 	let minutes = $state(20);
 	let batch = $state(false);
 	let economical = $state(true);
-	let selectedBatchModels = $state<string[] | null>(null);
-	const eligibleModels = $derived(models.filter((choice) => choice.efforts.includes('low') && choice.efforts.includes('medium')));
-	const batchModels = $derived((selectedBatchModels ?? eligibleModels.slice(0, 3).map((choice) => choice.id)).filter((id) => eligibleModels.some((choice) => choice.id === id)));
-	const batchTarget = $derived(batchModels.length * (economical ? 2 : 4) + (economical && batchModels.length ? 1 : 0));
+	let selectedBatchStages = $state<string[] | null>(null);
+	const eligibleModels = $derived(models.filter((choice) => choice.efforts.some((level) => ['low', 'medium'].includes(level))));
+	const eligibleStages = $derived(eligibleModels.flatMap((choice) => ['low', 'medium'].filter((level) => choice.efforts.includes(level)).map((level) => ({ key: `${choice.id}::${level}`, model: choice.id, effort: level }))));
+	const batchStages = $derived((selectedBatchStages ?? eligibleStages.slice(0, 6).map((stage) => stage.key)).flatMap((key) => { const stage = eligibleStages.find((item) => item.key === key); return stage ? [stage] : []; }));
+	const batchTarget = $derived(batchStages.length ? (economical ? batchStages.length + 1 : batchStages.length * 2) : 0);
 	let status = $state<Status>({ status: 'idle' });
 	let error = $state('');
 	let pending = $state(false);
@@ -55,7 +57,7 @@
 		try {
 			const response = await fetch(`/api/usage/benchmark${stop ? '/stop' : ''}${hostQuery(host)}`, {
 				method: 'POST', headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(stop ? {} : batch ? { batch: true, models: batchModels, economical, maxTurns, minutes } : { model, effort, targetPercent, maxTurns, minutes })
+				body: JSON.stringify(stop ? {} : batch ? { batch: true, stages: batchStages.map(({ model, effort }) => ({ model, effort })), economical, maxTurns, minutes } : { model, effort, targetPercent, maxTurns, minutes })
 			});
 			const data = await response.json();
 			if (!response.ok) throw new Error(data.error ?? 'Could not start benchmark');
@@ -73,9 +75,14 @@
 		<label>Mode <select bind:value={batch} disabled={running || pending}><option value={false}>Single combination</option><option value={true}>Models × Low / Medium</option></select></label>
 		{#if batch}
 			<fieldset disabled={running || pending}>
-				<legend>Choose up to three models</legend>
+				<legend>Choose model and thinking combinations</legend>
 				{#each eligibleModels as choice}
-					<label class="check"><input type="checkbox" checked={batchModels.includes(choice.id)} disabled={!batchModels.includes(choice.id) && batchModels.length >= 3} onchange={(event) => { selectedBatchModels = event.currentTarget.checked ? [...batchModels, choice.id] : batchModels.filter((id) => id !== choice.id); }} />{choice.displayName || choice.id}</label>
+					<div class="model-options"><span>{choice.displayName || choice.id}</span>
+						{#each ['low', 'medium'].filter((level) => choice.efforts.includes(level)) as level}
+							{@const key = `${choice.id}::${level}`}
+							<label class="check"><input type="checkbox" checked={batchStages.some((stage) => stage.model === choice.id && stage.effort === level)} disabled={!batchStages.some((stage) => stage.model === choice.id && stage.effort === level) && batchStages.length >= 6} onchange={(event) => { const selected = batchStages.map((stage) => stage.key); selectedBatchStages = event.currentTarget.checked ? [...selected, key] : selected.filter((item) => item !== key); }} />{level}</label>
+						{/each}
+					</div>
 				{/each}
 				<label class="check"><input type="checkbox" bind:checked={economical} />Economical: 2% first, then 1% per combination</label>
 			</fieldset>
@@ -87,11 +94,11 @@
 		<label>Maximum turns per combination <input type="number" min="1" max="100" required bind:value={maxTurns} disabled={running || pending} /></label>
 		<label>Maximum minutes per combination <input type="number" min="3" max="60" step="1" required bind:value={minutes} disabled={running || pending} /></label>
 		{#if running}<button type="button" onclick={() => submit(true)} disabled={pending || status.status === 'stopping'}>Stop benchmark</button>
-		{:else}<button type="submit" disabled={pending || (batch ? !batchModels.length : !model || !effort)}>Start benchmark — uses allowance</button>{/if}
+		{:else}<button type="submit" disabled={pending || (batch ? !batchStages.length : !model || !effort)}>Start benchmark — uses allowance</button>{/if}
 	</form>
 	{#if batch && !running}
-		<p>{batchModels.length * 2} combinations · {batchTarget} percentage points nominal target · up to {batchModels.length * 2 * minutes} minutes total. {economical ? 'The first combination targets 2%; later ones target 1% each.' : 'Each combination targets 2%.'}</p>
-		<ol>{#each batchModels as id, index}{#each ['low', 'medium'] as level, effortIndex}<li>{models.find((choice) => choice.id === id)?.displayName || id} · {level} · {economical && (index > 0 || effortIndex > 0) ? 1 : 2}%</li>{/each}{/each}</ol>
+		<p>{batchStages.length} combinations · {batchTarget} percentage points nominal target · up to {batchStages.length * minutes} minutes total. {economical ? 'The first combination targets 2%; later ones target 1% each.' : 'Each combination targets 2%.'}</p>
+		<ol>{#each batchStages as stage, index}<li>{models.find((choice) => choice.id === stage.model)?.displayName || stage.model} · {stage.effort} · {economical && index > 0 ? 1 : 2}%</li>{/each}</ol>
 	{/if}
 	{#if (status.stageTotal ?? 0) > 1}<p>Combination {status.stageIndex ?? 1}/{status.stageTotal} · finished combinations: {status.batchUsedPercent ?? 0}% observed / {status.batchTargetPercent}% total target</p>{/if}
 	{#if running && (status.stageTotal ?? 0) > 1 && status.plan}
@@ -124,6 +131,7 @@
 	fieldset { display: grid; gap: var(--space-2xs); border: var(--rule-hair) solid var(--color-rule); }
 	legend, li { font-size: var(--text-xs); }
 	.check { display: flex; align-items: center; }
+	.model-options { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
 	.check input { width: auto; }
 	input, select, button { padding: var(--space-2xs); min-height: var(--control-height-compact); color: var(--color-ink); background: var(--color-paper-2); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); }
 	button { cursor: pointer; }

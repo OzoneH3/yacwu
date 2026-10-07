@@ -469,18 +469,21 @@ maximum turns (1–100), and maximum runtime (3–60 minutes). It creates a
 dedicated read-only session with versioned text workloads covering explanations,
 specifications and scheduling analysis. It samples quota every 10 seconds while
 settling: at least 60 seconds for the baseline and 90 seconds after each turn,
-with 60 seconds of unchanged readings required. Changes restart the stability
-timer; a backwards reading must recover to the highest reading seen. Sampling
+with 60 seconds of unchanged readings required. Allowance reset timestamps may
+vary by up to 60 seconds between reads without being treated as a new week;
+larger changes stop the run. Usage changes restart the stability timer; a
+backwards reading must recover to the highest reading seen. Sampling
 stops after five minutes without stability. The runtime limit includes these
 settling periods. The controls show elapsed time, time until the runtime limit,
 completed turns and sampling status; turn-limit stops are labeled partial runs.
 The estimator also requires stable quota readings before learning token costs.
-Use **Models × Low / Medium** to run up to three models sequentially at both
-thinking levels. Economical mode targets 2 percentage points for the first
-combination, then 1 for each remaining combination: 7 points nominally for all
-six. Disable economical mode for 2 points each (12 total). Turn and runtime
-limits apply **per combination**, including settling; six combinations can take
-up to six times the selected runtime. The controls show the order, total target,
+Use **Models × Low / Medium** to check the supported model/thinking
+combinations you want and run them sequentially. Economical mode targets 2
+percentage points for the first selected combination, then 1 for each remaining
+combination. With all six selected this is 7 points nominally. Disable
+economical mode for 2 points each. Turn and runtime limits apply **per
+combination**, including settling; six combinations can take up to six times
+the selected runtime. The controls show the order, total target,
 current combination and separate results with links to each benchmark session.
 Each handoff carries the settled allowance baseline forward; if that reading
 changes during the handoff, the batch stops rather than attributing the change
