@@ -29,7 +29,7 @@ rules locally, and records usage/diagnostic journals on the server.
   has loaded
 - ⚡ Live streaming of messages, reasoning, commands, plans, and file changes;
   steer a running turn, stop it, or resume it later
-- 🧹 Compact activity folds older commands, file changes and agent updates into
+- 🧹 Compact activity folds older commands, MCP calls, file changes and agent updates into
   expandable groups. The latest activity stays visible while working, as does a
   final failure; **Show all activity** shows the full trace
 - ⏱️ Session bar with task progress, time-left estimates, elapsed time, and

@@ -4,6 +4,8 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
+	import McpToolActivity from '$lib/McpToolActivity.svelte';
+	import { mcpActivityLabel } from '$lib/mcp-activity';
 	import { compactActivity, compactActivityLabel } from '$lib/compact-activity';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
@@ -4136,8 +4138,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				return `Delegating: ${truncateText(collabSummary(item), 110)}`;
 			}
 			if (item.type === 'mcpToolCall' && item.status === 'inProgress') {
-				const tool = [item.server, item.tool].filter(Boolean).join(' · ');
-				return `Using ${truncateText(tool || 'a connected tool', 120)}`;
+				return `Using ${truncateText(mcpActivityLabel(item), 120)}`;
 			}
 			if (item.type === 'dynamicToolCall' && item.status === 'inProgress') {
 				return `Using ${truncateText(String(item.tool || 'an app tool'), 120)}`;
@@ -5816,6 +5817,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										</div>
 									{/if}
 								</div>
+							{:else if item.type === 'mcpToolCall'}
+								<McpToolActivity {item} />
 							{:else if item.type === 'fileChange'}
 								<div class="item file">
 									<div class="body">
