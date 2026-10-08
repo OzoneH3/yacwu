@@ -399,11 +399,14 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	const activeModels = $derived(activeId ? filterAndSortModelChoices(sessionModels[activeId] ?? []) : []);
 	const activeClaude = $derived(isClaudeModelCatalog(activeModels));
 	const activeEfforts = $derived(activeId ? (modelEfforts[activeId] ?? []) : []);
-	const activeModelChoice = $derived(
-		activeConfig && activeId
-			? (sessionModels[activeId]?.find((choice) => choice.id === activeConfig.model) ?? null)
-			: null
-	);
+	const activeModelChoice = $derived.by(() => {
+		const choice = activeConfig && activeId
+			? sessionModels[activeId]?.find((choice) => choice.id === activeConfig.model) ?? null
+			: null;
+		return choice?.id === 'default' && isClaudeModelCatalog([choice])
+			? { ...choice, displayName: choice.displayName.replace(/\s*\(default\)/gi, '').trim() }
+			: choice;
+	});
 	const activePickerModel = $derived(
 		activeClaude && activeModelChoice
 			? activeModels.find((choice) => claudeModelIdentity(choice) === claudeModelIdentity(activeModelChoice))?.id ?? activeConfig?.model
