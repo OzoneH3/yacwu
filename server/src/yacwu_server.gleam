@@ -162,7 +162,7 @@ authentication (e.g. bound to localhost only).",
   io.println("yacwu listening on " <> listen)
   let cwd_note =
     envoy.get("YACWU_CWD")
-    |> result.unwrap("~")
+    |> result.unwrap("(home)")
   io.println("  working directory for new sessions: " <> cwd_note)
   case backends.discover() {
     [] -> Nil
