@@ -77,6 +77,9 @@ pub type Message {
     submission: String,
     /// The turn the backend acknowledged it into; "" when none.
     turn: String,
+    /// Connection generation the last delivery attempt was written on; 0
+    /// when none was written.
+    generation: Int,
     provider: Provider,
     version: Int,
   )
@@ -117,7 +120,9 @@ pub type Recipient {
     /// event instead of reading again.
     awaiting_event: Bool,
     failures: Int,
-    retry_at: Int,
+    /// Earliest time (monotonic ms, may be negative) to try again after a
+    /// failure; None when not backing off.
+    retry_at: Option(Int),
   )
 }
 
@@ -436,6 +441,7 @@ pub fn send(
               reason: "",
               submission: "",
               turn: "",
+              generation: 0,
               provider: input.provider,
               version: version,
             )
@@ -550,7 +556,7 @@ pub fn lifecycle(
               },
               awaiting_event: False,
               failures: 0,
-              retry_at: 0,
+              retry_at: None,
             )
           let core = put_recipient(core, to, r) |> prune_recipients
           dispatch(core, now, to)
@@ -693,7 +699,7 @@ pub fn finish(
   case dict.get(core.submissions, id) {
     Error(_) -> #(core, [])
     Ok(sub) -> {
-      let core = release(core, sub)
+      let core = release(core, sub) |> stamp(sub.members, written_generation)
       let r = get_recipient(core, sub.to)
       let #(core, effects) = case outcome {
         Acknowledged(turn) -> {
@@ -701,7 +707,7 @@ pub fn finish(
             put_recipient(
               core,
               sub.to,
-              Recipient(..r, failures: 0, retry_at: 0),
+              Recipient(..r, failures: 0, retry_at: None),
             )
           settle(core, sub.members, Accepted, "", turn)
         }
@@ -833,7 +839,7 @@ pub fn recovered(
                   runtime: Active(turn),
                   revision: r.revision + 1,
                   failures: 0,
-                  retry_at: 0,
+                  retry_at: None,
                 ),
               ),
               [],
@@ -848,7 +854,7 @@ pub fn recovered(
               runtime: Idle,
               revision: r.revision + 1,
               failures: 0,
-              retry_at: 0,
+              retry_at: None,
             ),
           ),
           [],
@@ -942,9 +948,9 @@ pub fn dispatch(core: Core, now: Int, to: Address) -> #(Core, List(Effect)) {
       {
         True -> #(core, [])
         False ->
-          case now < r.retry_at {
-            True -> #(core, [WakeAt(r.retry_at)])
-            False ->
+          case r.retry_at {
+            Some(at) if now < at -> #(core, [WakeAt(at)])
+            _ ->
               case inflight(core, to.host) >= core.limits.max_inflight {
                 // Re-run when an attempt or read on this host finishes.
                 True -> #(core, [])
@@ -1118,6 +1124,20 @@ fn requeue(
   #(core, list.reverse(effects))
 }
 
+/// Record which connection an attempt was written on. Not published by
+/// itself: the settle or requeue that follows publishes the change.
+fn stamp(core: Core, ids: List(String), generation: Int) -> Core {
+  Core(
+    ..core,
+    messages: list.fold(ids, core.messages, fn(messages, id) {
+      case dict.get(messages, id) {
+        Ok(m) -> dict.insert(messages, id, Message(..m, generation: generation))
+        Error(_) -> messages
+      }
+    }),
+  )
+}
+
 /// Move messages to a terminal state.
 fn settle(
   core: Core,
@@ -1180,7 +1200,7 @@ fn backoff(core: Core, r: Recipient, now: Int) -> Recipient {
       core.limits.backoff_cap,
       core.limits.backoff_base * pow2(int.min(failures - 1, 16)),
     )
-  Recipient(..r, failures: failures, retry_at: now + delay)
+  Recipient(..r, failures: failures, retry_at: Some(now + delay))
 }
 
 fn pow2(n: Int) -> Int {
@@ -1193,7 +1213,7 @@ fn pow2(n: Int) -> Int {
 fn get_recipient(core: Core, to: Address) -> Recipient {
   case dict.get(core.recipients, to) {
     Ok(r) -> r
-    Error(_) -> Recipient(Unknown, 0, [], None, None, "", False, 0, 0)
+    Error(_) -> Recipient(Unknown, 0, [], None, None, "", False, 0, None)
   }
 }
 

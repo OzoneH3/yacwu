@@ -89,15 +89,15 @@ type State {
     timeouts: Timeouts,
     work: Dict(Pid, #(Work, Monitor)),
     subscribers: List(#(Pid, Subject(String))),
-    next_wake: Int,
-    /// `codex.now_ms()` at start. The monotonic clock may be negative; the
-    /// relay counts from its own start so its times are always positive.
-    base: Int,
+    /// The earliest Wake already scheduled (monotonic ms), if any.
+    next_wake: Option(Int),
   )
 }
 
-fn clock(state: State) -> Int {
-  codex.now_ms() - state.base + 1
+/// The VM's monotonic clock in ms. It may be negative; only differences
+/// and comparisons between its readings are meaningful.
+fn clock(_state: State) -> Int {
+  codex.now_ms()
 }
 
 pub fn supervised(
@@ -141,8 +141,7 @@ pub fn start(
       timeouts: timeouts,
       work: dict.new(),
       subscribers: [],
-      next_wake: 0,
-      base: codex.now_ms(),
+      next_wake: None,
     )
     |> actor.initialised
     |> actor.selecting(selector)
@@ -265,6 +264,7 @@ pub fn message_json(m: Message) -> Json {
     #("reason", json.string(m.reason)),
     #("submission", json.string(m.submission)),
     #("turnId", json.string(m.turn)),
+    #("generation", json.int(m.generation)),
     #("createdAt", json.int(m.created_at)),
     #("version", json.int(m.version)),
     // What an acknowledgement from this recipient's backend means.
@@ -356,7 +356,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       }
     Wake -> {
       let #(core, effects) = relay_core.tick(state.core, now)
-      actor.continue(perform(State(..state, core: core, next_wake: 0), effects))
+      actor.continue(perform(
+        State(..state, core: core, next_wake: None),
+        effects,
+      ))
     }
     Tick -> {
       // Re-subscribing is idempotent and heals a restarted registry.
@@ -465,14 +468,16 @@ fn perform(state: State, effects: List(relay_core.Effect)) -> State {
       }
       relay_core.WakeAt(at) -> {
         let now = clock(state)
-        case
-          state.next_wake == 0 || at < state.next_wake || state.next_wake <= now
-        {
+        let needed = case state.next_wake {
+          None -> True
+          Some(scheduled) -> at < scheduled || scheduled <= now
+        }
+        case needed {
           False -> state
           True -> {
             let _ =
               process.send_after(state.self, int.max(at - now, 0) + 1, Wake)
-            State(..state, next_wake: at)
+            State(..state, next_wake: Some(at))
           }
         }
       }

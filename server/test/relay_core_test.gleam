@@ -250,6 +250,34 @@ pub fn disconnect_cycles_lengthen_backoff_test() {
   reads |> should.equal(1)
 }
 
+/// The VM's monotonic clock is usually negative. Dispatch, backoff and
+/// wake-ups must work on it directly, measured by real elapsed time.
+pub fn negative_clock_dispatch_and_backoff_test() {
+  let t0 = -576_460_751_942
+  let core = fresh() |> connected(1)
+  let #(core, _) = started(core, t0, 1, bob, "t1")
+  let #(core, effects) = send(core, t0 + 1, "msg-0001", "hello")
+  let assert [#(sub, "t1")] = steers(effects)
+  let #(core, effects) =
+    relay_core.finish(core, t0 + 2, sub, 0, NeverSent("connection failed"))
+  steers(effects) |> should.equal([])
+  let assert True =
+    list.any(effects, fn(e) {
+      case e {
+        WakeAt(at) -> at == t0 + 1002
+        _ -> False
+      }
+    })
+  // Ticking often does not shorten the backoff; elapsed time does.
+  let core =
+    list.fold([100, 300, 500, 700, 900], core, fn(core, offset) {
+      let #(core, effects) = relay_core.tick(core, t0 + offset)
+      steers(effects) |> should.equal([])
+      core
+    })
+  let assert [#(_, "t1")] = steers(relay_core.tick(core, t0 + 1002).1)
+}
+
 pub fn dispatch_works_at_large_clock_values_test() {
   let core = fresh() |> connected(1)
   let #(core, _) = started(core, 9_000_000_000, 1, bob, "t1")

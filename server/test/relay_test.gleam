@@ -195,6 +195,8 @@ pub fn steer_carries_turn_guard_and_submission_id_test() {
   let assert Ok(m) = relay.get_message(r, "msg-0001")
   m.turn |> should.equal("turn-1")
   m.submission |> should.equal(submission)
+  // The connection the acknowledgement came from is recorded.
+  should.be_true(m.generation > 0)
 }
 
 /// The backend stores the input and then answers with an internal error:
