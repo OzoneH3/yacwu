@@ -16,6 +16,16 @@ test('session rules persist per session and are included only in future prompt t
 	});
 	await page.goto('/s/rules-a');
 	await page.getByRole('button', { name: /^Session details,/ }).click();
+	const clear = page.getByRole('button', { name: 'Clear session', exact: true });
+	await expect(clear).toBeEnabled();
+	const normalBackground = await clear.evaluate((el) => getComputedStyle(el).backgroundColor);
+	await clear.hover();
+	await expect.poll(() => clear.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(normalBackground);
+	await clear.focus();
+	await page.keyboard.press('Tab');
+	await page.keyboard.press('Shift+Tab');
+	await expect(clear).toBeFocused();
+	await expect.poll(() => clear.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none');
 	await page.getByLabel('Additional instructions').fill('Always check README before committing.');
 	await page.getByLabel('Progress reporting', { exact: true }).uncheck();
 	await page.getByLabel('Shared background coordination', { exact: true }).uncheck();

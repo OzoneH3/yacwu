@@ -7798,6 +7798,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.session-detail-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block-start: var(--space-sm); }
 	.session-detail-actions > button { flex: 1; width: auto; margin-block-start: 0; }
 	.session-clear-action { min-height: var(--control-height); padding-inline: var(--space-sm); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink); cursor: pointer; font: inherit; text-align: center; }
+	.session-clear-action:enabled:hover { background: var(--color-paper-3); border-color: var(--color-accent); }
+	.session-clear-action:enabled:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 	.session-detail-actions > button:disabled { opacity: .5; cursor: default; }
 
 	.session-info-heading {
