@@ -492,8 +492,10 @@ the transcript, including after reload.
 Claude work is stopped and new tasks are blocked when either the five-hour or
 seven-day allowance reaches 90% used. If both readings are unavailable, new
 tasks remain blocked until the allowance can be verified. Claude usage is
-queried live before each new task so a reset is recognized immediately; if that
-refresh fails, stale readings are treated as unavailable.
+checked before each new task. Recent valid readings are reused for up to two
+minutes; unknown readings and elapsed reset windows trigger a refresh. If the
+usage endpoint is rate limited, its retry delay is respected and displayed
+when starts cannot be verified. Stale readings cannot authorize new work.
 
 Logs live in `$XDG_STATE_HOME/yacwu/diagnostics` (default
 `~/.local/state/yacwu/diagnostics`). Set `YACWU_DIAGNOSTICS_DIR` to override it.

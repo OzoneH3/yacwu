@@ -99,9 +99,11 @@ test('Claude quota polling deduplicates requests and retains readings during rat
 	expect(calls).toBe(2);
 });
 
-test('forced Claude usage refresh bypasses an unexpired cached allowance after reset', async () => {
+test('Claude usage refresh bypasses the cache when its allowance window resets', async () => {
 	let calls = 0;
+	let time = Date.parse('2026-10-08T14:59:00Z');
 	const read = createClaudeUsageReader({
+		now: () => time,
 		credentials: async () => ({ accessToken: 'test-token', subscriptionType: 'max' }),
 		fetchUsage: async () => {
 			calls++;
@@ -111,13 +113,16 @@ test('forced Claude usage refresh bypasses an unexpired cached allowance after r
 	expect((await read()).rateLimits.primary?.usedPercent).toBe(95);
 	expect((await read()).rateLimits.primary?.usedPercent).toBe(95);
 	expect(calls).toBe(1);
+	time += 60_001;
 	expect((await read({ force: true })).rateLimits.primary?.usedPercent).toBe(0);
 	expect(calls).toBe(2);
 });
 
 test('failed forced Claude usage refresh never presents stale quota as current', async () => {
 	let fail = false;
+	let time = Date.parse('2026-10-08T14:00:00Z');
 	const read = createClaudeUsageReader({
+		now: () => time,
 		credentials: async () => ({ accessToken: 'test-token', subscriptionType: 'max' }),
 		fetchUsage: async () => fail
 			? new Response('', { status: 503 })
@@ -125,9 +130,43 @@ test('failed forced Claude usage refresh never presents stale quota as current',
 	});
 	expect((await read()).rateLimits.primary?.usedPercent).toBe(95);
 	fail = true;
+	time += 120_001;
 	const refreshed = await read({ force: true });
 	expect(refreshed.rateLimits.primary).toBeNull();
 	expect(refreshed.rateLimits.secondary).toBeNull();
+});
+
+test('fresh usage survives repeated starts and forced reads respect HTTP 429 backoff', async () => {
+	let time = Date.parse('2026-10-08T14:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => {
+			calls++;
+			return calls === 1 || calls === 3
+				? Response.json({ five_hour: { utilization: 10, resets_at: '2026-10-08T15:00:00Z' }, seven_day: { utilization: 20, resets_at: '2026-10-15T15:00:00Z' } })
+				: new Response('', { status: 429, headers: { 'retry-after': '300' } });
+		}
+	});
+	await read();
+	for (let i = 0; i < 5; i++) expect((await read({ force: true })).rateLimits.primary?.usedPercent).toBe(10);
+	expect(calls).toBe(1);
+	time += 120_001;
+	const failed = await read({ force: true });
+	expect(failed).toMatchObject({ usageError: { code: 'rate_limited' } });
+	for (let i = 0; i < 5; i++) await read({ force: true });
+	expect(calls).toBe(2);
+	time += 300_001;
+	expect((await read({ force: true })).rateLimits.primary?.usedPercent).toBe(10);
+	expect(calls).toBe(3);
+});
+
+test('a reported zero usage percentage remains valid without a reset timestamp', () => {
+	const usage = claudeRateLimits({ five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 12, resets_at: null } });
+	expect(usage.rateLimits.primary?.usedPercent).toBe(0);
+	expect(usage.rateLimits.primary?.resetsAt).toBeNull();
+	expect(usage.rateLimits.secondary?.usedPercent).toBe(12);
 });
 
 test('Claude account without subscription credentials reports unavailable usage', async () => {

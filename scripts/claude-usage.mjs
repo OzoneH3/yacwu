@@ -40,8 +40,8 @@ export function claudeRateLimits(usage, planType = null) {
     const data = /** @type {{resets_at?: unknown, utilization?: unknown}} */ (value);
     const resetsAt = typeof data.resets_at === 'string' ? Date.parse(data.resets_at) / 1000 : NaN;
     const usedPercent = data.utilization;
-    if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100 || !Number.isFinite(resetsAt)) return null;
-    return { usedPercent, windowDurationMins: minutes, resetsAt: Math.floor(resetsAt) };
+    if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) return null;
+    return { usedPercent, windowDurationMins: minutes, resetsAt: Number.isFinite(resetsAt) ? Math.floor(resetsAt) : null };
   };
   const rateLimits = {
     limitId: 'claude-code', limitName: 'Claude Code',
@@ -63,12 +63,30 @@ export function createClaudeUsageReader({
 } = {}) {
   let cached = claudeRateLimits(null);
   let nextRead = 0;
-  /** @type {Promise<ReturnType<typeof claudeRateLimits>> | undefined} */
+  let retryAt = 0;
+  let lastSuccess = 0;
+  let rateLimited = false;
+  /** @type {Promise<ReturnType<typeof claudeRateLimits> & {usageError?: {code: string, retryAt: number} | null}> | undefined} */
   let pending;
   /** @type {string | undefined} */
   let accountToken;
+  function currentReading() {
+    const limits = cached.rateLimits;
+    return [limits.primary, limits.secondary].every(window => window && (window.resetsAt === null || window.resetsAt * 1000 > now()))
+      && lastSuccess > 0 && now() - lastSuccess < 120_000;
+  }
+  function unavailable() {
+    return { ...claudeRateLimits(null), usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
+  }
   return async ({ force = false } = {}) => {
-    if (pending) return pending;
+    if (pending) {
+      const reading = await pending;
+      return force && !currentReading() ? unavailable() : reading;
+    }
+    // A page reload/start must not turn a fresh reading into another HTTP call.
+    if (currentReading()) return cached;
+    // Honor throttling even when callers need a fresh safety check.
+    if (now() < retryAt) return force ? unavailable() : { ...cached, usageError: { code: 'rate_limited', retryAt } };
     if (!force && now() < nextRead) return cached;
     pending = (async () => {
       nextRead = now() + 120_000;
@@ -77,6 +95,7 @@ export function createClaudeUsageReader({
         const token = process.env.CLAUDE_CODE_OAUTH_TOKEN || auth?.accessToken;
         if (token !== accountToken) {
           cached = claudeRateLimits(null);
+          lastSuccess = 0;
           accountToken = token;
         }
         if (!token) return force ? claudeRateLimits(null) : cached;
@@ -86,12 +105,17 @@ export function createClaudeUsageReader({
         });
         if (response.status === 429) {
           const retry = Number(response.headers.get('retry-after'));
-          nextRead = now() + Math.max(120_000, Number.isFinite(retry) ? retry * 1000 : 0);
+          retryAt = now() + Math.max(120_000, Number.isFinite(retry) ? retry * 1000 : 0);
+          nextRead = retryAt;
+          rateLimited = true;
         }
-        if (!response.ok) return force ? claudeRateLimits(null) : cached;
+        if (!response.ok) return force ? unavailable() : { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
         cached = claudeRateLimits(await response.json(), auth?.subscriptionType ?? null);
+        lastSuccess = now();
+        retryAt = 0;
+        rateLimited = false;
       } catch {
-        // Missing login or a temporary service failure must not block Claude turns.
+        // Keep display data on ordinary reads; safety checks require a current reading.
         if (force) return claudeRateLimits(null);
       }
       return cached;

@@ -36,14 +36,15 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
     /** @param {RpcMessage | undefined} request */
     async allow(request) {
       if (!['turn/start', 'review/start', 'thread/compact/start'].includes(request?.method ?? '')) return true;
-      // A cached pre-reset percentage must never reject a task after its
-      // allowance window may have rolled over. Ask Anthropic first.
+      // The reader reuses recent valid readings and refreshes unknown/expired
+      // ones, while respecting Anthropic's retry delay.
       const usage = await readUsage({ force: true });
       if (closed) return false;
       stop(usage);
       let message = reason(usage);
       const windows = [usage?.rateLimits?.primary, usage?.rateLimits?.secondary];
       if (!message && windows.some(w => typeof w?.usedPercent !== 'number' || !Number.isFinite(w.usedPercent))) message = 'Cannot verify Claude 5-hour and 7-day allowance. New tasks are blocked until usage is available to protect the 10% reserve.';
+      if (message && usage?.usageError?.code === 'rate_limited') message = `Claude usage endpoint is temporarily rate limited. Try again after ${new Date(usage.usageError.retryAt).toLocaleTimeString()}. Tasks remain blocked until the 10% reserve can be checked.`;
       if (!message) return true;
       if (request?.id != null) reply({ id: request.id, error: { code: -32000, message } });
       return false;
