@@ -2126,7 +2126,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		captureTurnModelBeforeConfigChange(id);
 		modelPending = true;
 		try {
-			const { ok, data } = await postCmd(id, 'model', { model, effort });
+			const { ok, data } = await postCmd(id, 'model', { model, ...(effort ? { effort } : {}) });
 			if (!ok) { addLocalNote(id, data.error ?? 'failed to apply suggested settings', 'err'); return; }
 			const settings = data as ModelState;
 			sessionConfigs[id] = { model: settings.model, effort: settings.effort, profile: sessionConfigs[id]?.profile ?? null };

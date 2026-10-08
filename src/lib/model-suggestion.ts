@@ -15,13 +15,17 @@ export function suggestPromptSettings(prompt: string, models: SuggestionModel[],
 	// Each provider's scores are rough task-fit estimates, not a calibrated
 	// cross-provider benchmark. Claude's routine tier is Sonnet, with Opus for
 	// complex work and Fable for the most demanding reasoning.
-	const target = isClaudeModelCatalog(models)
+	const claude = isClaudeModelCatalog(models);
+	const target = claude
 		? demanding ? 100 : simple ? 60 : complex ? 93 : 84
 		: demanding ? 100 : simple ? 70 : 93;
 	const preferredEffort = demanding ? 'high' : complex ? 'high' : simple ? 'low' : 'medium';
 	const candidates = filterAndSortModelChoices(models);
 	const known = candidates.filter((choice) => modelDisplayProfile(choice));
-	const model = known.find((choice) => modelDisplayProfile(choice)!.capability >= target)
+	const family = demanding ? 'fable' : complex ? 'opus' : simple ? 'haiku' : 'sonnet';
+	const familyModel = claude ? known.find((choice) =>
+		new RegExp(`\\b${family}\\b`, 'i').test(`${choice.id} ${choice.displayName}`)) : undefined;
+	const model = familyModel ?? known.find((choice) => modelDisplayProfile(choice)!.capability >= target)
 		?? [...known].sort((a, b) => modelDisplayProfile(b)!.capability - modelDisplayProfile(a)!.capability)[0]
 		?? candidates[0];
 	if (!model) return null;
@@ -29,11 +33,15 @@ export function suggestPromptSettings(prompt: string, models: SuggestionModel[],
 	const supported = model.efforts.filter((effort) => order.includes(effort));
 	const effort = model.efforts.includes(preferredEffort) ? preferredEffort
 		: supported.sort((a, b) => Math.abs(order.indexOf(a) - order.indexOf(preferredEffort)) - Math.abs(order.indexOf(b) - order.indexOf(preferredEffort)))[0]
-		?? model.efforts[0] ?? model.defaultEffort;
-	const reason = demanding ? 'Exacting correctness requirements suggest the strongest available model with deeper thinking.'
-		: complex ? 'Technical complexity or a long brief suggests a capable model with deeper thinking.'
-		: simple ? 'A short, well-scoped edit suggests an efficient model with low thinking.'
-		: 'For an ambiguous or general task, a capable model with medium thinking is a balanced starting point.';
-	return { model: model.id, name: model.displayName || model.id, effort, reason,
+		?? model.efforts[0] ?? model.defaultEffort ?? '';
+	const taskReason = demanding ? 'Exacting correctness requirements suggest the strongest available model.'
+		: complex ? 'Technical complexity or a long brief suggests a capable model.'
+		: simple ? 'A short, well-scoped edit suggests an efficient model.'
+		: 'For an ambiguous or general task, a capable model is a balanced starting point.';
+	const reason = `${taskReason} ${effort
+		? `Uses the model's supported ${effort} effort setting.`
+		: 'This model does not advertise an adjustable thinking level.'}`;
+	return { guidanceUrl: claude ? 'https://platform.claude.com/docs/en/about-claude/models/overview'
+		: 'https://developers.openai.com/api/docs/guides/model-selection', model: model.id, name: model.displayName || model.id, effort, reason,
 		caveat: 'Local heuristic based only on draft text and attachment count; no project, conversation, or attachment contents are analyzed. No allowance used.' };
 }

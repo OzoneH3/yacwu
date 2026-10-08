@@ -71,6 +71,10 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🧠 Choose a model and reasoning effort per session.
   “Suggest settings” recommends an available model and supported thinking level
   for the draft prompt, explains its reasoning, and lets you apply both together.
+  Claude suggestions prefer Haiku for scoped edits, Sonnet for routine tasks,
+  Opus for complex work, and Fable for demanding reasoning when available.
+  Suggestions use each model’s advertised effort levels and link to its provider’s
+  guidance; models without adjustable effort can still be applied.
   It uses local text heuristics (no allowance consumed), not project or attachment
   analysis; suggestions are starting points rather than guaranteed best choices.
   Model capability, usage-efficiency, and value indicators appear in the model

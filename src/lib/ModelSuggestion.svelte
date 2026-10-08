@@ -12,11 +12,11 @@
 	<button type="button" class="suggest" disabled={!suggestion || disabled} onclick={() => open = !open} aria-expanded={open}>Suggest settings</button>
 	{#if open && suggestion}
 		<section class="panel" aria-label="Suggested prompt settings">
-			<div class="heading"><strong>{suggestion.name} · {suggestion.effort} thinking</strong><button type="button" onclick={() => open = false} aria-label="Close suggestion">×</button></div>
+			<div class="heading"><strong>{suggestion.name}{#if suggestion.effort} · {suggestion.effort} effort{/if}</strong><button type="button" onclick={() => open = false} aria-label="Close suggestion">×</button></div>
 			<p>{suggestion.reason}</p>
 			<small>{suggestion.caveat}</small>
 			{#if running}<p>Applies to the next turn. Use the restart button to change the running prompt.</p>{/if}
-			<footer><a href="https://developers.openai.com/api/docs/guides/model-selection" target="_blank" rel="noreferrer">Selection guidance</a><button type="button" disabled={disabled || !suggestion.effort} onclick={() => onapply(suggestion!.model, suggestion!.effort)}>Apply settings</button></footer>
+			<footer><a href={suggestion.guidanceUrl} target="_blank" rel="noreferrer">Selection guidance</a><button type="button" disabled={disabled} onclick={() => onapply(suggestion!.model, suggestion!.effort)}>Apply settings</button></footer>
 		</section>
 	{/if}
 </div>

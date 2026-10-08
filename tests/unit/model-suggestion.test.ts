@@ -39,3 +39,24 @@ test('Claude suggestions use Haiku for scoped edits, Sonnet for routine work, Op
 	expect(suggestPromptSettings('Prove correctness of distributed consensus', claude)).toMatchObject({ model: 'claude-fable-5-1', effort: 'high' });
 	expect(suggestPromptSettings('Prove correctness', claude.filter((choice) => choice.id !== 'claude-fable-5-1'))).toMatchObject({ model: 'opus' });
 });
+
+test('new Claude versions preserve task tiers and use Claude guidance', () => {
+	const claude = ['haiku', 'sonnet', 'opus'].map(family => ({
+		id: `claude-${family}-5-5`, displayName: `Claude ${family} 5.5`,
+		efforts: ['low', 'medium', 'high', 'max'], defaultEffort: 'medium'
+	}));
+	expect(suggestPromptSettings('Help with this', claude)).toMatchObject({model: 'claude-sonnet-5-5', effort: 'medium'});
+	expect(suggestPromptSettings('Investigate a race condition', claude)).toMatchObject({model: 'claude-opus-5-5', effort: 'high'});
+	expect(suggestPromptSettings('Rename the label', claude)?.guidanceUrl).toContain('platform.claude.com');
+});
+test('models without effort settings can still be suggested without invented thinking', () => {
+	const result = suggestPromptSettings('Rename the label', [{id:'claude-haiku-5-5', displayName:'Claude Haiku 5.5', efforts:[], defaultEffort:''}]);
+	expect(result?.effort).toBe('');
+	expect(result?.reason).toContain('does not advertise');
+	expect(result?.reason).not.toContain('low thinking');
+});
+test('reason describes the actual supported effort instead of an unavailable requested level', () => {
+	const result = suggestPromptSettings('Investigate a race condition', [{...models[0], efforts:['low']}]);
+	expect(result?.reason).toContain('supported low effort');
+	expect(result?.reason).not.toContain('deeper thinking');
+});
