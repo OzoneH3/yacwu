@@ -4,6 +4,7 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
+	import { settleTranscriptBottom } from '$lib/transcript-scroll';
 	import { runtimeOutcome, interruptionReason } from '$lib/runtime-reconciliation';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
@@ -1581,14 +1582,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return remaining <= 24;
 	}
 
+	let bottomJumpGeneration = 0;
+	function cancelBottomJump() { bottomJumpGeneration++; }
+	function cancelJumpOnInput(node: HTMLElement) {
+		const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+		for (const event of events) node.addEventListener(event, cancelBottomJump, { passive: true });
+		return { destroy() { for (const event of events) node.removeEventListener(event, cancelBottomJump); } };
+	}
 	async function scrollToBottom() {
+		const generation = ++bottomJumpGeneration;
+		const targetId = viewedId;
 		await tick();
-		if (!transcriptEl) return;
+		if (!transcriptEl || generation !== bottomJumpGeneration || targetId !== viewedId) return;
+		const viewport = transcriptEl;
 		unseenActivity = false;
-		showBottomJump = false;
-		transcriptEl.scrollTop = transcriptEl.scrollHeight;
-		requestAnimationFrame(() => {
-			if (transcriptEl) transcriptEl.scrollTop = transcriptEl.scrollHeight;
+		await settleTranscriptBottom(viewport, {
+			flush: tick,
+			frame: () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+			update: updateTranscriptViewport,
+			cancelled: () => generation !== bottomJumpGeneration || targetId !== viewedId || viewport !== transcriptEl,
+			atEnd: () => virtualTranscript.after === 0
 		});
 	}
 
@@ -1652,6 +1665,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function jumpToTranscriptPoint(index: number) {
+		cancelBottomJump();
 		if (!transcriptEl) return;
 		let offset = 0;
 		for (let i = 0; i < index && i < viewedItems.length; i += 1) {
@@ -2260,6 +2274,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	// Viewing an agent (including via a pasted URL) registers it and seeds its
 	// transcript once. Only the selection is a reactive dependency.
+	$effect(() => {
+		const id = viewedId;
+		untrack(() => { if (id) void scrollToBottom(); });
+	});
+
 	$effect(() => {
 		const agentId = viewedAgentId;
 		const sessionId = activeId;
@@ -5590,7 +5609,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			{:else}
 				<div class="transcript-frame" class:has-position-rail={transcriptJumpPoints.length > 1}>
-				<div class="transcript" bind:this={transcriptEl} onscroll={onTranscriptScroll}>
+				<div class="transcript" bind:this={transcriptEl} use:cancelJumpOnInput onscroll={onTranscriptScroll}>
 					{#if viewedAgentId ? agentHistoryLoading : sessionOpening[viewedId ?? '']}
 						<div class="sys">loading history…</div>
 					{:else if viewedItems.length === 0 && viewed?.status !== 'running' && !viewed?.error}

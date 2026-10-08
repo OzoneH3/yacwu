@@ -119,7 +119,9 @@ state lives entirely in Codex's own persistent sessions, read back via
   text/code files through the picker or clipboard paste; image previews appear
   inline, while other files are staged temporarily and passed to Codex by path
 - 🧭 Transcript position rail for jumping between messages, with a scroll-to-bottom
-  control whenever the latest message is out of view
+  control whenever the latest message is out of view. Jumps settle after virtualized
+  rows are measured. Entering session or agent tabs jumps to the bottom; manual
+  scrolling cancels an in-progress jump.
 - 📋 Responses with file links offer **Copy files** beside the message copy
   button. It copies each unique file linked using Markdown in response order,
   with a filename heading followed by its contents. Plain paths in backticks
