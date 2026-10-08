@@ -199,3 +199,31 @@ export const BACKGROUND_LAUNCH_NOTICE =
 export function visibleAgentMessageText(text: string): string {
 	return BACKGROUND_LAUNCH_PLACEHOLDER.test(text) ? BACKGROUND_LAUNCH_NOTICE : text;
 }
+
+/** The path the Claude adapter assigns a spawned agent: `agent-` plus 12 hex digits of its thread id. */
+export function defaultAgentPath(agentThreadId: string): string {
+	return `/root/agent-${agentThreadId.replace(/-/g, '').slice(0, 12)}`;
+}
+
+/**
+ * A finished spawn whose backend did not announce the agent with its own
+ * `subAgentActivity` item (Codex does; the Claude adapter does not for
+ * Yacwu): the agent to show as "Started", or null.
+ */
+export function unannouncedSpawn(
+	item: unknown,
+	announced: Set<string>,
+	registry: AgentRegistry
+): { agentThreadId: string; path: string } | null {
+	const it = item as Record<string, any> | null;
+	if (!it || it.type !== 'collabAgentToolCall' || it.tool !== 'spawnAgent' || it.status !== 'completed') return null;
+	const agentThreadId = Array.isArray(it.receiverThreadIds) ? it.receiverThreadIds.find((id: unknown) => typeof id === 'string' && id) : null;
+	if (!agentThreadId || announced.has(agentThreadId)) return null;
+	const agent = registry[agentThreadId];
+	const path = agent?.path
+		? `/${agent.path.replace(/^\/+/, '')}`
+		: agent?.nickname
+			? `/root/${agent.nickname}`
+			: defaultAgentPath(agentThreadId);
+	return { agentThreadId, path };
+}

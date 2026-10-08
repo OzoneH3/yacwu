@@ -238,3 +238,24 @@ test('agent cycles cannot hang the root walk', () => {
 	// Malformed cycle: the walk terminates and reports some in-cycle node.
 	expect(typeof agentRootId(registry, registry[AGENT_A])).toBe('string');
 });
+
+test('spawns without their own activity item are shown as started', async () => {
+	const { unannouncedSpawn, defaultAgentPath } = await import('../../src/lib/agents');
+	const spawn = (status = 'completed', receivers = ['7639120c-6289-4981-ad03-d4df1713c62e']) => ({
+		type: 'collabAgentToolCall', id: 's1', tool: 'spawnAgent', status, senderThreadId: SESSION, receiverThreadIds: receivers
+	});
+	const registry: AgentRegistry = {};
+	expect(defaultAgentPath('7639120c-6289-4981-ad03-d4df1713c62e')).toBe('/root/agent-7639120c6289');
+	expect(unannouncedSpawn(spawn(), new Set(), registry)).toEqual({
+		agentThreadId: '7639120c-6289-4981-ad03-d4df1713c62e', path: '/root/agent-7639120c6289'
+	});
+	// Announced by the backend (Codex), still spawning, or failed: nothing extra.
+	expect(unannouncedSpawn(spawn(), new Set(['7639120c-6289-4981-ad03-d4df1713c62e']), registry)).toBeNull();
+	expect(unannouncedSpawn(spawn('inProgress'), new Set(), registry)).toBeNull();
+	expect(unannouncedSpawn(spawn('failed', []), new Set(), registry)).toBeNull();
+	// A known nickname or path is preferred, matching the agent tab.
+	registry['7639120c-6289-4981-ad03-d4df1713c62e'] = { id: '7639120c-6289-4981-ad03-d4df1713c62e', parentId: SESSION, nickname: 'aeb0f73dc683374a7', role: null, path: null, state: null, closed: false, workOrderId: null };
+	expect(unannouncedSpawn(spawn(), new Set(), registry)?.path).toBe('/root/aeb0f73dc683374a7');
+	registry['7639120c-6289-4981-ad03-d4df1713c62e'].path = 'root/review';
+	expect(unannouncedSpawn(spawn(), new Set(), registry)?.path).toBe('/root/review');
+});

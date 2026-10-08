@@ -47,6 +47,7 @@
 		isAgentRunning,
 		mergeAgentThreadMeta,
 		trackAgentItem,
+		unannouncedSpawn,
 		visibleAgentMessageText,
 		type AgentInfo,
 		type AgentRegistry
@@ -700,6 +701,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	// or a selected sub-agent's thread.
 	const viewedItems = $derived(
 		separateTaskProgressEntries(itemsOf(viewed)).filter(isRenderableTranscriptItem)
+	);
+	// Agents the backend announced itself (Codex's subAgentActivity). Spawns
+	// without one (the Claude adapter) get an equivalent "Started" row.
+	const announcedAgents = $derived(
+		new Set(viewedItems.flatMap((item: any) => (item.type === 'subAgentActivity' && item.agentThreadId ? [item.agentThreadId] : [])))
 	);
 	const displayedItems = $derived(showAllActivity ? viewedItems : compactActivity(viewedItems, (id) => Boolean(expandedActivity[`${viewedId}:${id}`]), viewed?.status === 'running'));
 	const virtualTranscript = $derived(
@@ -6037,6 +6043,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{/each}
 									{/if}
 								</div>
+								{@const started = unannouncedSpawn(item, announcedAgents, agents)}
+								{#if started}
+									<div class="item subagent" title={`agent thread ${started.agentThreadId}`}>
+										<span class="gutter">⎇</span>
+										<div class="body">Started {#if started.agentThreadId !== activeId}<button type="button" class="agent-path agent-activity-link" onclick={() => openAgentActivity({ agentThreadId: started.agentThreadId })} title="Open this agent's transcript">{started.path}</button>{:else}<span class="agent-path">{started.path}</span>{/if}</div>
+									</div>
+								{/if}
 							{:else}
 								<div class="item generic">
 									<span class="gutter">·</span>
