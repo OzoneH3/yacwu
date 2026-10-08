@@ -475,6 +475,11 @@ Warnings produce a `turn_silent` snapshot, repeated at most once every two minut
 Silence can also mean legitimate reasoning or a long-running tool; Yacwu does
 not cancel the turn automatically.
 
+With progress reporting enabled, Claude receives a silent reminder after five
+minutes without an estimate, only if other task activity occurred in those five
+minutes. Reminders are sent at most once every five minutes and are hidden from
+the transcript, including after reload.
+
 Logs live in `$XDG_STATE_HOME/yacwu/diagnostics` (default
 `~/.local/state/yacwu/diagnostics`). Set `YACWU_DIAGNOSTICS_DIR` to override it.
 Each host has a `codex-*.jsonl` metadata log and a `codex-*.stderr.log` log.
