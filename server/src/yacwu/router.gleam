@@ -636,15 +636,18 @@ fn with_codex(
 /// running. Never connects anything.
 fn list_hosts(ctx: Context) -> Response(ResponseData) {
   let running = hosts.running(ctx.registry)
+  let configured_backends = backends.discover()
   let entries =
     [
       [hosts.local],
-      list.map(backends.discover(), fn(backend) { backend.name }),
+      list.map(configured_backends, fn(backend) { backend.name }),
       ssh_config.discover(),
     ]
     |> list.flatten
     |> list.unique
     |> list.map(fn(host) {
+      let backend =
+        list.find(configured_backends, fn(entry) { entry.name == host })
       let #(state, error) = case list.key_find(running, host) {
         Ok(cx) -> {
           let info = codex.info(cx)
@@ -654,9 +657,24 @@ fn list_hosts(ctx: Context) -> Response(ResponseData) {
       }
       json.object([
         #("name", json.string(host)),
-        #("kind", case hosts.is_local(host) {
-          True -> json.string("local")
-          False -> json.string("remote")
+        #("kind", case backend, hosts.is_local(host) {
+          Ok(_), _ -> json.string("backend")
+          _, True -> json.string("local")
+          _, False -> json.string("remote")
+        }),
+        #("provider", case backend {
+          Ok(entry) -> {
+            let is_claude =
+              string.contains(string.lowercase(entry.name), "claude")
+              || list.any(entry.command, fn(arg) {
+                string.contains(string.lowercase(arg), "claude")
+              })
+            json.string(case is_claude {
+              True -> "claude"
+              False -> entry.name
+            })
+          }
+          Error(_) -> json.string("codex")
         }),
         #("state", case hosts.is_local(host) {
           // A local child is spawned on demand; it is never unreachable.

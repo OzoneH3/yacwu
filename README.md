@@ -268,8 +268,10 @@ Percentages from the two windows are never combined or converted using their
 durations. Older quota records remain weekly-only, and resets invalidate
 observations spanning that reset for the affected window.
 
-Each name appears in the host picker alongside the default local codex
-(`local`) and the SSH remotes, and runs its command as a child process on
+Claude appears under Provider in the new-session form when configured, alongside
+Codex. Machine selects this computer or an SSH remote; Claude currently runs
+on this computer. Creation uses the provider's default model, which can be
+changed afterwards in the composer. Each backend runs its command as a child process on
 this machine — same working directory, file browser, Git viewer, profiles and
 in-use detection as the default. Sessions started on a backend are listed and
 resumed through that backend, and merge into the session rail with everyone

@@ -47,6 +47,7 @@ import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-ch
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
+import { claudeBackendHost, sessionTarget } from '$lib/session-target';
 import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity } from '$lib/model-display';
 
 	let { children } = $props();
@@ -171,8 +172,12 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 		active: boolean;
 	} | null>(null);
 	// Host picker: local plus the remote machines found in ~/.ssh/config.
-	let newHost = $state(LOCAL_HOST);
+	let newMachine = $state(LOCAL_HOST);
+	let newProvider = $state<'codex' | 'claude'>('codex');
 	let hostChoices = $state<HostInfo[]>([]);
+	const claudeHost = $derived(claudeBackendHost(hostChoices));
+	const machineChoices = $derived(hostChoices.filter((host) => host.kind !== 'backend'));
+	const newHost = $derived(sessionTarget(newMachine, newProvider, claudeHost));
 	// Live connection state per remote host, fed by yacwu/host/status events.
 	let hostStates = $state<Record<string, string>>({});
 	let hostDefaultCwds = $state<Record<string, string>>({});
@@ -1805,7 +1810,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		showHiddenDirectories = false;
 		cwdBrowseError = null;
 		newProfile = '';
-		newHost = LOCAL_HOST;
+		newMachine = LOCAL_HOST;
+		newProvider = 'codex';
 		creating = true;
 		// Hosts come from ~/.ssh/config, re-read by the backend on demand.
 		fetch('/api/hosts')
@@ -1928,6 +1934,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function onNewHostChange() {
+		if (newMachine !== LOCAL_HOST) newProvider = 'codex';
 		cwdBrowseRequest++;
 		cwdBrowseLoading = false;
 		createError = null;
@@ -4822,11 +4829,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<h2 id="create-title">Start a session</h2>
 					<button class="mini ghost" onclick={cancelCreating}>Cancel</button>
 				</div>
-				{#if hostChoices.length > 1}
+				{#if machineChoices.length > 0}
 					<div class="create-row">
 						<label for="new-host">Machine</label>
-						<select id="new-host" class="profile-input" bind:value={newHost} onchange={onNewHostChange}>
-							{#each hostChoices as h (h.name)}
+						<select id="new-host" class="profile-input" bind:value={newMachine} onchange={onNewHostChange}>
+							{#each machineChoices as h (h.name)}
 								<option value={h.name}>
 									{h.name === LOCAL_HOST ? 'This machine' : h.name}{h.kind === 'remote' &&
 									(hostStates[h.name] ?? h.state) !== 'disconnected'
@@ -4834,6 +4841,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										: ''}
 								</option>
 							{/each}
+						</select>
+					</div>
+				{/if}
+				{#if claudeHost}
+					<div class="create-row">
+						<label for="new-provider">Provider</label>
+						<select id="new-provider" class="profile-input" bind:value={newProvider} onchange={onNewHostChange}>
+							<option value="codex">Codex</option>
+							<option value="claude" disabled={newMachine !== LOCAL_HOST}>Claude</option>
 						</select>
 					</div>
 				{/if}
