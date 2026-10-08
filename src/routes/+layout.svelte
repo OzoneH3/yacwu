@@ -7,6 +7,7 @@
 	import McpToolActivity from '$lib/McpToolActivity.svelte';
 	import { mcpActivityLabel } from '$lib/mcp-activity';
 	import { compactActivity, compactActivityLabel } from '$lib/compact-activity';
+	import { removePendingTodo } from '$lib/todo-queue';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
@@ -2855,6 +2856,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			case 'todo-add':
 				queueTodo(id, parsed.task);
 				break;
+
+			case 'todo-remove': {
+				const result = removePendingTodo(todoQueues[id], parsed.position);
+				if ('error' in result) addLocalNote(id, result.error, 'err');
+				else {
+					todoQueues = { ...todoQueues, [id]: result.queue };
+					persistTodoQueues();
+					addLocalNote(id, `Removed queued todo ${parsed.position}.`, 'info');
+				}
+				break;
+			}
 
 			case 'todo-show': {
 				const queue = todoQueues[id];

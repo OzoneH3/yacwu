@@ -99,6 +99,7 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/todo <task>` | queue a follow-up task to start after the current task |
 | `/todo` | show queued tasks and their status |
 | `/todo clear` | clear queued tasks that have not started |
+| `/todo rm <number>` | remove a pending task by its `/todo` list number; started or finished tasks cannot be removed |
 | `/compact` | compact conversation history |
 | `/review [notes]` | review uncommitted changes (or run a custom review) |
 | `/shell <command>` | run a user-initiated shell command in the thread |

@@ -13,6 +13,7 @@ export type SlashCommand =
 	| { kind: 'todo-show' }
 	| { kind: 'todo-add'; task: string }
 	| { kind: 'todo-clear' }
+	| { kind: 'todo-remove'; position: number }
 	| { kind: 'compact' }
 	| { kind: 'review'; instructions?: string }
 	| { kind: 'shell'; command: string }
@@ -38,6 +39,7 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
 	['/todo <task>', 'queue a task to start after the current task'],
 	['/todo', 'show queued tasks'],
 	['/todo clear', 'clear tasks that have not started'],
+	['/todo rm <number>', 'remove a task that has not started'],
 	['/compact', 'compact conversation history'],
 	['/review [notes]', 'review uncommitted changes (or custom notes)'],
 	['/shell <command>', 'run a shell command in the thread'],
@@ -159,6 +161,13 @@ export function parseSlash(text: string): SlashCommand {
 		case '/todo':
 			if (!arg) return { kind: 'todo-show' };
 			if (arg.toLowerCase() === 'clear') return { kind: 'todo-clear' };
+			if (/^rm(?:\s|$)/i.test(arg)) {
+				const value = arg.slice(2).trim();
+				const position = Number(value);
+				return /^\d+$/.test(value) && Number.isSafeInteger(position) && position > 0
+					? { kind: 'todo-remove', position }
+					: { kind: 'unknown', command: '/todo rm' };
+			}
 			return { kind: 'todo-add', task: arg };
 		case '/compact':
 			return arg ? { kind: 'unknown', command: cmd } : { kind: 'compact' };
