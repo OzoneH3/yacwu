@@ -4227,6 +4227,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				return `Delegating: ${truncateText(collabSummary(item), 110)}`;
 			}
 			if (item.type === 'mcpToolCall' && item.status === 'inProgress') {
+				if (item.tool === 'YacwuBackgroundWorker') return 'Background worker running';
 				return `Using ${truncateText(mcpActivityLabel(item), 120)}`;
 			}
 			if (item.type === 'dynamicToolCall' && item.status === 'inProgress') {

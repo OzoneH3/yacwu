@@ -2,7 +2,7 @@
 // existing adapter. No adapter checkout modifications or model calls required.
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createClaudeUsageReader, normalizeClaudeTokenUsage, readClaudeCredentials } from './claude-usage.mjs';
@@ -108,7 +108,8 @@ async function main() {
     }
   }
   const args = process.argv.slice(3);
-  const child = spawn(process.execPath, [adapterPath, ...(args.length ? args : ['app-server', '--listen', 'stdio://'])], { stdio: ['pipe', 'pipe', 'inherit'], env });
+  const entryPath = new URL('./claude-adapter-entry.mjs', import.meta.url);
+  const child = spawn(process.execPath, [fileURLToPath(entryPath), adapterPath, ...(args.length ? args : ['app-server', '--listen', 'stdio://'])], { stdio: ['pipe', 'pipe', 'inherit'], env });
   const readUsage = createClaudeUsageReader();
   const quota = createClaudeQuotaGuard(readUsage,
     (message) => child.stdin.write(`${JSON.stringify(message)}\n`),

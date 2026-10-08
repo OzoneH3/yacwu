@@ -162,6 +162,12 @@ timing log on stderr.
 
 ### Alternative backends
 
+Claude sessions stay active while SDK background workers or explicitly finite
+monitors run. Current activity shows “Background worker running”; when the
+tracked work ends, Yacwu silently asks Claude to check the results and report
+status before completing the turn. Opaque detached commands require a finite
+Monitor; persistent ambient watchers do not keep a session running.
+
 Anything that speaks the codex app-server protocol over stdio can stand in
 for `codex app-server` — for example
 [claude-codex](https://github.com/fuergaosi233/claude-codex), which serves
