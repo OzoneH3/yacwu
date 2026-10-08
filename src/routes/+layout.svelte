@@ -8243,7 +8243,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.activity-toolbar { position: absolute; top: 0; right: var(--space-sm); z-index: 1; font-size: var(--text-xs); color: var(--color-muted); }
 	.activity-toolbar label { display: flex; align-items: center; gap: var(--space-xs); min-height: 2rem; cursor: pointer; }
 	.item.compact-activity { display: block; min-width: 0; padding-block: var(--space-2xs); }
-	.activity-group-toggle { display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-2xs) var(--space-xs); border: 1px solid var(--color-rule); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-muted); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+	.activity-group-toggle { display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-2xs) var(--space-xs); border: none; border-radius: var(--radius-input); background: transparent; color: var(--color-muted); font: inherit; font-size: var(--text-xs); cursor: pointer; }
 	.activity-group-toggle:hover { background: var(--color-paper-3); color: var(--color-ink); }
 	.activity-group-toggle { min-width: 0; max-width: 100%; text-align: start; }
 	.activity-group-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

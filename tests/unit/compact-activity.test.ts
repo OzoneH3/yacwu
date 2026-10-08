@@ -24,7 +24,14 @@ test('new activity backgrounds the previous row, while the final failed test sta
 	const next = compactActivity([...items, { id: 'agent', type: 'subAgentActivity' }], () => false);
 	expect(next.map((item) => item.id)).toEqual(['activity-group:one', 'agent']);
 	expect(next[0]).toMatchObject({ count: 2, failures: 1 });
-	expect(compactActivityLabel(next[0])).toBe('Background work · 2 commands · completed · 1 failed');
+	expect(compactActivityLabel(next[0])).toBe('Background work · 2 commands · 1 failed');
 	const more = compactActivity([...items, { id: 'agent', type: 'subAgentActivity' }, { id: 'collab', type: 'collabAgentToolCall' }, command('last')], () => false);
 	expect(more[0]).toMatchObject({ count: 4, commandsOnly: false });
+});
+
+test('background labels omit completed while retaining running status', () => {
+	const complete = compactActivity([command('one')], () => false, false)[0];
+	expect(compactActivityLabel(complete)).toBe('Background work · 1 command');
+	const running = compactActivity([command('one', 'inProgress'), command('two')], () => false)[0];
+	expect(compactActivityLabel(running)).toBe('Background work · 1 command · running');
 });

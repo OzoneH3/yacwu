@@ -19,7 +19,7 @@ test('Claude MCP calls have readable activity and expandable data inside Backgro
 	await expect(page.locator('.mcp-activity')).toHaveCount(1);
 	await expect(page.locator('.mcp-activity')).toContainText('claude-code · Grep — temperature');
 	await expect(page.locator('.working-description')).toContainText('Grep — temperature');
-	await page.getByRole('button', { name: /Background work · 1 activity · completed/ }).click();
+	await page.getByRole('button', { name: /Background work · 1 activity/ }).click();
 	const read = page.locator('.mcp-activity').filter({ hasText: 'claude-code · Read' });
 	await read.locator('summary').click();
 	await expect(read.locator('pre')).toContainText('/project/README.md');

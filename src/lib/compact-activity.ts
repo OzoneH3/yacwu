@@ -4,7 +4,7 @@ export function compactActivityLabel(item: ThreadItem): string {
 	const group = item as ThreadItem & { count: number; commandsOnly: boolean; status: string; failures: number };
 	const noun = group.commandsOnly ? 'command' : 'activity';
 	const label = group.count === 1 ? noun : group.commandsOnly ? 'commands' : 'activities';
-	return `Background work · ${group.count} ${label} · ${group.status}${group.failures ? ` · ${group.failures} failed` : ''}`;
+	return `Background work · ${group.count} ${label}${group.status === 'running' ? ' · running' : ''}${group.failures ? ` · ${group.failures} failed` : ''}`;
 }
 
 function backgroundActivity(item: ThreadItem): boolean {

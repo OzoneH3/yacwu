@@ -25,7 +25,7 @@ test('compact activity keeps the latest row and expands older activity under a s
 	await expect(page.getByRole('button', { name: 'example.ts', exact: true })).toHaveCount(0);
 	await expect(page.locator('.item.cmd')).toHaveCount(1);
 	await expect(page.locator('.item.cmd')).toContainText('third');
-	const group = page.getByRole('button', { name: /Background work · 4 activities · completed · 1 failed/ });
+	const group = page.getByRole('button', { name: /Background work · 4 activities · 1 failed/ });
 	expect(await group.evaluate((el) => getComputedStyle(el.parentElement!).display)).toBe('block');
 	expect(await group.evaluate((el) => getComputedStyle(el.querySelector('.activity-group-label')!).whiteSpace)).toBe('nowrap');
 	expect(await group.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(60);
