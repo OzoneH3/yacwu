@@ -12,6 +12,14 @@ const models = [
 ];
 
 describe('model display ranking', () => {
+	test('removes Codex proxy choices from Claude catalogs without changing Codex catalogs', () => {
+		const claude = [
+			{ id: 'sonnet', displayName: 'Claude Sonnet' },
+			{ id: 'claude-opus-4-6', displayName: 'Claude Opus' }
+		];
+		expect(filterAndSortModelChoices([...models, ...claude, { id: 'gpt-5.4-mini', displayName: 'GPT-5.4 Mini' }])).toEqual(claude);
+		expect(filterAndSortModelChoices(models).map((choice) => choice.id)).toContain('gpt-6.1-sol');
+	});
 	test('rates value by capability per estimated allowance use', () => {
 		expect(models.map((model) => [model.id, modelDisplayProfile(model)?.valueRating])).toEqual([
 			['gpt-5.6-sol', 2],

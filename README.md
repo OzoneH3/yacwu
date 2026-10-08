@@ -240,6 +240,10 @@ Relative script paths resolve from the Yacwu project folder when using
 environment's `PWD` is used. Backend session working directories remain
 independent of this script path.
 
+Claude model catalogs hide the adapter's GPT/Codex proxy choices in the
+model picker, suggestions and benchmark selection. Use a regular Codex
+session for GPT models; Claude sessions keep their Claude choices.
+
 For a deployable artifact, `cd server && gleam export erlang-shipment`
 produces a self-contained BEAM release (needs only Erlang on the target), and
 `bun run build` supplies the static `build/` directory to serve next to it.

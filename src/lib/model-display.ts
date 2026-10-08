@@ -35,7 +35,14 @@ export function modelDisplayProfile(choice: ModelChoiceSummary | null): ModelDis
 
 /** Hide known dominated choices and rank the remaining tradeoffs, best first. */
 export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices: T[]): T[] {
-	const scored = choices.map((choice, index) => ({
+	// Claude adapters can advertise a Codex proxy too. Keep their picker
+	// provider-specific rather than offering unsafe cross-provider switches.
+	const hasClaudeModels = choices.some((choice) => /claude|^(?:sonnet|opus|haiku)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
+	const providerChoices = hasClaudeModels
+		? choices.filter((choice) => !/^(?:gpt|o[1-9])(?:[-\s.]|$)/i.test(choice.id)
+			&& !/^gpt(?:[-\s.]|$)/i.test(choice.displayName))
+		: choices;
+	const scored = providerChoices.map((choice, index) => ({
 		choice,
 		index,
 		profile: modelDisplayProfile(choice)
