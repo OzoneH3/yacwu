@@ -49,6 +49,7 @@ import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-ch
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
+import { archiveProviderLabel, archiveDeletionSupported, loadArchiveCatalog } from '$lib/archive';
 import { claudeBackendHost, sessionTarget } from '$lib/session-target';
 import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity } from '$lib/model-display';
 
@@ -3333,7 +3334,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			id,
 			label,
 			index: sessions.findIndex((s) => s.id === id),
-			summary: session,
+			summary: { ...session, host: sessionHost(id) },
 			thread: threads[id],
 			config: sessionConfigs[id],
 			cwd: cwds[id]
@@ -3379,7 +3380,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (!snapshot) return;
 		if (archiveNoticeTimer) clearTimeout(archiveNoticeTimer);
 		archiveNoticeTimer = null;
-		const res = await fetch(threadApi(snapshot.id, '/unarchive'), {
+		const res = await fetch(threadApi(snapshot.id, '/unarchive', snapshot.summary.host ?? LOCAL_HOST), {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({})
@@ -3393,7 +3394,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (snapshot.thread) threads[snapshot.id] = snapshot.thread;
 		if (snapshot.config) sessionConfigs[snapshot.id] = snapshot.config;
 		if (snapshot.cwd) cwds[snapshot.id] = snapshot.cwd;
-		const restored = { ...snapshot.summary, ...(data.thread ?? {}) } as ThreadSummary;
+		const restored = { ...snapshot.summary, ...(data.thread ?? {}), host: snapshot.summary.host ?? LOCAL_HOST } as ThreadSummary;
 		const next = sessions.filter((session) => session.id !== snapshot.id);
 		next.splice(Math.min(Math.max(snapshot.index, 0), next.length), 0, restored);
 		sessions = next;
@@ -3409,10 +3410,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		archivedSessionsLoading = true;
 		archivedSessionsError = null;
 		try {
-			const response = await fetch('/api/threads?archived=true');
-			const data = await response.json().catch(() => ({}));
-			if (!response.ok) throw new Error(data.error ?? `Could not load archived sessions (${response.status})`);
-			archivedSessions = (data.data ?? []).filter((thread: ThreadSummary) => !thread.ephemeral);
+			await loadHostChoices();
+			const catalog = await loadArchiveCatalog(hostChoices, async (host) => {
+				const response = await fetch(`/api/threads?archived=true${host ? `&host=${encodeURIComponent(host)}` : ''}`, { signal: AbortSignal.timeout(20_000) });
+				const data = await response.json().catch(() => ({}));
+				if (!response.ok) throw new Error(data.error ?? `Archive unavailable (${response.status})`);
+				return data.data ?? [];
+			});
+			archivedSessions = catalog.sessions;
+			archivedSessionsError = catalog.errors.join(' · ') || null;
 		} catch (error) {
 			archivedSessionsError = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -3431,7 +3437,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			});
 			const data = await response.json().catch(() => ({}));
 			if (!response.ok) throw new Error(data.error ?? 'Could not restore the session.');
-			const restored = { ...session, ...(data.thread ?? {}) } as ThreadSummary;
+			const restored = { ...session, ...(data.thread ?? {}), host: session.host ?? LOCAL_HOST } as ThreadSummary;
 			upsertSession(restored);
 			archivedSessions = archivedSessions.filter((entry) => entry.id !== session.id);
 			showArchiveNotice({ tone: 'info', message: `Restored ${shortLabel(restored)}` });
@@ -3444,6 +3450,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function deleteArchivedSession(session: ThreadSummary) {
 		if (restoringArchivedSessionId || deletingArchivedSessionId) return;
+		if (!archiveDeletionSupported(session, hostChoices)) return;
 		const label = shortLabel(session);
 		if (!window.confirm(`Permanently delete “${label}”? This cannot be undone.`)) return;
 		deletingArchivedSessionId = session.id;
@@ -5476,49 +5483,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			</dialog>
 
-			<dialog
-				class="archive-browser-dialog"
-				bind:this={archiveBrowserDialog}
-				aria-labelledby="archive-browser-title"
-				onclick={(event) => { if (event.target === archiveBrowserDialog) archiveBrowserDialog?.close(); }}
-			>
-				<div class="archive-browser-panel">
-					<div class="session-info-heading">
-						<h2 id="archive-browser-title">Archived sessions</h2>
-						<button class="mini ghost" type="button" onclick={loadArchivedSessions} disabled={archivedSessionsLoading}>Refresh</button>
-						<button class="session-info-close" type="button" onclick={() => archiveBrowserDialog?.close()} aria-label="Close archived sessions" title="Close">
-							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
-						</button>
-					</div>
-					{#if archivedSessionsLoading && archivedSessions.length === 0}
-						<p class="archive-browser-empty">Loading archived sessions…</p>
-					{:else if archivedSessionsError}
-						<p class="archive-browser-empty error" role="alert">{archivedSessionsError}</p>
-					{:else if archivedSessions.length === 0}
-						<p class="archive-browser-empty">No archived sessions.</p>
-					{:else}
-						<div class="archive-browser-list">
-							{#each archivedSessions as session (session.id)}
-								<div class="archive-browser-row">
-									<div class="archive-browser-copy">
-										<strong>{shortLabel(session)}</strong>
-										{#if session.preview}<span>{session.preview}</span>{/if}
-										<small>{session.cwd ?? 'Unknown folder'} · {fmtSessionTimestamp(session.updatedAt)}</small>
-									</div>
-									<div class="archive-browser-actions">
-										<button class="mini" type="button" disabled={Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => restoreArchivedSession(session)}>
-											{restoringArchivedSessionId === session.id ? 'Restoring…' : 'Restore'}
-										</button>
-										<button class="mini archive-delete" type="button" disabled={Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => deleteArchivedSession(session)}>
-											{deletingArchivedSessionId === session.id ? 'Deleting…' : 'Delete'}
-										</button>
-									</div>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			</dialog>
+
 
 			<dialog
 				class="interactive-choice-dialog"
@@ -6148,6 +6113,50 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</section>
 			</div>
 		{/if}
+				<dialog
+				class="archive-browser-dialog"
+				bind:this={archiveBrowserDialog}
+				aria-labelledby="archive-browser-title"
+				onclick={(event) => { if (event.target === archiveBrowserDialog) archiveBrowserDialog?.close(); }}
+			>
+				<div class="archive-browser-panel">
+					<div class="session-info-heading">
+						<h2 id="archive-browser-title">Archived sessions</h2>
+						<button class="mini ghost" type="button" onclick={loadArchivedSessions} disabled={archivedSessionsLoading}>Refresh</button>
+						<button class="session-info-close" type="button" onclick={() => archiveBrowserDialog?.close()} aria-label="Close archived sessions" title="Close">
+							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
+						</button>
+					</div>
+					{#if archivedSessionsLoading && archivedSessions.length === 0}
+						<p class="archive-browser-empty">Loading archived sessions…</p>
+					{:else if archivedSessionsError && archivedSessions.length === 0}
+						<p class="archive-browser-empty error" role="alert">{archivedSessionsError}</p>
+					{:else if archivedSessions.length === 0}
+						<p class="archive-browser-empty">No archived sessions.</p>
+					{:else}
+						{#if archivedSessionsError}<p class="archive-browser-empty error" role="alert">{archivedSessionsError}</p>{/if}
+						<div class="archive-browser-list">
+							{#each archivedSessions as session (`${session.host}:${session.id}`)}
+								<div class="archive-browser-row">
+									<div class="archive-browser-copy">
+										<strong>{shortLabel(session)}</strong>
+										{#if session.preview}<span>{session.preview}</span>{/if}
+										<small>{archiveProviderLabel(session, hostChoices)} · {session.cwd ?? 'Unknown folder'} · {fmtSessionTimestamp(session.updatedAt)}</small>
+									</div>
+									<div class="archive-browser-actions">
+										<button class="mini" type="button" disabled={Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => restoreArchivedSession(session)}>
+											{restoringArchivedSessionId === session.id ? 'Restoring…' : 'Restore'}
+										</button>
+										<button class="mini archive-delete" type="button" title={archiveDeletionSupported(session, hostChoices) ? 'Permanently delete this archived session' : 'Claude backend does not support permanent deletion'} disabled={!archiveDeletionSupported(session, hostChoices) || Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => deleteArchivedSession(session)}>
+											{deletingArchivedSessionId === session.id ? 'Deleting…' : 'Delete'}
+										</button>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			</dialog>
 	</main>
 </div>
 

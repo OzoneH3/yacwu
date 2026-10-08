@@ -37,6 +37,12 @@ rules locally, and records usage/diagnostic journals on the server.
   their verified, still-loaded Codex thread, even before Codex indexes it.
   Available after the session and its agents stop;
   previously consumed account allowance is unchanged
+  The archive browser is available from the home screen without an open session
+  and includes configured Claude backends even before opening
+  a Claude session, labels each provider, and restores through its original
+  backend. Older archive pages are included. Permanent deletion is available
+  for Codex; the current Claude adapter supports archive/restore but not delete.
+  A provider failure leaves other providers' archives visible with a notice.
 - ✅ Background completion indicators mark finished sessions until you open
   them, so completed work is easy to spot in the session list
 - 🔒 In-use detection warns before opening a session another Codex process has

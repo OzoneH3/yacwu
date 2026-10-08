@@ -583,8 +583,17 @@ fn dispatch(
       simple_rpc(cx, "thread/archive", id)
     }
     ["api", "threads", id, "delete"], Post -> {
-      use _, cx <- with_codex(ctx, req, Some(id))
-      delete_archived_thread(cx, id)
+      use host, cx <- with_codex(ctx, req, Some(id))
+      case is_claude_backend(host) {
+        True ->
+          json_response(
+            501,
+            error_body(
+              "Claude backend does not support permanent session deletion",
+            ),
+          )
+        False -> delete_archived_thread(cx, id)
+      }
     }
     ["api", "threads", id, "unsubscribe"], Post -> {
       use _, cx <- with_codex(ctx, req, Some(id))
@@ -634,6 +643,17 @@ fn with_codex(
 /// GET /api/hosts: local, every configured backend, and every concrete
 /// ~/.ssh/config alias, with the connection state of any manager already
 /// running. Never connects anything.
+fn is_claude_backend(host: String) -> Bool {
+  case list.find(backends.discover(), fn(entry) { entry.name == host }) {
+    Ok(entry) ->
+      string.contains(string.lowercase(entry.name), "claude")
+      || list.any(entry.command, fn(arg) {
+        string.contains(string.lowercase(arg), "claude")
+      })
+    Error(_) -> False
+  }
+}
+
 fn list_hosts(ctx: Context) -> Response(ResponseData) {
   let running = hosts.running(ctx.registry)
   let configured_backends = backends.discover()
@@ -746,12 +766,11 @@ fn delete_archived_thread(
   cx: Codex,
   thread_id: String,
 ) -> Response(ResponseData) {
-  case codex.request(cx, "thread/list", thread_list_params(True)) {
+  case stored_threads(cx, True, "", []) {
     Error(message) -> json_response(500, error_body(message))
-    Ok(result) -> {
+    Ok(entries) -> {
       let archived_ids =
-        decode.run(result, decode.at(["data"], decode.list(decode.dynamic)))
-        |> result.unwrap([])
+        entries
         |> list.filter_map(jsonx.field_string(_, ["id"]))
       case list.contains(archived_ids, thread_id) {
         True -> simple_rpc(cx, "thread/delete", thread_id)
@@ -1483,7 +1502,45 @@ fn thread_list_params(archived: Bool) -> Json {
   ]
   case archived {
     True -> json.object([#("archived", json.bool(True)), ..params])
-    False -> json.object(params)
+    False -> json.object([#("archived", json.bool(False)), ..params])
+  }
+}
+
+/// Archive browsing and deletion checks must include older pages too.
+fn stored_threads(
+  cx: Codex,
+  archived: Bool,
+  cursor: String,
+  seen: List(String),
+) -> Result(List(Dynamic), String) {
+  let params = case cursor {
+    "" -> thread_list_params(archived)
+    _ ->
+      json.object([
+        #("archived", json.bool(archived)),
+        #("limit", json.int(100)),
+        #("sortKey", json.string("updated_at")),
+        #("modelProviders", json.preprocessed_array([])),
+        #("cursor", json.string(cursor)),
+      ])
+  }
+  use page <- result.try(codex.request(cx, "thread/list", params))
+  let entries =
+    decode.run(page, decode.at(["data"], decode.list(decode.dynamic)))
+    |> result.unwrap([])
+  let next = jsonx.field_string(page, ["nextCursor"]) |> result.unwrap("")
+  case archived && next != "" {
+    False -> Ok(entries)
+    True ->
+      case list.contains(seen, next) {
+        True -> Error("Archive backend returned a repeated pagination cursor")
+        False -> {
+          use rest <- result.try(
+            stored_threads(cx, archived, next, [next, ..seen]),
+          )
+          Ok(list.append(entries, rest))
+        }
+      }
   }
 }
 
@@ -1495,14 +1552,7 @@ fn host_thread_list(
   cx: Codex,
   archived: Bool,
 ) -> Result(List(#(Int, Json)), String) {
-  use result <- result.try(codex.request(
-    cx,
-    "thread/list",
-    thread_list_params(archived),
-  ))
-  let entries =
-    decode.run(result, decode.at(["data"], decode.list(decode.dynamic)))
-    |> result.unwrap([])
+  use entries <- result.try(stored_threads(cx, archived, "", []))
   hosts.record_threads(
     ctx.registry,
     host,
