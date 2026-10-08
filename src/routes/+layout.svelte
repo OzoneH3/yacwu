@@ -11,6 +11,8 @@
 	import { clearsStalledWorkerPrompt } from '$lib/stalled-worker';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
+	import GlobalSettingsForm from '$lib/GlobalSettingsForm.svelte';
+	import { defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, type GlobalSettings } from '$lib/settings';
 	import {
 		applyRelayEvent,
 		applyRelaySnapshot,
@@ -226,6 +228,11 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	let mobileViewport = $state(false);
 	let desktopSidebarHidden = $state(false);
 	let theme = $state<'light' | 'dark'>('light');
+	let settings = $state<GlobalSettings>({ ...defaultSettings });
+	let settingsDialog = $state<HTMLDialogElement | undefined>();
+	// The form is only rendered while open, so its controls never shadow the
+	// page's own (e.g. "Show all activity") when the menu is closed.
+	let settingsOpen = $state(false);
 	let unseenActivity = $state(false);
 	let showBottomJump = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
@@ -311,7 +318,6 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	const composerHistories = new Map<string, ComposerHistory>();
 	const ESTIMATED_ROW_HEIGHT = 72;
 	const VIRTUAL_OVERSCAN_PX = 700;
-	const COMMAND_OUTPUT_COLLAPSE_LINES = 10;
 	const COMMAND_OUTPUT_COLLAPSE_CHARS = 1200;
 	const MODEL_CAPACITY_ERROR = 'Selected model is at capacity. Please try a different model.';
 	const FAST_SESSIONS_KEY = 'yacwu-fast-sessions';
@@ -537,14 +543,14 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 		const startedAt = threads[id]?.turnStartedAt;
 		const elapsed = threads[id]?.status === 'running' && startedAt !== null && startedAt !== undefined
 			? activityClock - startedAt : 0;
-		return formatEstimatedRemaining(estimateRemainingMinutes(progress.percent, progress.remainingMinutes, elapsed, isClaudeSession(id)));
+		return formatEstimatedRemaining(estimateRemainingMinutes(progress.percent, progress.remainingMinutes, elapsed, isClaudeSession(id) && settings.claudeTimeCalibration));
 	}
 	const activeTaskProgress = $derived.by(() => {
 		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
 		const progress = taskProgressForSession(activeId);
 		const startedAt = threads[activeId]?.turnStartedAt;
 		return progress && startedAt !== null && startedAt !== undefined
-			? { ...progress, remainingMinutes: estimateRemainingMinutes(progress.percent, progress.remainingMinutes, activityClock - startedAt, isClaudeSession(activeId)) }
+			? { ...progress, remainingMinutes: estimateRemainingMinutes(progress.percent, progress.remainingMinutes, activityClock - startedAt, isClaudeSession(activeId) && settings.claudeTimeCalibration) }
 			: progress;
 	});
 	const activeUsageAnalysis = $derived(usageAnalysisByHost[activeHost] ?? null);
@@ -621,7 +627,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 		if (!activeId || usageHistoryOpen) return;
 		const host = activeHost;
 		void refreshTaskUsage(host);
-		const timer = setInterval(() => void refreshTaskUsage(host), 30_000);
+		const timer = setInterval(() => void refreshTaskUsage(host), settings.usageRefreshSeconds * 1000);
 		return () => clearInterval(timer);
 	});
 	// Slash-command autocomplete: offered while the composer holds a bare
@@ -1456,7 +1462,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		switch (msg.method) {
 			case 'yacwu/diagnostic/stalled': {
 				const workerId = String(p.threadId ?? '');
-				if (!workerId) break;
+				if (!workerId || !settings.quietWorkerNotices) break;
 				const silentSeconds = Math.max(120, Number(p.silentSeconds) || 120);
 				const minutes = Math.floor(silentSeconds / 60);
 				const agent = agents[workerId];
@@ -2476,9 +2482,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
-		const rules = sessionRules[id] ?? defaultSessionRules;
+		const rules = rulesFor(id);
 		const ruleText = withSessionRules(rules.sharedChannel ? await addSharedChannelContext(id, text) : visibleUserText(text), rules);
-		const messageText = rules.progress ? withTaskProgressInstructions(ruleText) : ruleText;
+		// Only Yacwu's Claude backend sends progress reminders; tell it how often.
+		const reminders = isClaudeSession(id) ? (settings.claudeProgressReminders ? settings.claudeReminderMinutes : null) : undefined;
+		const messageText = rules.progress ? withTaskProgressInstructions(ruleText, reminders) : ruleText;
 		if (attachments.length > 0) {
 			const body = new FormData();
 			body.set('text', messageText);
@@ -3624,7 +3632,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// Mobile keyboards use Return for multiline composition; the adjacent
 		// send button stays in thumb reach. Desktop keeps the fast Enter-to-send
 		// convention, with Shift+Enter for a newline.
-		if (e.key === 'Enter' && !e.shiftKey && !mobileViewport) {
+		if (sendsMessage(e, settings.enterToSend && !mobileViewport)) {
 			e.preventDefault();
 			send();
 			return;
@@ -3865,7 +3873,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				}
 			}
 		}
-		return estimateRemainingMinutes(item.percent, item.remainingMinutes, elapsed, isClaudeSession(activeId));
+		return estimateRemainingMinutes(item.percent, item.remainingMinutes, elapsed, isClaudeSession(activeId) && settings.claudeTimeCalibration);
 	}
 
 	function chooseAttachments() {
@@ -4276,7 +4284,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function commandOutputIsLong(output: string): boolean {
-		return commandOutputLineCount(output) > COMMAND_OUTPUT_COLLAPSE_LINES || output.length > COMMAND_OUTPUT_COLLAPSE_CHARS;
+		return commandOutputLineCount(output) > settings.collapseOutputLines || output.length > COMMAND_OUTPUT_COLLAPSE_CHARS;
 	}
 
 	function agentRawKey(item: any): string {
@@ -4596,6 +4604,25 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		applyTheme(theme === 'dark' ? 'light' : 'dark');
 	}
 
+	/** Session rules for sessions without saved ones come from the global settings. */
+	function ruleDefaults(): SessionRules {
+		return { ...defaultSessionRules, progress: settings.defaultProgressReporting, sharedChannel: settings.defaultSharedCoordination };
+	}
+
+	function rulesFor(id: string): SessionRules {
+		return sessionRules[id] ?? ruleDefaults();
+	}
+
+	function saveSettings(next: GlobalSettings) {
+		if (next.showAllActivity !== settings.showAllActivity) showAllActivity = next.showAllActivity;
+		settings = next;
+		try { localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(next)); } catch { /* Applies for this page only. */ }
+	}
+
+	function closeSettingsOnBackdrop(event: MouseEvent) {
+		if (event.target === event.currentTarget) settingsDialog?.close();
+	}
+
 	onMount(() => {
 		void loadHostChoices();
 		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
@@ -4724,6 +4751,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 		void reconcileInterruptedSessions().finally(() => (startupRecoveryComplete = true));
 		try { sessionRules = readSessionRules(localStorage.getItem(SESSION_RULES_KEY)); } catch { /* Defaults if storage is disabled. */ }
+		try {
+			settings = readSettings(localStorage.getItem(GLOBAL_SETTINGS_KEY));
+			showAllActivity = settings.showAllActivity;
+		} catch { /* Defaults if storage is disabled. */ }
 		const runtimeCheckTimer = setInterval(() => void reconcileInterruptedSessions(), 15000);
 		loadSessions();
 		const accountUsageTimer = setInterval(() => {
@@ -4775,6 +4806,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} onclick={onWindowClick} />
+
+<dialog class="session-info-dialog" bind:this={settingsDialog} aria-labelledby="global-settings-title" tabindex="-1" onclick={closeSettingsOnBackdrop} onclose={() => (settingsOpen = false)}>
+	<div class="session-info-panel">
+		<div class="session-info-heading">
+			<h2 id="global-settings-title">Settings</h2>
+			<button class="session-info-close" type="button" onclick={() => settingsDialog?.close()} aria-label="Close settings" title="Close">
+				<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+					<path d="M6 6l12 12M18 6 6 18" />
+				</svg>
+			</button>
+		</div>
+		{#if settingsOpen}
+			<GlobalSettingsForm {settings} {theme} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} />
+		{/if}
+	</div>
+</dialog>
 
 {#snippet themeToggle(className = '')}
 	<button
@@ -5117,6 +5164,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			<div class="rail-heading">
 				<span>Sessions</span>
 				<div class="rail-actions">
+					<button class="settings-open" type="button" onclick={() => { settingsOpen = true; settingsDialog?.showModal(); }} aria-label="Settings" title="Settings">
+						<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+							<circle cx="12" cy="12" r="3" />
+							<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+						</svg>
+					</button>
 					<button class="new archive-browser-open" type="button" onclick={openArchiveBrowser} aria-label="Archived sessions" title="Archived sessions">
 						<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 							<path d="M4 5.5h16l-1 4H5zM6 9.5v9h12v-9M10 13h4" />
@@ -5621,7 +5674,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						{/if}
 					</dl>
-					{#key activeId}<SessionRulesEditor rules={sessionRules[activeId] ?? defaultSessionRules} onsave={(rules) => saveSessionRules(activeId, rules)} relayEnabled={relayEnabled[activeId] ?? null} onrelaychange={(enabled) => setRelayEnabled(activeId, enabled)} />{/key}
+					{#key activeId}<SessionRulesEditor rules={rulesFor(activeId)} defaults={ruleDefaults()} onsave={(rules) => saveSessionRules(activeId, rules)} relayEnabled={relayEnabled[activeId] ?? null} onrelaychange={(enabled) => setRelayEnabled(activeId, enabled)} />{/key}
 					<button class="mini" type="button" onclick={() => { sessionInfoDialog?.close(); usageHistoryOpen = true; }}>Task usage history</button>
 					<div class="session-detail-actions">
 						{#if !isSideChat(activeSummary)}
@@ -6673,6 +6726,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.new,
+	.settings-open,
 	.mini,
 	.stop,
 	.attach,
@@ -6689,7 +6743,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			transform var(--dur-micro) var(--ease-out);
 	}
 
-	.new {
+	.new,
+	.settings-open {
 		display: grid;
 		place-items: center;
 		width: var(--control-height);
@@ -9708,6 +9763,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.send:focus-visible,
 	.welcome-action:focus-visible,
 	.new:focus-visible,
+	.settings-open:focus-visible,
 	.mini:not(.ghost):focus-visible {
 		outline-color: var(--color-ink);
 	}
@@ -9871,6 +9927,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 
 		.new:hover,
+		.settings-open:hover,
 		.mini:not(.ghost):hover,
 		.send:hover,
 		.welcome-action:hover {
@@ -9890,6 +9947,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.sidebar-toggle:active,
 	.drawer-close:active,
 	.new:active,
+	.settings-open:active,
 	.mini:active,
 	.stop:active,
 	.files-trigger:active,
@@ -10040,6 +10098,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	@media (min-width: 60rem) and (hover: hover) and (pointer: fine) {
 		.new,
+		.settings-open,
 		.mini,
 		.stop,
 		.files-trigger,
@@ -10061,6 +10120,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.attach,
 		.send,
 		.new,
+		.settings-open,
 		.stop,
 		.files-trigger,
 		.session-info-trigger,
@@ -10098,6 +10158,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		.sidebar-toggle,
 		.drawer-close,
 		.new,
+		.settings-open,
 		.mini,
 		.stop,
 		.files-trigger,

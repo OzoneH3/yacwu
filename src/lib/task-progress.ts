@@ -14,17 +14,24 @@ export interface TaskProgressTranscriptEntry extends TaskProgressEstimate {
 const PROGRESS_CONTEXT_MARKER = '<!-- YACWU_TASK_PROGRESS -->';
 const PROGRESS_VALUE_RE = /\[\[YACWU_PROGRESS percent=(\d{1,3}) remaining_minutes=(\d{1,4}|unknown)\]\]/g;
 
-/** Add per-task reporting instructions without changing what the transcript displays. */
-export function withTaskProgressInstructions(text: string): string {
+/**
+ * Add per-task reporting instructions without changing what the transcript
+ * displays. `reminderMinutes` tells Yacwu's Claude backend how often to ask a
+ * quiet turn for a fresh estimate (null: never); omitted, it keeps its default.
+ */
+export function withTaskProgressInstructions(text: string, reminderMinutes?: number | null): string {
 	const markerAt = text.indexOf(PROGRESS_CONTEXT_MARKER);
 	const visibleText = markerAt < 0 ? text : text.slice(0, markerAt).trimEnd();
+	const reminders = reminderMinutes === undefined
+		? ''
+		: `\n<!-- YACWU_PROGRESS_REMINDERS ${reminderMinutes === null ? 'off' : `minutes=${Math.max(1, Math.round(reminderMinutes))}`} -->`;
 	return `${visibleText}\n\n${PROGRESS_CONTEXT_MARKER}
 Progress reporting is required for this task. Report progress as a standalone line in your progress commentary, using exactly this format: [[YACWU_PROGRESS percent=35 remaining_minutes=6]]. Percent is estimated completion from 0 to 100; remaining_minutes is a rough whole-minute estimate. These are estimates, not measured facts.
 - Post the first line before your first tool call or substantive work.
 - Then post one at least every few tool calls (about once a minute) and at every meaningful milestone. Never let a long run of tool calls pass without one.
 - Give a numeric remaining_minutes whenever you can make even a rough guess; use “unknown” only when you truly cannot.
 - Before your final answer, post a last line with percent=100 remaining_minutes=0. Never put the marker in the final answer itself.
-Yacwu shows these lines as the task's progress, so a missing update makes working sessions look stalled.
+Yacwu shows these lines as the task's progress, so a missing update makes working sessions look stalled.${reminders}
 [/YACWU_TASK_PROGRESS]`;
 }
 

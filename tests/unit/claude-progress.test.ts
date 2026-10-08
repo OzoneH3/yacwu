@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test';
 import { createClaudeProgressReminders } from '../../scripts/claude-progress.mjs';
 
-function setup(enabled = true) {
+function setup(enabled = true, preference = '') {
 	let time = 1000;
 	const sent: any[] = [];
 	const reminders = createClaudeProgressReminders((m: any) => sent.push(m), () => time);
-	reminders.request({ method: 'turn/start', params: { threadId: 't', input: [{ type: 'text', text: enabled ? '<!-- YACWU_TASK_PROGRESS -->' : 'ordinary prompt' }] } });
+	reminders.request({ method: 'turn/start', params: { threadId: 't', input: [{ type: 'text', text: enabled ? `<!-- YACWU_TASK_PROGRESS -->${preference}` : 'ordinary prompt' }] } });
 	reminders.observe({ method: 'turn/started', params: { threadId: 't', turn: { id: 'turn' } } });
 	const activity = () => reminders.observe({ method: 'item/started', params: { threadId: 't', turnId: 'turn', item: { id: 'tool', type: 'mcpToolCall' } } });
 	return { reminders, sent, activity, at: (value: number) => { time = value; } };
@@ -48,4 +48,15 @@ test('internal replies and persisted reminder text are hidden without hiding rea
 	expect(reply.result.thread.turns[0].items).toEqual([visible]);
 	expect(s.reminders.observe({ method: 'item/started', params: { item: hidden } })).toBe(true);
 	s.reminders.close(); s.at(901000); s.reminders.tick(); expect(s.sent).toHaveLength(1);
+});
+
+test('the browser can shorten the reminder interval or turn reminders off', () => {
+	const fast = setup(true, '\n<!-- YACWU_PROGRESS_REMINDERS minutes=2 -->');
+	fast.at(120000); fast.activity(); fast.reminders.tick(); expect(fast.sent).toHaveLength(0);
+	fast.at(121500); fast.reminders.tick(); expect(fast.sent).toHaveLength(1);
+	const off = setup(true, '\n<!-- YACWU_PROGRESS_REMINDERS off -->');
+	off.at(300000); off.activity(); off.at(301000); off.reminders.tick(); expect(off.sent).toHaveLength(0);
+	// Out-of-range values are clamped to an hour.
+	const slow = setup(true, '\n<!-- YACWU_PROGRESS_REMINDERS minutes=999 -->');
+	slow.at(301000); slow.activity(); slow.reminders.tick(); expect(slow.sent).toHaveLength(0);
 });

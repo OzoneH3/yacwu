@@ -4,9 +4,12 @@
 		rules,
 		onsave,
 		relayEnabled = null,
-		onrelaychange
+		onrelaychange,
+		defaults = defaultSessionRules
 	}: {
 		rules: SessionRules;
+		/** What "Reset defaults" restores: the global session rule defaults. */
+		defaults?: SessionRules;
 		onsave: (rules: SessionRules) => boolean;
 		/** Server-side setting; null until loaded. */
 		relayEnabled?: boolean | null;
@@ -40,7 +43,7 @@
 	<textarea id="session-custom-rules" bind:value={custom} oninput={() => saved = false} rows="5" placeholder="For example: check the README before committing feature changes."></textarea>
 	<div class="actions">
 		<button type="button" onclick={save}>Save rules</button>
-		<button type="button" onclick={() => { progress = defaultSessionRules.progress; sharedChannel = defaultSessionRules.sharedChannel; custom = ''; save(); }}>Reset defaults</button>
+		<button type="button" onclick={() => { progress = defaults.progress; sharedChannel = defaults.sharedChannel; custom = ''; save(); }}>Reset defaults</button>
 		{#if saved}<span role="status">Saved</span>{/if}
 	</div>
 </section>

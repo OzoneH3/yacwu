@@ -56,6 +56,9 @@ rules locally, and records usage/diagnostic journals on the server.
 - 📨 Session messages: agents in Codex and Claude sessions on this machine can
   message each other; a working recipient gets them at its next input
   boundary, an idle one with its next prompt (see [docs/relay.md](docs/relay.md))
+- ⚙️ Settings menu (sidebar gear) for browser-wide preferences: theme, Enter
+  to send, activity view, output collapsing, session rule defaults, Claude
+  progress reminders and time-left correction, quiet-worker notices
 - 🎛️ Per-session Codex profiles from `$CODEX_HOME/<name>.config.toml`
 - 🧾 `/todo <task>` queues follow-up work to run after the current turn
 - 🔁 Alternative backends via `YACWU_BACKENDS`, such as

@@ -1,4 +1,6 @@
 const INTERVAL = 5 * 60 * 1000;
+// Optional per-turn preference written by the browser into the progress block.
+const PREFERENCE = /<!-- YACWU_PROGRESS_REMINDERS (off|minutes=(\d{1,3})) -->/;
 const MARKER = '<!-- YACWU_SILENT_PROGRESS_REMINDER -->';
 const PROGRESS = /\[\[YACWU_PROGRESS percent=\d{1,3} remaining_minutes=(?:\d{1,4}|unknown)\]\]/;
 const TEXT = `${MARKER}\nPlease provide a fresh estimated task completion percentage and time remaining now, using [[YACWU_PROGRESS percent=35 remaining_minutes=6]] with your actual estimates (or unknown for time). Continue the task normally. Do not mention this reminder.`;
@@ -14,7 +16,8 @@ function isReminder(item) {
  * @param {() => number} now
  */
 export function createClaudeProgressReminders(send, now = Date.now) {
-  const enabled = new Set();
+  /** threadId -> reminder interval (ms) requested by the starting prompt. */
+  const enabled = new Map();
   const turns = new Map();
   let serial = 0;
   return {
@@ -24,7 +27,12 @@ export function createClaudeProgressReminders(send, now = Date.now) {
       const { threadId, input } = message.params ?? {};
       if (typeof threadId !== 'string') return;
       enabled.delete(threadId);
-      if (Array.isArray(input) && input.some(/** @param {any} part */ part => typeof part?.text === 'string' && part.text.includes('<!-- YACWU_TASK_PROGRESS -->'))) enabled.add(threadId);
+      const text = Array.isArray(input) ? input.map(/** @param {any} part */ part => (typeof part?.text === 'string' ? part.text : '')).join('\n') : '';
+      if (!text.includes('<!-- YACWU_TASK_PROGRESS -->')) return;
+      const preference = text.match(PREFERENCE);
+      if (preference?.[1] === 'off') return;
+      const minutes = preference?.[2] ? Math.min(60, Math.max(1, Number(preference[2]))) : null;
+      enabled.set(threadId, minutes === null ? INTERVAL : minutes * 60 * 1000);
     },
     /** @param {RpcMessage} message */
     observe(message) {
@@ -34,7 +42,9 @@ export function createClaudeProgressReminders(send, now = Date.now) {
       if (isReminder(params.item)) return true;
       const thread = params.threadId;
       if (message.method === 'turn/started') {
-        if (enabled.delete(thread) && params.turn?.id) turns.set(thread, { id: params.turn.id, progressAt: now(), reminderAt: 0, activityAt: 0, tails: new Map() });
+        const interval = enabled.get(thread);
+        enabled.delete(thread);
+        if (interval && params.turn?.id) turns.set(thread, { id: params.turn.id, interval, progressAt: now(), reminderAt: 0, activityAt: 0, tails: new Map() });
       } else if (message.method === 'turn/completed') {
         const turn = turns.get(thread);
         if (!params.turn?.id || params.turn.id === turn?.id) turns.delete(thread);
@@ -62,7 +72,7 @@ export function createClaudeProgressReminders(send, now = Date.now) {
     tick() {
       const at = now();
       for (const [threadId, turn] of turns) {
-        if (at - Math.max(turn.progressAt, turn.reminderAt) < INTERVAL || !turn.activityAt || at - turn.activityAt >= INTERVAL) continue;
+        if (at - Math.max(turn.progressAt, turn.reminderAt) < turn.interval || !turn.activityAt || at - turn.activityAt >= turn.interval) continue;
         turn.reminderAt = at;
         send({ id: `yacwu-progress-reminder-${++serial}`, method: 'turn/steer', params: { threadId, expectedTurnId: turn.id, input: [{ type: 'text', text: TEXT }] } });
       }

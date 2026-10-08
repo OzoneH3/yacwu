@@ -72,4 +72,14 @@ describe('task progress reporting', () => {
 		expect(estimateRemainingMinutes(100, null, 10 * min, true)).toBe(0);
 		expect(estimateRemainingMinutes(100, 0, 10 * min, true)).toBe(0);
 	});
+
+	test('the reminder preference rides in the private progress block', () => {
+		expect(withTaskProgressInstructions('Do it', 2)).toContain('<!-- YACWU_PROGRESS_REMINDERS minutes=2 -->');
+		expect(withTaskProgressInstructions('Do it', null)).toContain('<!-- YACWU_PROGRESS_REMINDERS off -->');
+		expect(withTaskProgressInstructions('Do it')).not.toContain('YACWU_PROGRESS_REMINDERS');
+		// Re-applying replaces the block rather than stacking preferences.
+		const twice = withTaskProgressInstructions(withTaskProgressInstructions('Do it', 2), null);
+		expect(twice.match(/YACWU_PROGRESS_REMINDERS/g)).toHaveLength(1);
+		expect(twice).toContain('off');
+	});
 });
