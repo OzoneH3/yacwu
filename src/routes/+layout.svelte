@@ -823,19 +823,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function sharedChannelPathForSession(id: string): string | null {
 		const summary = sessions.find((session) => session.id === id);
-		return sharedChannelPath(sessionHost(id), cwds[id] ?? summary?.cwd ?? '');
+		return sharedChannelPath(sessionHost(id), cwds[id] ?? summary?.cwd ?? '', hostChoices);
 	}
 
-	function addSharedChannelContext(id: string, text: string): string {
+	async function addSharedChannelContext(id: string, text: string): Promise<string> {
+		const host = sessionHost(id);
+		if (host !== LOCAL_HOST && !hostChoices.some((entry) => entry.name === host)) await loadHostChoices();
 		const visibleText = visibleUserText(text);
+		const path = sharedChannelPathForSession(id);
 		const alreadyJoined = itemsOf(threads[id] ?? null).some((item) => {
 			if (item.type !== 'userMessage') return false;
 			return ((item as any).content ?? []).some(
-				(part: any) => typeof part?.text === 'string' && hasSharedChannelContext(part.text)
+				(part: any) => typeof part?.text === 'string' && hasSharedChannelContext(part.text, path ?? undefined)
 			);
 		});
-		const path = sharedChannelPathForSession(id);
 		return !path || alreadyJoined ? visibleText : withSharedChannelContext(visibleText, path, id);
+	}
+
+	async function loadHostChoices() {
+		try {
+			const response = await fetch('/api/hosts', { signal: AbortSignal.timeout(5_000) });
+			if (!response.ok) return;
+			const data = await response.json();
+			hostChoices = (data.hosts ?? []) as HostInfo[];
+			for (const host of hostChoices) {
+				if (host.kind === 'remote' && !(host.name in hostStates)) hostStates[host.name] = host.state;
+			}
+		} catch { /* Keep known targets when discovery is temporarily unavailable. */ }
 	}
 
 	/** Thread API URL carrying the session's host as a routing hint. */
@@ -1825,15 +1839,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		newProvider = 'codex';
 		creating = true;
 		// Hosts come from ~/.ssh/config, re-read by the backend on demand.
-		fetch('/api/hosts')
-			.then((r) => r.json())
-			.then((d) => {
-				hostChoices = (d.hosts ?? []) as HostInfo[];
-				for (const h of hostChoices) {
-					if (h.kind === 'remote' && !(h.name in hostStates)) hostStates[h.name] = h.state;
-				}
-			})
-			.catch(() => (hostChoices = []));
+		void loadHostChoices();
 		// The create form lives in the session rail; surface it if it's hidden
 		// (welcome-screen CTA on mobile, or desktop with the rail collapsed).
 		if (mobileViewport) {
@@ -2367,7 +2373,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
 		const rules = sessionRules[id] ?? defaultSessionRules;
-		const ruleText = withSessionRules(rules.sharedChannel ? addSharedChannelContext(id, text) : visibleUserText(text), rules);
+		const ruleText = withSessionRules(rules.sharedChannel ? await addSharedChannelContext(id, text) : visibleUserText(text), rules);
 		const messageText = rules.progress ? withTaskProgressInstructions(ruleText) : ruleText;
 		if (attachments.length > 0) {
 			const body = new FormData();
@@ -4432,6 +4438,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	onMount(() => {
+		void loadHostChoices();
 		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
 		const transferTitle = (element: Element) => {
 			const title = element.getAttribute('title');

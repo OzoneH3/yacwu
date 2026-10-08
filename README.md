@@ -140,6 +140,11 @@ state lives entirely in Codex's own persistent sessions, read back via
   when clearing a session. Existing tasks/history are not rewritten; the backend
   image-display instruction is shown read-only. Conversation-specific requests
   such as commit/README policies are not automatically copied into new sessions.
+  Shared background coordination lets Codex and Claude sessions on the same
+  machine and project exchange notes in one temporary folder when enabled.
+  Remote machines and different projects remain separate. Notes are read at
+  work checkpoints; they do not wake idle sessions or provide instant delivery.
+  Existing sessions receive updated folder guidance on their next prompt.
 - 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when
   creating a session (or with `/profile`)
 - 🧾 Queue follow-up work with `/todo <task>`; queued tasks start one at a time

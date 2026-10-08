@@ -1,3 +1,5 @@
+import { LOCAL_HOST, type HostInfo } from './protocol';
+
 const SHARED_CHANNEL_MARKER = '\n\n<!-- YACWU_SHARED_BACKGROUND_CHANNEL -->\n';
 
 function normalizePath(path: string): string {
@@ -14,15 +16,17 @@ function hash(value: string, seed: number): string {
 	return result.toString(16).padStart(8, '0');
 }
 
-/** A stable, opaque temporary-directory path for sessions on the same host and workspace. */
-export function sharedChannelPath(host: string, cwd: string): string | null {
+/** Local providers share a machine identity; SSH machines remain separate. */
+export function sharedChannelPath(host: string, cwd: string, hosts: HostInfo[] = []): string | null {
 	if (!cwd.trim()) return null;
-	const identity = `${host.trim() || 'local'}\0${normalizePath(cwd)}`;
+	const target = host.trim() || LOCAL_HOST;
+	const machine = hosts.some((entry) => entry.name === target && entry.kind === 'backend') ? LOCAL_HOST : target;
+	const identity = `${machine}\0${normalizePath(cwd)}`;
 	return `/tmp/yacwu-background-${hash(identity, 0x811c9dc5)}${hash(identity, 0x9e3779b9)}`;
 }
 
-export function hasSharedChannelContext(text: string): boolean {
-	return text.includes(SHARED_CHANNEL_MARKER);
+export function hasSharedChannelContext(text: string, path?: string): boolean {
+	return text.includes(SHARED_CHANNEL_MARKER) && (!path || text.includes(`Shared folder: ${path}\n`));
 }
 
 /** Remove Yacwu's transport-only channel guidance from transcript presentation. */
@@ -52,6 +56,6 @@ export function withSharedChannelContext(
 Shared folder: ${path}
 Your session ID: ${sessionId}
 
-Other Yacwu sessions using this same project folder on this machine use this folder too. Create it if needed. Use it only for coordination notes, not project source files. Before substantial work, check for shared notes; publish a concise status and important decisions, and check again at meaningful checkpoints. Use uniquely named files so concurrent sessions do not overwrite each other. Address a note to a session ID when known, or mark it “all” for everyone. Do not wait or poll continuously; continue your assigned work and check opportunistically.
+Other Yacwu sessions using this same project folder on this machine, including Codex and Claude sessions, use this folder too. Create it if needed. Use it only for coordination notes, not project source files. Before substantial work, check for shared notes; publish a concise status and important decisions, and check again at meaningful checkpoints. Use uniquely named files so concurrent sessions do not overwrite each other. Address a note to a session ID when known, or mark it “all” for everyone. Do not wait or poll continuously; continue your assigned work and check opportunistically.
 [/Yacwu shared background-work channel]`;
 }
