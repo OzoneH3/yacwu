@@ -207,7 +207,8 @@ gleam run -- --help
 
 The server accepts `-H/--host`, `-p/--port`, a positional `host:port`, or
 `--unix <path>` (CLI flags override the `HOST`/`PORT` env vars). `YACWU_CWD`
-selects the working directory for new sessions; `YACWU_STATIC` points at the
+selects the working directory for new sessions (defaults to your home directory,
+shown as `~` in the startup log); `YACWU_STATIC` points at the
 web UI build directory (default `./build`, relative to where the server runs —
 the `bun run` scripts set it for you). Set `YACWU_DEBUG=1` for a per-request
 timing log on stderr.
