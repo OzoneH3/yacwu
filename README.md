@@ -259,6 +259,10 @@ restart; recorded task history is separate. The adapter does not supply Claude
 account allowance percentages, so these are not equivalent to its subscription
 usage meter.
 
+Navigating into a folder in the new-session directory browser selects that
+folder as the working directory, including for local Claude backends. You do
+not need a second confirmation click before starting the session.
+
 For a deployable artifact, `cd server && gleam export erlang-shipment`
 produces a self-contained BEAM release (needs only Erlang on the target), and
 `bun run build` supplies the static `build/` directory to serve next to it.

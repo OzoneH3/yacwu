@@ -613,6 +613,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let cwdBrowseEntries = $state<DirectoryChoice[]>([]);
 	let showHiddenDirectories = $state(false);
 	let cwdBrowseLoading = $state(false);
+	let cwdBrowseRequest = 0;
 	let cwdBrowseError = $state<string | null>(null);
 	const visibleCwdBrowseEntries = $derived(
 		cwdBrowseEntries.filter((entry) => showHiddenDirectories || !entry.name.startsWith('.'))
@@ -1862,6 +1863,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function onNewHostChange() {
+		cwdBrowseRequest++;
+		cwdBrowseLoading = false;
 		createError = null;
 		newProfile = '';
 		cwdBrowseOpen = false;
@@ -1880,6 +1883,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function browseDirectories(path?: string) {
+		const request = ++cwdBrowseRequest;
+		const host = newHost;
 		cwdBrowseOpen = true;
 		cwdBrowseLoading = true;
 		cwdBrowseError = null;
@@ -1890,14 +1895,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (requested) params.set('path', requested);
 			const res = await fetch(`/api/directories?${params.toString()}`);
 			const data = await res.json();
+			if (request !== cwdBrowseRequest || host !== newHost) return;
 			if (!res.ok) throw new Error(data.error ?? 'Could not list this directory');
 			cwdBrowsePath = data.path ?? '';
+			// Browsing into a folder selects it too; starting a session must not
+			// silently use the old/default folder shown before navigation.
+			if (cwdBrowsePath) newCwd = cwdBrowsePath;
 			cwdBrowseEntries = (data.entries ?? []).filter((entry: DirectoryChoice) => entry.kind === 'dir');
 		} catch (error) {
+			if (request !== cwdBrowseRequest || host !== newHost) return;
 			cwdBrowseError = error instanceof Error ? error.message : 'Could not list this directory';
 			cwdBrowseEntries = [];
 		} finally {
-			cwdBrowseLoading = false;
+			if (request === cwdBrowseRequest) cwdBrowseLoading = false;
 		}
 	}
 
@@ -1909,6 +1919,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function newSession(cwd?: string) {
 		createError = null;
+		if (cwdBrowseLoading) {
+			createError = 'Wait for the selected folder to finish loading.';
+			return;
+		}
 		const profile = newProfile.trim();
 		const host = newHost;
 		const remote = isRemoteHost(host);
@@ -4821,7 +4835,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					</div>
 				{/if}
 				<div class="create-actions">
-					<button class="mini" onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
+					<button class="mini" disabled={cwdBrowseLoading} onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
 				</div>
 				{#if createError}
 					<div id="create-helper" class="create-err" role="alert">{createError}</div>
