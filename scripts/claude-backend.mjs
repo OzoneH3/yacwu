@@ -98,7 +98,9 @@ export async function discoverModels(adapterPath) {
 async function main() {
   const adapterPath = resolve(process.argv[2] ?? 'claude-codex/dist/src/adapter.mjs');
   /** @type {NodeJS.ProcessEnv} */
-  const env = { ...process.env, CLAUDE_CODEX_DISABLE_CODEX_PROXY: '1' };
+  // Claude Code reports session_state_changed (its authoritative turn-over
+  // signal) only with this set; claude-background-runtime ends turns on it.
+  const env = { ...process.env, CLAUDE_CODEX_DISABLE_CODEX_PROXY: '1', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' };
   if (!env.CLAUDE_CODEX_MODELS) {
     try {
       const models = await discoverModels(adapterPath);

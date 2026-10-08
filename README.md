@@ -166,7 +166,9 @@ Claude sessions stay active while SDK background workers or explicitly finite
 monitors run. Current activity shows “Background worker running”; when the
 tracked work ends, Yacwu silently asks Claude to check the results and report
 status before completing the turn. Opaque detached commands require a finite
-Monitor; persistent ambient watchers do not keep a session running.
+Monitor; persistent ambient watchers do not keep a session running. A turn
+also ends once Claude Code reports itself idle, so a finished task cannot stay
+marked as running.
 
 Anything that speaks the codex app-server protocol over stdio can stand in
 for `codex app-server` — for example
