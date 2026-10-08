@@ -55,8 +55,12 @@ is always self-reported by the sending agent.
 
 - **Accept direct messages** (Session details) is stored on the server and
   applies to every browser at once. Turning it off refuses new messages and
-  drops queued ones. Messages already sent or uncertain are left alone. It
-  resets to on when the server restarts.
+  drops queued ones. Messages already sent or uncertain are left alone. A
+  session's own choice lasts until the server restarts.
+- **Default: accept direct messages** (Settings) decides for every session
+  without its own choice. It is saved in Yacwu's state directory
+  (`relay-settings.json`), so it survives restarts. Turning it off drops
+  messages still queued for those sessions.
 - Agent routes (`/api/relay/*`) need a bearer credential, kept in a 0600 file
   named by `YACWU_RELAY_AUTH_FILE`. Any agent running as your user can read
   it, so it keeps other users out, not one session from another.

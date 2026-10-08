@@ -21,6 +21,7 @@ import yacwu/model_state
 import yacwu/profiles
 import yacwu/relay
 import yacwu/relay_env
+import yacwu/relay_settings
 import yacwu/router
 import yacwu/unix_proxy
 
@@ -136,6 +137,7 @@ authentication (e.g. bound to localhost only).",
           hosts.subscribe_lifecycle(registry_name, owner, subject)
         },
       ),
+      relay_settings.persistence(relay_settings.path()),
     ))
     |> supervisor.add(model_state.supervised(store_name))
     |> supervisor.add(profiles.supervised(profile_store_name))

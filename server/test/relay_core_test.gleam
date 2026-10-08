@@ -699,3 +699,59 @@ pub fn invalid_input_is_rejected_test() {
   let assert Error(_) = attempt("msg-0001", big, to_bob())
   None |> should.equal(None)
 }
+
+// -- Default for sessions without their own choice -------------------------------
+
+pub fn default_off_refuses_unless_explicitly_allowed_test() {
+  let core = bob_running("t1")
+  let #(core, _) = relay_core.set_accept_by_default(core, 0, False)
+  relay_core.enabled(core, bob) |> should.be_false
+  let #(_, refused, _) =
+    relay_core.send(
+      core,
+      1,
+      SendInput(
+        "msg-0001",
+        Address(host, alice),
+        to_bob(),
+        "hi",
+        CodexBackend,
+        1,
+      ),
+    )
+  let assert Error(_) = refused
+  // An explicit choice for this session overrides the default.
+  let #(core, _) = relay_core.set_enabled(core, 2, bob, True)
+  relay_core.enabled(core, bob) |> should.be_true
+  let #(_, effects) = send(core, 3, "msg-0002", "hello")
+  let assert [#(_, "t1")] = steers(effects)
+}
+
+pub fn turning_the_default_off_rejects_only_followers_test() {
+  let core = fresh() |> connected(1)
+  // Idle recipients so messages stay queued.
+  let core = started(core, 0, 1, bob, "t0").0
+  let core = completed(core, 0, 1, bob, "t0").0
+  let core = started(core, 0, 1, "thr-carol", "c0").0
+  let core = completed(core, 0, 1, "thr-carol", "c0").0
+  let #(core, _) = send(core, 1, "msg-0001", "to bob")
+  let #(core, _, _) =
+    relay_core.send(
+      core,
+      1,
+      SendInput(
+        "msg-0002",
+        Address(host, alice),
+        Address(host, "thr-carol"),
+        "to carol",
+        CodexBackend,
+        1,
+      ),
+    )
+  // Carol chose to accept messages; Bob follows the default.
+  let #(core, _) = relay_core.set_enabled(core, 2, "thr-carol", True)
+  let #(core, _) = relay_core.set_accept_by_default(core, 3, False)
+  state_of(core, "msg-0001") |> should.equal(Rejected)
+  state_of(core, "msg-0002") |> should.equal(Queued)
+  relay_core.accept_by_default(core) |> should.be_false
+}

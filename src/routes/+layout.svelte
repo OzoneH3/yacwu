@@ -233,6 +233,8 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	// The form is only rendered while open, so its controls never shadow the
 	// page's own (e.g. "Show all activity") when the menu is closed.
 	let settingsOpen = $state(false);
+	// Server-side default for direct messages; loaded when Settings opens.
+	let relayAcceptByDefault = $state<boolean | null>(null);
 	let unseenActivity = $state(false);
 	let showBottomJump = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
@@ -4624,6 +4626,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		try { localStorage.setItem(GLOBAL_SETTINGS_KEY, JSON.stringify(next)); } catch { /* Applies for this page only. */ }
 	}
 
+	function openSettings() {
+		settingsOpen = true;
+		settingsDialog?.showModal();
+		relayAcceptByDefault = null;
+		void fetch('/api/relay-settings')
+			.then((res) => (res.ok ? res.json() : null))
+			.then((data) => { if (data && typeof data.acceptByDefault === 'boolean') relayAcceptByDefault = data.acceptByDefault; })
+			.catch(() => {});
+	}
+
+	async function setRelayAcceptByDefault(accept: boolean): Promise<boolean> {
+		try {
+			const res = await fetch('/api/relay-settings', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ acceptByDefault: accept })
+			});
+			if (!res.ok) return false;
+			relayAcceptByDefault = (await res.json()).acceptByDefault !== false;
+			// The open session may follow the default: refresh what it shows.
+			if (activeId) void loadRelayLog(activeId);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	function closeSettingsOnBackdrop(event: MouseEvent) {
 		if (event.target === event.currentTarget) settingsDialog?.close();
 	}
@@ -4823,7 +4852,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			</button>
 		</div>
 		{#if settingsOpen}
-			<GlobalSettingsForm {settings} {theme} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} />
+			<GlobalSettingsForm {settings} {theme} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} relayDefault={relayAcceptByDefault} onrelaydefaultchange={setRelayAcceptByDefault} />
 		{/if}
 	</div>
 </dialog>
@@ -5169,7 +5198,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			<div class="rail-heading">
 				<span>Sessions</span>
 				<div class="rail-actions">
-					<button class="settings-open" type="button" onclick={() => { settingsOpen = true; settingsDialog?.showModal(); }} aria-label="Settings" title="Settings">
+					<button class="settings-open" type="button" onclick={openSettings} aria-label="Settings" title="Settings">
 						<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 							<circle cx="12" cy="12" r="3" />
 							<path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />

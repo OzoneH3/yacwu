@@ -59,6 +59,7 @@ fn setup(timeout: Int) -> #(relay.Relay, Stub, Stub) {
       backends,
       relay_core.default_limits(),
       relay.Timeouts(steer: timeout, read: timeout, tick: 600_000),
+      relay.memory_persistence(True),
     )
   connect(a)
   connect(b)

@@ -36,6 +36,17 @@ pub type Backends {
   )
 }
 
+/// Where the default for sessions without their own choice is kept, so a
+/// restart does not silently turn messages back on.
+pub type Persistence {
+  Persistence(load: fn() -> Bool, save: fn(Bool) -> Nil)
+}
+
+/// For tests and embedders without storage.
+pub fn memory_persistence(accept: Bool) -> Persistence {
+  Persistence(load: fn() { accept }, save: fn(_) { Nil })
+}
+
 pub type Timeouts {
   Timeouts(steer: Int, read: Int, tick: Int)
 }
@@ -67,6 +78,8 @@ pub opaque type Msg {
   Wake
   Tick
   SetEnabled(thread: String, enabled: Bool, reply: Subject(Bool))
+  SetAcceptByDefault(accept: Bool, reply: Subject(Bool))
+  GetAcceptByDefault(reply: Subject(Bool))
   IsEnabled(thread: String, reply: Subject(Bool))
   ForThread(thread: String, reply: Subject(#(String, List(Message))))
   GetMessage(id: String, reply: Subject(Result(Message, Nil)))
@@ -87,6 +100,7 @@ type State {
     life: Subject(codex.Lifecycle),
     backends: Backends,
     timeouts: Timeouts,
+    persistence: Persistence,
     work: Dict(Pid, #(Work, Monitor)),
     subscribers: List(#(Pid, Subject(String))),
     /// The earliest Wake already scheduled (monotonic ms), if any.
@@ -103,9 +117,16 @@ fn clock(_state: State) -> Int {
 pub fn supervised(
   name: Relay,
   backends: Backends,
+  persistence: Persistence,
 ) -> supervision.ChildSpecification(Subject(Msg)) {
   supervision.worker(fn() {
-    start(name, backends, relay_core.default_limits(), default_timeouts())
+    start(
+      name,
+      backends,
+      relay_core.default_limits(),
+      default_timeouts(),
+      persistence,
+    )
   })
 }
 
@@ -114,6 +135,7 @@ pub fn start(
   backends: Backends,
   limits: relay_core.Limits,
   timeouts: Timeouts,
+  persistence: Persistence,
 ) -> actor.StartResult(Subject(Msg)) {
   actor.new_with_initialiser(1000, fn(subject) {
     let life = process.new_subject()
@@ -134,11 +156,14 @@ pub fn start(
       |> bit_array.base16_encode
       |> string.lowercase
     State(
-      core: relay_core.new(epoch, limits),
+      core: relay_core.new(epoch, limits)
+        |> relay_core.set_accept_by_default(0, persistence.load())
+        |> fn(pair) { pair.0 },
       self: subject,
       life: life,
       backends: backends,
       timeouts: timeouts,
+      persistence: persistence,
       work: dict.new(),
       subscribers: [],
       next_wake: None,
@@ -207,6 +232,16 @@ pub fn set_enabled(
   enabled: Bool,
 ) -> Result(Bool, Nil) {
   call(relay, 5000, SetEnabled(thread, enabled, _))
+}
+
+/// Whether sessions without their own choice accept messages.
+pub fn accept_by_default(relay: Relay) -> Result(Bool, Nil) {
+  call(relay, 5000, GetAcceptByDefault)
+}
+
+/// Change (and persist) that default.
+pub fn set_accept_by_default(relay: Relay, accept: Bool) -> Result(Bool, Nil) {
+  call(relay, 5000, SetAcceptByDefault(accept, _))
 }
 
 pub fn is_enabled(relay: Relay, thread: String) -> Bool {
@@ -373,6 +408,17 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         relay_core.set_enabled(state.core, now, thread, enabled)
       process.send(reply, enabled)
       actor.continue(perform(State(..state, core: core), effects))
+    }
+    SetAcceptByDefault(accept, reply) -> {
+      let #(core, effects) =
+        relay_core.set_accept_by_default(state.core, now, accept)
+      state.persistence.save(accept)
+      process.send(reply, accept)
+      actor.continue(perform(State(..state, core: core), effects))
+    }
+    GetAcceptByDefault(reply) -> {
+      process.send(reply, relay_core.accept_by_default(state.core))
+      actor.continue(state)
     }
     IsEnabled(thread, reply) -> {
       process.send(reply, relay_core.enabled(state.core, thread))

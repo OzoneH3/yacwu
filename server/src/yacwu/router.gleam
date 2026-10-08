@@ -553,6 +553,10 @@ fn dispatch(
       with_relay_auth(ctx, req, fn() {
         json_response(404, error_body("unknown relay endpoint"))
       })
+    // Browser-only (gated): unlike /api/relay/*, never reachable with the
+    // agent relay credential.
+    ["api", "relay-settings"], Get -> relay_defaults(ctx)
+    ["api", "relay-settings"], Post -> set_relay_defaults(ctx, req)
     ["api", "threads", id, "relay"], Get -> relay_log(ctx, id)
     ["api", "threads", id, "relay", "settings"], Post ->
       relay_settings(ctx, req, id)
@@ -3318,6 +3322,36 @@ fn relay_log(ctx: Context, thread: String) -> Response(ResponseData) {
           ),
         ]),
       )
+  }
+}
+
+/// GET /api/relay-settings — whether sessions without their own choice
+/// accept direct messages.
+fn relay_defaults(ctx: Context) -> Response(ResponseData) {
+  case relay.accept_by_default(ctx.relay) {
+    Ok(accept) ->
+      json_response(200, json.object([#("acceptByDefault", json.bool(accept))]))
+    Error(_) -> json_response(503, error_body("the relay is restarting"))
+  }
+}
+
+/// POST /api/relay-settings {acceptByDefault} — browser only; persisted.
+fn set_relay_defaults(
+  ctx: Context,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  case jsonx.field_bool(read_json_body(req), ["acceptByDefault"]) {
+    Error(_) ->
+      json_response(400, error_body("acceptByDefault must be a boolean"))
+    Ok(accept) ->
+      case relay.set_accept_by_default(ctx.relay, accept) {
+        Ok(accept) ->
+          json_response(
+            200,
+            json.object([#("acceptByDefault", json.bool(accept))]),
+          )
+        Error(_) -> json_response(503, error_body("the relay is restarting"))
+      }
   }
 }
 

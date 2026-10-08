@@ -29,6 +29,7 @@ fn serve(conf: auth.Config) -> Int {
       ),
       relay_core.default_limits(),
       relay.default_timeouts(),
+      relay.memory_persistence(True),
     )
   let ctx =
     router.Context(
@@ -150,4 +151,34 @@ pub fn relay_authorized_test() {
   router.relay_authorized(Error(Nil), "abc") |> should.be_false
   // An empty credential disables the routes rather than matching "".
   router.relay_authorized(Ok("Bearer "), "") |> should.be_false
+}
+
+pub fn message_default_is_browser_only_test() {
+  let port = serve(forward_auth())
+  status(port, http.Get, "/api/relay-settings", [browser], "")
+  |> should.equal(200)
+  status(
+    port,
+    http.Post,
+    "/api/relay-settings",
+    [browser],
+    "{\"acceptByDefault\":false}",
+  )
+  |> should.equal(200)
+  status(
+    port,
+    http.Post,
+    "/api/relay-settings",
+    [bearer],
+    "{\"acceptByDefault\":true}",
+  )
+  |> should.equal(401)
+  status(
+    port,
+    http.Post,
+    "/api/relay-settings",
+    [browser],
+    "{\"acceptByDefault\":\"no\"}",
+  )
+  |> should.equal(400)
 }

@@ -5,13 +5,24 @@
 		settings,
 		theme,
 		onchange,
-		onthemechange
+		onthemechange,
+		relayDefault = null,
+		onrelaydefaultchange
 	}: {
 		settings: GlobalSettings;
 		theme: 'light' | 'dark';
 		onchange: (settings: GlobalSettings) => void;
 		onthemechange: (theme: 'light' | 'dark') => void;
+		/** Server-side default for direct messages; null until loaded. */
+		relayDefault?: boolean | null;
+		onrelaydefaultchange?: (accept: boolean) => Promise<boolean>;
 	} = $props();
+	let relayStatus = $state('');
+	async function changeRelayDefault(event: Event) {
+		const accept = (event.currentTarget as HTMLInputElement).checked;
+		relayStatus = 'Saving…';
+		relayStatus = (await onrelaydefaultchange?.(accept)) ? 'Saved on the server' : 'Could not save; reopen Settings to see the current value';
+	}
 
 	function set<K extends keyof GlobalSettings>(key: K, value: GlobalSettings[K]) {
 		onchange({ ...settings, [key]: value });
@@ -57,6 +68,8 @@
 		<p class="description note">For sessions without their own saved rules. Session details can still override them per session.</p>
 		<label class="check"><input type="checkbox" checked={settings.defaultProgressReporting} onchange={(e) => set('defaultProgressReporting', e.currentTarget.checked)} /> Default: progress reporting</label>
 		<label class="check"><input type="checkbox" checked={settings.defaultSharedCoordination} onchange={(e) => set('defaultSharedCoordination', e.currentTarget.checked)} /> Default: shared background coordination</label>
+		<label class="check"><input type="checkbox" checked={relayDefault ?? true} disabled={relayDefault === null} onchange={changeRelayDefault} /> Default: accept direct messages from other sessions</label>
+		<p class="description">Stored on the server for every browser and kept across restarts. Turning it off refuses new messages to sessions without their own choice and drops ones still queued for them.{#if relayStatus} <span role="status">{relayStatus}</span>{/if}</p>
 	</section>
 
 	<section aria-labelledby="settings-claude">

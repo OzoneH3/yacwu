@@ -175,7 +175,11 @@ pub opaque type Core {
     terminal: List(String),
     submissions: Dict(String, Submission),
     recoveries: Dict(Int, Recovery),
+    /// Sessions that turned messages off, or on, explicitly; every other
+    /// session follows `accept_by_default`.
     disabled: Set(String),
+    allowed: Set(String),
+    accept_by_default: Bool,
     seen: Dict(String, String),
     seen_order: List(String),
   )
@@ -242,6 +246,8 @@ pub fn new(epoch: String, limits: Limits) -> Core {
     submissions: dict.new(),
     recoveries: dict.new(),
     disabled: set.new(),
+    allowed: set.new(),
+    accept_by_default: True,
     seen: dict.new(),
     seen_order: [],
   )
@@ -362,7 +368,15 @@ pub fn valid_id(id: String) -> Bool {
 // -- Queries ------------------------------------------------------------------
 
 pub fn enabled(core: Core, thread: String) -> Bool {
-  !set.contains(core.disabled, thread)
+  case set.contains(core.disabled, thread), set.contains(core.allowed, thread) {
+    True, _ -> False
+    _, True -> True
+    False, False -> core.accept_by_default
+  }
+}
+
+pub fn accept_by_default(core: Core) -> Bool {
+  core.accept_by_default
 }
 
 pub fn message(core: Core, id: String) -> Result(Message, Nil) {
@@ -477,7 +491,7 @@ fn validate(core: Core, input: SendInput) -> Result(Nil, String) {
     ),
     #(input.from.thread == input.to.thread, "a session cannot message itself"),
     #(
-      set.contains(core.disabled, input.to.thread),
+      !enabled(core, input.to.thread),
       "the recipient has turned off session messages",
     ),
     #(queued >= core.limits.max_queue, "the recipient's message queue is full"),
@@ -653,7 +667,7 @@ pub fn claim_start(
       case
         r.queue == []
         || option.is_some(r.reservation)
-        || set.contains(core.disabled, to.thread)
+        || !enabled(core, to.thread)
         || inflight(core, to.host) >= core.limits.max_inflight
       {
         True -> #(core, None, [])
@@ -905,7 +919,12 @@ pub fn set_enabled(
     dict.keys(core.recipients) |> list.filter(fn(to) { to.thread == thread })
   case enabled {
     True -> {
-      let core = Core(..core, disabled: set.delete(core.disabled, thread))
+      let core =
+        Core(
+          ..core,
+          disabled: set.delete(core.disabled, thread),
+          allowed: set.insert(core.allowed, thread),
+        )
       list.fold(targets, #(core, []), fn(acc, to) {
         let #(core, effects) = acc
         let #(core, more) = dispatch(core, now, to)
@@ -913,23 +932,57 @@ pub fn set_enabled(
       })
     }
     False -> {
-      let core = Core(..core, disabled: set.insert(core.disabled, thread))
-      list.fold(targets, #(core, []), fn(acc, to) {
-        let #(core, effects) = acc
-        let r = get_recipient(core, to)
-        let core = put_recipient(core, to, Recipient(..r, queue: []))
-        let #(core, more) =
-          settle(
-            core,
-            r.queue,
-            Rejected,
-            "the recipient turned off session messages",
-            "",
-          )
-        #(core, list.append(effects, more))
-      })
+      let core =
+        Core(
+          ..core,
+          disabled: set.insert(core.disabled, thread),
+          allowed: set.delete(core.allowed, thread),
+        )
+      reject_queued(core, targets)
     }
   }
+}
+
+/// Change what sessions without an explicit choice do. Turning the default
+/// off rejects what is queued for them, as turning one session off does.
+pub fn set_accept_by_default(
+  core: Core,
+  now: Int,
+  accept: Bool,
+) -> #(Core, List(Effect)) {
+  let core = Core(..core, accept_by_default: accept)
+  let following =
+    dict.keys(core.recipients)
+    |> list.filter(fn(to) {
+      !set.contains(core.disabled, to.thread)
+      && !set.contains(core.allowed, to.thread)
+    })
+  case accept {
+    False -> reject_queued(core, following)
+    True ->
+      list.fold(following, #(core, []), fn(acc, to) {
+        let #(core, effects) = acc
+        let #(core, more) = dispatch(core, now, to)
+        #(core, list.append(effects, more))
+      })
+  }
+}
+
+fn reject_queued(core: Core, targets: List(Address)) -> #(Core, List(Effect)) {
+  list.fold(targets, #(core, []), fn(acc, to) {
+    let #(core, effects) = acc
+    let r = get_recipient(core, to)
+    let core = put_recipient(core, to, Recipient(..r, queue: []))
+    let #(core, more) =
+      settle(
+        core,
+        r.queue,
+        Rejected,
+        "the recipient turned off session messages",
+        "",
+      )
+    #(core, list.append(effects, more))
+  })
 }
 
 // -- Dispatch -----------------------------------------------------------------
@@ -944,7 +997,7 @@ pub fn dispatch(core: Core, now: Int, to: Address) -> #(Core, List(Effect)) {
         || option.is_some(r.reservation)
         || option.is_some(r.recovery)
         || r.awaiting_event
-        || set.contains(core.disabled, to.thread)
+        || !enabled(core, to.thread)
       {
         True -> #(core, [])
         False ->

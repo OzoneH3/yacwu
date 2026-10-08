@@ -99,3 +99,30 @@ test('Claude prompts carry the allowance lockout percentage, hidden from the tra
 	expect(posted[0]).toContain('<!-- YACWU_ALLOWANCE_RESERVE percent=20 -->');
 	await expect(page.locator('.item.user').last()).toHaveText('Check the build');
 });
+
+test('the direct-message default is read from the server and only written on change', async ({ page }) => {
+	await mock(page);
+	const writes: unknown[] = [];
+	let accept = true;
+	await page.route('**/api/relay-settings', async (route) => {
+		if (route.request().method() === 'POST') {
+			const body = route.request().postDataJSON();
+			writes.push(body);
+			accept = body.acceptByDefault;
+		}
+		await route.fulfill({ json: { acceptByDefault: accept } });
+	});
+	await page.goto('/s/settings-a');
+	await openSettings(page);
+	const toggle = page.getByLabel('Default: accept direct messages from other sessions');
+	await expect(toggle).toBeEnabled();
+	await expect(toggle).toBeChecked();
+	expect(writes).toEqual([]);
+	await toggle.uncheck();
+	await expect.poll(() => writes).toEqual([{ acceptByDefault: false }]);
+	await page.getByRole('button', { name: 'Close settings' }).click();
+	await openSettings(page);
+	await expect(page.getByLabel('Default: accept direct messages from other sessions')).not.toBeChecked();
+	expect(writes).toHaveLength(1);
+});
+
