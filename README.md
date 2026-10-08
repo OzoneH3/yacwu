@@ -121,9 +121,10 @@ state lives entirely in Codex's own persistent sessions, read back via
 - 🧭 Transcript position rail for jumping between messages, with a scroll-to-bottom
   control whenever the latest message is out of view
 - 📋 Responses with file links offer **Copy files** beside the message copy
-  button. It copies each unique linked file in response order, with a filename
-  heading followed by its contents. Unreadable files report an error and leave
-  the clipboard unchanged; folder links include their directory listing.
+  button. It copies each unique file linked using Markdown in response order,
+  with a filename heading followed by its contents. Plain paths in backticks
+  and directory links are excluded. Unreadable files report an error and leave
+  the clipboard unchanged.
 - ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
   prompt history with the Codex TUI's shell-style recall semantics
 - 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when

@@ -162,13 +162,12 @@ export function parseCodexMarkdown(markdown: string): MarkdownBlock[] {
 	return blockTokens(marked.lexer(markdown.replace(/^[\u200B-\u200F\uFEFF]/, ''), { gfm: true }));
 }
 
-/** File references in display order; ignore images, web links and fenced code. */
+/** Explicit local Markdown links in display order; ignore images and code paths. */
 export function markdownFileReferences(markdown: string): Array<{ text: string; requireSeparator: boolean }> {
 	const references: Array<{ text: string; requireSeparator: boolean }> = [];
 	function inlines(tokens: MarkdownInline[]) {
 		for (const token of tokens) {
 			if (token.type === 'link' && !token.external && token.href) references.push({ text: token.href, requireSeparator: false });
-			else if (token.type === 'code') references.push({ text: token.text, requireSeparator: true });
 			if ('children' in token && token.type !== 'link') inlines(token.children);
 		}
 	}

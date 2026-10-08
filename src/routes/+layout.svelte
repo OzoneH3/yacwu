@@ -4052,12 +4052,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const filename = target.root ? `${target.root.replace(/\/$/, '')}/${target.path}` : target.path;
 				try {
 					const data = await readWorkspaceLink(id, target.path, host, fetch, target.root ?? undefined);
+					if (data.directory) continue;
 					if (!data.copyable) throw new Error('Cannot copy this file as text');
 					sections.push(`## ${filename}\n\n${data.content}`);
 				} catch (error) {
 					throw new Error(`${filename}: ${error instanceof Error ? error.message : 'Could not read file'}`);
 				}
 			}
+			if (!sections.length) throw new Error('No linked text files to copy. Directory links are skipped.');
 			await navigator.clipboard.writeText(sections.join('\n\n'));
 			agentFileCopyStatus[key] = 'copied';
 		} catch (error) {
