@@ -537,14 +537,14 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 		const startedAt = threads[id]?.turnStartedAt;
 		const elapsed = threads[id]?.status === 'running' && startedAt !== null && startedAt !== undefined
 			? activityClock - startedAt : 0;
-		return formatEstimatedRemaining(estimateRemainingMinutes(progress.percent, progress.remainingMinutes, elapsed));
+		return formatEstimatedRemaining(estimateRemainingMinutes(progress.percent, progress.remainingMinutes, elapsed, isClaudeSession(id)));
 	}
 	const activeTaskProgress = $derived.by(() => {
 		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
 		const progress = taskProgressForSession(activeId);
 		const startedAt = threads[activeId]?.turnStartedAt;
 		return progress && startedAt !== null && startedAt !== undefined
-			? { ...progress, remainingMinutes: estimateRemainingMinutes(progress.percent, progress.remainingMinutes, activityClock - startedAt) }
+			? { ...progress, remainingMinutes: estimateRemainingMinutes(progress.percent, progress.remainingMinutes, activityClock - startedAt, isClaudeSession(activeId)) }
 			: progress;
 	});
 	const activeUsageAnalysis = $derived(usageAnalysisByHost[activeHost] ?? null);
@@ -853,6 +853,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	/** The host a session runs on: its summary's tag, the URL hint, or local. */
+	/** Claude sessions get their stated time-left checked against the elapsed pace. */
+	function isClaudeSession(id: string | null): boolean {
+		const host = sessionHost(id);
+		return hostChoices.some((entry) => entry.name === host && entry.provider === 'claude');
+	}
+
 	function sessionHost(id: string | null): string {
 		if (!id) return LOCAL_HOST;
 		const summary = sessions.find((s) => s.id === id);
@@ -3847,7 +3853,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function progressEntryRemaining(item: any, index: number): number | null {
 		let elapsed = 0;
 		if (item.turnId && item.turnId === viewed?.turnId && viewed?.turnStartedAt !== null && viewed?.turnStartedAt !== undefined) {
-			elapsed = activityClock - viewed.turnStartedAt;
+			// Judge each entry by the time it was reported, so it does not drift.
+			elapsed = (typeof item.at === 'number' ? item.at : activityClock) - viewed.turnStartedAt;
 		} else if (item.turnId && typeof item.at === 'number') {
 			for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
 				const previous = viewedItems[previousIndex] as any;
@@ -3858,7 +3865,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				}
 			}
 		}
-		return estimateRemainingMinutes(item.percent, item.remainingMinutes, elapsed);
+		return estimateRemainingMinutes(item.percent, item.remainingMinutes, elapsed, isClaudeSession(activeId));
 	}
 
 	function chooseAttachments() {

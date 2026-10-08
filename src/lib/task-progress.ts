@@ -67,11 +67,27 @@ export function separateTaskProgressEntries<T extends { type: string; id: string
 }
 
 /** Estimate remaining minutes from observed elapsed time when the agent omits it. */
-export function estimateRemainingMinutes(percent: number, explicitMinutes: number | null, elapsedMs: number): number | null {
-	if (explicitMinutes !== null) return explicitMinutes;
-	if (percent >= 100) return 0;
-	if (percent <= 0 || elapsedMs < 30_000) return null;
-	return Math.max(1, Math.ceil((elapsedMs * (100 - percent)) / percent / 60_000));
+/**
+ * Minutes left for display. A stated estimate is shown as given, unless
+ * `calibrate` is set: then, once the task has real progress (10% and a
+ * minute in), a stated figure that disagrees with the elapsed-time pace by
+ * more than about 2× is replaced by that pace. Claude cannot see elapsed
+ * time and tends to anchor its minutes on an upfront guess, while its
+ * percentage tracks the work done.
+ */
+export function estimateRemainingMinutes(
+	percent: number,
+	explicitMinutes: number | null,
+	elapsedMs: number,
+	calibrate = false
+): number | null {
+	const paced = percent > 0 && percent < 100 && elapsedMs >= 30_000
+		? Math.max(1, Math.ceil((elapsedMs * (100 - percent)) / percent / 60_000))
+		: null;
+	if (explicitMinutes === null) return percent >= 100 ? 0 : paced;
+	if (!calibrate || paced === null || percent < 10 || elapsedMs < 60_000) return explicitMinutes;
+	const inconsistent = explicitMinutes > paced * 2 + 2 || explicitMinutes * 2 + 2 < paced;
+	return inconsistent ? paced : explicitMinutes;
 }
 
 /** Keep protocol markers out of the visible assistant transcript. */

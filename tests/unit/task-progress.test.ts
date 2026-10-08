@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	estimateRemainingMinutes,
 	parseTaskProgress,
 	separateTaskProgressEntries,
 	stripTaskProgressMarkers,
@@ -50,5 +51,25 @@ describe('task progress reporting', () => {
 			{ type: 'agentMessage', id: 'reply-1', text: 'Working on it.' },
 			{ type: 'taskProgress', id: 'progress-reply-1', percent: 55, remainingMinutes: 4 }
 		]);
+	});
+
+	test('stated time left is shown as given unless calibrated', () => {
+		const min = 60_000;
+		// Codex sessions: the model's figure, verbatim.
+		expect(estimateRemainingMinutes(70, 80, 10 * min)).toBe(80);
+		// Claude: 70% done after 10 minutes cannot have 80 minutes left.
+		expect(estimateRemainingMinutes(70, 80, 10 * min, true)).toBe(5);
+		// Understatement is corrected too.
+		expect(estimateRemainingMinutes(20, 2, 10 * min, true)).toBe(40);
+		// A plausible figure is kept, including one the pace cannot foresee.
+		expect(estimateRemainingMinutes(70, 8, 10 * min, true)).toBe(8);
+		expect(estimateRemainingMinutes(50, 15, 10 * min, true)).toBe(15);
+		// Too early to judge the pace: keep the stated figure.
+		expect(estimateRemainingMinutes(5, 90, 10 * min, true)).toBe(90);
+		expect(estimateRemainingMinutes(40, 90, 50_000, true)).toBe(90);
+		// No stated figure: the pace, as before; finished is zero.
+		expect(estimateRemainingMinutes(70, null, 10 * min, true)).toBe(5);
+		expect(estimateRemainingMinutes(100, null, 10 * min, true)).toBe(0);
+		expect(estimateRemainingMinutes(100, 0, 10 * min, true)).toBe(0);
 	});
 });
