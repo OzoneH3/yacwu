@@ -489,6 +489,10 @@ minutes without an estimate, only if other task activity occurred in those five
 minutes. Reminders are sent at most once every five minutes and are hidden from
 the transcript, including after reload.
 
+Claude work is stopped and new tasks are blocked when either the five-hour or
+seven-day allowance reaches 90% used. If both readings are unavailable, new
+tasks remain blocked until the allowance can be verified.
+
 Logs live in `$XDG_STATE_HOME/yacwu/diagnostics` (default
 `~/.local/state/yacwu/diagnostics`). Set `YACWU_DIAGNOSTICS_DIR` to override it.
 Each host has a `codex-*.jsonl` metadata log and a `codex-*.stderr.log` log.

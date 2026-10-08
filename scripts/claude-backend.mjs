@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { createClaudeUsageReader, normalizeClaudeTokenUsage, readClaudeCredentials } from './claude-usage.mjs';
 import { createClaudeTurnRouter } from './claude-routing.mjs';
 import { createClaudeProgressReminders } from './claude-progress.mjs';
+import { createClaudeQuotaGuard } from './claude-quota-guard.mjs';
 
 /**
  * Supplement CLI aliases with concrete IDs available to the signed-in account.
@@ -109,10 +110,20 @@ async function main() {
   const args = process.argv.slice(3);
   const child = spawn(process.execPath, [adapterPath, ...(args.length ? args : ['app-server', '--listen', 'stdio://'])], { stdio: ['pipe', 'pipe', 'inherit'], env });
   const readUsage = createClaudeUsageReader();
+  const quota = createClaudeQuotaGuard(readUsage,
+    (message) => child.stdin.write(`${JSON.stringify(message)}\n`),
+    (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`));
+  const quotaTimer = setInterval(() => void quota.poll(), 30000);
+  /** @param {import('./claude-routing.mjs').RpcMessage | undefined} message @param {string} line */
+  async function forward(message, line) {
+    if (!await quota.allow(message)) return;
+    progress.request(message);
+    child.stdin.write(`${line}\n`);
+  }
   const progress = createClaudeProgressReminders((message) => child.stdin.write(`${JSON.stringify(message)}\n`));
   const reminderTimer = setInterval(() => progress.tick(), 15000);
   const routing = createClaudeTurnRouter(
-    (message) => { progress.request(message); child.stdin.write(`${JSON.stringify(message)}\n`); },
+    (message) => { void forward(message, JSON.stringify(message)); },
     (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
   );
   const input = createInterface({ input: process.stdin });
@@ -123,14 +134,14 @@ async function main() {
     if (request?.method === 'account/rateLimits/read' && request.id != null) {
       void readUsage().then((result) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result })}\n`));
     } else if (!routing.request(request)) {
-      progress.request(request);
-      child.stdin.write(`${line}\n`);
+      void forward(request, line);
     }
   });
   input.on('close', () => child.stdin.end());
   output.on('line', (line) => {
     try {
       const message = JSON.parse(line);
+      if (quota.observe(message)) return;
       if (progress.observe(message)) return;
       if (routing.response(message)) return;
       line = JSON.stringify(normalizeClaudeTokenUsage(message));
@@ -139,8 +150,8 @@ async function main() {
   });
   child.stdin.on('error', () => input.close());
   for (const signal of /** @type {NodeJS.Signals[]} */ (['SIGTERM', 'SIGINT'])) process.on(signal, () => child.kill(signal));
-  child.on('error', (error) => { clearInterval(reminderTimer); progress.close(); input.close(); process.stdin.pause(); console.error(error.message); process.exitCode = 1; });
-  child.on('exit', (code, signal) => { clearInterval(reminderTimer); progress.close(); routing.close(); input.close(); process.stdin.pause(); process.exitCode = code ?? (signal ? 1 : 0); });
+  child.on('error', (error) => { clearInterval(quotaTimer); quota.close(); clearInterval(reminderTimer); progress.close(); input.close(); process.stdin.pause(); console.error(error.message); process.exitCode = 1; });
+  child.on('exit', (code, signal) => { clearInterval(quotaTimer); quota.close(); clearInterval(reminderTimer); progress.close(); routing.close(); input.close(); process.stdin.pause(); process.exitCode = code ?? (signal ? 1 : 0); });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
