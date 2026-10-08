@@ -1,15 +1,15 @@
-# Yacwu — Codex & Claude Web Workspace
+# Yacwu — Yet Another Coding Workspace UI
 
 > [!NOTE]
 > This repository continues development of [the original Yacwu by AFK-surf](https://github.com/AFK-surf/yacwu), with additional features and fixes. Credit to the original authors; their MIT license and copyright notice are preserved.
 
-**One workspace for Codex and Claude** — a focused web front-end for
+**A workspace for Codex and Claude** — a focused web front-end for
 [Codex](https://developers.openai.com/codex) and, through an optional
 [Claude adapter](#alternative-backends), Claude Code. Built with a
 **Gleam (BEAM/OTP)** backend and a **Svelte** SPA front-end.
 
-The name originally stood for **Yet Another Codex Web UI**. Yacwu keeps that
-heritage while bringing both providers into the same browser workspace.
+Originally **Yet Another Codex Web UI**, Yacwu is now **Yet Another Coding
+Workspace UI**, bringing both providers into the same browser workspace.
 
 It talks to Codex directly, and Claude through an adapter, over the
 [app-server protocol](docs/codex-app-server.md) (JSON-RPC 2.0 over stdio).
