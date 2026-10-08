@@ -349,7 +349,14 @@ session for GPT models; Claude sessions keep their Claude choices.
 The Claude launcher discovers the installed Agent SDK's supported models on
 backend startup without submitting a prompt. It labels aliases with their
 resolved versions (rather than hard-coding model releases), and disables
-the adapter's Codex proxy. Discovery failures fall back to the adapter's
+the adapter's Codex proxy.
+
+For Claude turns, the launcher synchronizes the adapter's model/runtime settings
+before forwarding the prompt. This also fixes older adapter sessions that retained
+a Codex runtime despite selecting a Claude model. If synchronization fails, the
+prompt is not started; it is never silently sent to the GPT runtime instead.
+
+Discovery failures fall back to the adapter's
 aliases; an explicit `CLAUDE_CODEX_MODELS` configuration is respected. The
 adapter must be built with its SDK dependency installed before launching.
 You can still invoke the adapter directly if you do not want discovery.
