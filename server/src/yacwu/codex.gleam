@@ -119,6 +119,39 @@ pub type Transport {
 pub type Reply =
   Result(Dynamic, String)
 
+/// Why a tracked request produced no result. The variants separate what is
+/// known about acceptance: only `NotSent` proves the backend never saw the
+/// request; `Rejected` carries the backend's own answer; `Lost` and `Expired`
+/// mean it may have been written and acted on.
+pub type Failure {
+  /// Never written to the backend (deadline passed or the connection failed
+  /// while the request was still queued, or no manager was running).
+  NotSent(reason: String)
+  /// The backend answered with a JSON-RPC error.
+  Rejected(code: Int, message: String)
+  /// Possibly written; the connection was lost before an answer arrived.
+  Lost(reason: String)
+  /// Possibly written; the deadline passed before an answer arrived. A later
+  /// answer is dropped. The backend is not told to cancel anything.
+  Expired
+}
+
+/// The outcome of a tracked request and the connection generation it was
+/// written on (0 when it was never written).
+pub type TrackedReply {
+  TrackedReply(generation: Int, result: Result(Dynamic, Failure))
+}
+
+/// Connection and turn lifecycle, for in-process subscribers that need to
+/// correlate events with the connection they came from. Generations are
+/// unique for the VM's lifetime, so a restarted manager never reuses one.
+pub type Lifecycle {
+  Connected(host: String, generation: Int)
+  Disconnected(host: String, generation: Int)
+  TurnStarted(host: String, generation: Int, thread: String, turn: String)
+  TurnCompleted(host: String, generation: Int, thread: String, turn: String)
+}
+
 /// Host connection details for /api/hosts, remote workspace operations,
 /// and the UI. `codex_home` and `socket` are only known for SSH transports
 /// once a bootstrap has run ("" until then, and always "" for local).
@@ -134,8 +167,17 @@ pub type HostInfo {
 
 pub opaque type Msg {
   Request(method: String, params: Json, reply: Subject(Reply))
+  TrackedRequest(
+    method: String,
+    params: Json,
+    deadline: Int,
+    ticket: Int,
+    reply: Subject(TrackedReply),
+  )
+  Expire(ticket: Int)
   Notify(method: String, params: Json)
   Subscribe(owner: Pid, subject: Subject(String))
+  SubscribeLifecycle(owner: Pid, subject: Subject(Lifecycle))
   GetOsPid(reply: Subject(Result(Int, Nil)))
   GetInfo(reply: Subject(HostInfo))
   OpenForwarder(
@@ -172,6 +214,79 @@ pub fn default_cwd() -> String {
 
 fn local_home() -> String {
   envoy.get("HOME") |> result.unwrap("/")
+}
+
+type TimeUnit {
+  Millisecond
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn erl_monotonic_time(unit: TimeUnit) -> Int
+
+type UniqueOption {
+  Monotonic
+  Positive
+}
+
+@external(erlang, "erlang", "unique_integer")
+fn unique_integer(options: List(UniqueOption)) -> Int
+
+/// Monotonic milliseconds, the clock tracked-request deadlines use.
+pub fn now_ms() -> Int {
+  erl_monotonic_time(Millisecond)
+}
+
+/// Send a request whose whole lifetime — queued before a connection is
+/// ready, then pending on the wire — is bounded by `timeout_ms`. Unlike
+/// `request`, failures say whether the request can have reached the
+/// backend; see `Failure`. The manager answers by the deadline on its own,
+/// so a caller never waits much past it.
+pub fn request_tracked(
+  codex: Codex,
+  method: String,
+  params: Json,
+  timeout_ms: Int,
+) -> TrackedReply {
+  case process.named(codex) {
+    Error(_) -> TrackedReply(0, Error(NotSent("codex manager is not running")))
+    Ok(_) -> {
+      let ticket = unique_integer([Monotonic, Positive])
+      let deadline = now_ms() + timeout_ms
+      case
+        exception.rescue(fn() {
+          process.call(
+            process.named_subject(codex),
+            timeout_ms + 5000,
+            TrackedRequest(method, params, deadline, ticket, _),
+          )
+        })
+      {
+        Ok(reply) -> reply
+        // The manager died (or stopped answering) after the request was
+        // handed over: it may already have written it.
+        Error(_) ->
+          TrackedReply(0, Error(Lost("codex manager stopped before replying")))
+      }
+    }
+  }
+}
+
+/// Receive this manager's connection and turn lifecycle. Idempotent per
+/// owner; dropped automatically when `owner` exits. A subscriber that joins
+/// while connected is told the current generation straight away.
+pub fn subscribe_lifecycle(
+  codex: Codex,
+  owner: Pid,
+  subject: Subject(Lifecycle),
+) -> Nil {
+  let _ =
+    exception.rescue(fn() {
+      process.send(
+        process.named_subject(codex),
+        SubscribeLifecycle(owner, subject),
+      )
+    })
+  Nil
 }
 
 /// Send a JSON-RPC request to codex and wait for its response.
@@ -286,13 +401,24 @@ pub fn start(
 
 // -- Internal state -----------------------------------------------------------
 
-type Queued =
-  #(String, Json, Subject(Reply))
+/// A request waiting for the connection to become ready. It has not been
+/// written anywhere yet.
+type Queued {
+  Queued(method: String, params: Json, waiter: Waiter)
+}
+
+type Waiter {
+  Plain(reply: Subject(Reply))
+  /// `deadline` is absolute (`now_ms`); `ticket` identifies the request
+  /// before it has a wire id.
+  Tracked(ticket: Int, deadline: Int, reply: Subject(TrackedReply))
+}
 
 /// Whoever waits on a pending request: an HTTP caller, or nobody (requests
 /// the manager sends on its own behalf, like post-reconnect re-resumes).
 type ReplyTo {
   Caller(Subject(Reply))
+  TrackedCaller(ticket: Int, reply: Subject(TrackedReply))
   Discard
 }
 
@@ -302,6 +428,8 @@ type Pending {
     thread: Option(String),
     reply_to: ReplyTo,
     started_at: Int,
+    /// The connection generation the request was written on.
+    generation: Int,
   )
 }
 
@@ -344,6 +472,13 @@ type State {
     silent_alerted: List(String),
     last_diagnostic_at: Int,
     last_received_at: Int,
+    /// Unique id of the current initialized connection; 0 while there is
+    /// none. Lets subscribers tell events and replies from different
+    /// connections apart.
+    generation: Int,
+    /// Tracked tickets already written, mapped to their wire ids.
+    tickets: Dict(Int, Int),
+    lifecycle: List(#(Pid, Subject(Lifecycle))),
   )
 }
 
@@ -374,6 +509,9 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     silent_alerted: [],
     last_diagnostic_at: 0,
     last_received_at: 0,
+    generation: 0,
+    tickets: dict.new(),
+    lifecycle: [],
   )
 }
 
@@ -405,7 +543,52 @@ fn classify_other(message: Dynamic) -> Msg {
 
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
-    Request(method, params, reply) -> on_request(state, method, params, reply)
+    Request(method, params, reply) ->
+      on_request(state, Queued(method, params, Plain(reply)))
+    TrackedRequest(method, params, deadline, ticket, reply) -> {
+      let now = now_ms()
+      case deadline <= now {
+        True -> {
+          process.send(
+            reply,
+            TrackedReply(0, Error(NotSent("deadline passed before sending"))),
+          )
+          actor.continue(state)
+        }
+        False -> {
+          let _ =
+            process.send_after(
+              process.named_subject(state.self),
+              deadline - now,
+              Expire(ticket),
+            )
+          on_request(
+            state,
+            Queued(method, params, Tracked(ticket, deadline, reply)),
+          )
+        }
+      }
+    }
+    Expire(ticket) -> actor.continue(expire(state, ticket))
+    SubscribeLifecycle(owner, subject) -> {
+      let state = case list.any(state.lifecycle, fn(s) { s.0 == owner }) {
+        True ->
+          State(..state, lifecycle: [
+            #(owner, subject),
+            ..list.filter(state.lifecycle, fn(s) { s.0 != owner })
+          ])
+        False -> {
+          let _ = process.monitor(owner)
+          State(..state, lifecycle: [#(owner, subject), ..state.lifecycle])
+        }
+      }
+      case state.status, state.generation {
+        Running(_), generation if generation != 0 ->
+          process.send(subject, Connected(state.label, generation))
+        _, _ -> Nil
+      }
+      actor.continue(state)
+    }
     Notify(method, params) -> {
       case state.status {
         Running(conn) | Initializing(conn, _, _) ->
@@ -446,6 +629,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             State(
               ..state,
               subscribers: list.filter(state.subscribers, fn(s) { s.0 != pid }),
+              lifecycle: list.filter(state.lifecycle, fn(s) { s.0 != pid }),
             ),
           )
       }
@@ -660,31 +844,104 @@ fn sample_usage(state: State) -> State {
   }
 }
 
-fn on_request(
-  state: State,
-  method: String,
-  params: Json,
-  reply: Subject(Reply),
-) -> actor.Next(State, Msg) {
+fn on_request(state: State, request: Queued) -> actor.Next(State, Msg) {
   case state.status {
-    NotRunning -> begin_connect(state, [#(method, params, reply)])
+    NotRunning -> begin_connect(state, [request])
     Connecting(queued) ->
-      actor.continue(
-        State(..state, status: Connecting([#(method, params, reply), ..queued])),
-      )
+      actor.continue(State(..state, status: Connecting([request, ..queued])))
     Initializing(conn, init_id, queued) ->
       actor.continue(
-        State(
-          ..state,
-          status: Initializing(conn, init_id, [
-            #(method, params, reply),
-            ..queued
-          ]),
-        ),
+        State(..state, status: Initializing(conn, init_id, [request, ..queued])),
       )
-    Running(conn) ->
-      actor.continue(send_request(state, conn, method, params, Caller(reply)))
+    Running(conn) -> actor.continue(dispatch_queued(state, conn, request))
   }
+}
+
+/// Write one request that was waiting (or arrived while connected). A
+/// tracked request whose deadline has already passed is never written: its
+/// `Expire` may still be in the mailbox behind the event that made the
+/// connection ready.
+fn dispatch_queued(state: State, conn: Conn, request: Queued) -> State {
+  let Queued(method, params, waiter) = request
+  case waiter {
+    Plain(reply) -> send_request(state, conn, method, params, Caller(reply))
+    Tracked(ticket, deadline, reply) ->
+      case deadline <= now_ms() {
+        True -> {
+          process.send(
+            reply,
+            TrackedReply(0, Error(NotSent("deadline passed before sending"))),
+          )
+          state
+        }
+        False -> {
+          let id = state.next_id
+          let state =
+            send_request(
+              state,
+              conn,
+              method,
+              params,
+              TrackedCaller(ticket, reply),
+            )
+          State(..state, tickets: dict.insert(state.tickets, ticket, id))
+        }
+      }
+  }
+}
+
+/// A tracked request's deadline passed. Still queued: it was never written,
+/// so drop it and say so. Pending: it may have been written; stop waiting
+/// and report that, leaving any later answer to be dropped. The backend is
+/// not asked to cancel anything.
+fn expire(state: State, ticket: Int) -> State {
+  let is_ticket = fn(request: Queued) {
+    case request.waiter {
+      Tracked(t, _, _) -> t == ticket
+      Plain(_) -> False
+    }
+  }
+  let not_sent = fn(queued: List(Queued)) {
+    list.each(queued, fn(request) {
+      case request.waiter {
+        Tracked(t, _, reply) if t == ticket ->
+          process.send(
+            reply,
+            TrackedReply(0, Error(NotSent("deadline passed before sending"))),
+          )
+        _ -> Nil
+      }
+    })
+    list.filter(queued, fn(request) { !is_ticket(request) })
+  }
+  case state.status {
+    Connecting(queued) -> State(..state, status: Connecting(not_sent(queued)))
+    Initializing(conn, init_id, queued) ->
+      State(..state, status: Initializing(conn, init_id, not_sent(queued)))
+    _ ->
+      case dict.get(state.tickets, ticket) {
+        Error(_) -> state
+        Ok(id) -> {
+          let state =
+            State(..state, tickets: dict.delete(state.tickets, ticket))
+          case dict.get(state.pending, id) {
+            Ok(Pending(method, _, TrackedCaller(_, reply), _, generation)) -> {
+              diagnostics.record(state.label, oauth.now(), "rpc_expired", [
+                #("id", json.int(id)),
+                #("method", json.string(method)),
+              ])
+              process.send(reply, TrackedReply(generation, Error(Expired)))
+              State(..state, pending: dict.delete(state.pending, id))
+            }
+            _ -> state
+          }
+        }
+      }
+  }
+}
+
+fn emit_lifecycle(state: State, event: Lifecycle) -> Nil {
+  list.each(state.lifecycle, fn(s) { process.send(s.1, event) })
 }
 
 /// Send one request over the wire and track its pending reply.
@@ -729,7 +986,13 @@ fn send_request(
     pending: dict.insert(
       state.pending,
       id,
-      Pending(method, request_thread_id(method, params), reply_to, at),
+      Pending(
+        method,
+        request_thread_id(method, params),
+        reply_to,
+        at,
+        state.generation,
+      ),
     ),
   )
 }
@@ -914,7 +1177,7 @@ fn on_conn_result(
     }
     Connecting(queued), Error(message) -> {
       io.println_error("[codex " <> state.label <> "] connect: " <> message)
-      list.each(queued, fn(q) { process.send(q.2, Error(message)) })
+      fail_queued(queued, message)
       let state =
         State(
           ..state,
@@ -1036,6 +1299,23 @@ fn process_line(state: State, line: BitArray) -> State {
             "turn/started" | "turn/completed" -> sample_usage(state)
             _ -> state
           }
+          case
+            method,
+            jsonx.field_string(msg, ["params", "threadId"]),
+            jsonx.field_string(msg, ["params", "turn", "id"])
+          {
+            "turn/started", Ok(thread), Ok(turn) ->
+              emit_lifecycle(
+                state,
+                TurnStarted(state.label, state.generation, thread, turn),
+              )
+            "turn/completed", Ok(thread), Ok(turn) ->
+              emit_lifecycle(
+                state,
+                TurnCompleted(state.label, state.generation, thread, turn),
+              )
+            _, _, _ -> Nil
+          }
           let state =
             State(
               ..state,
@@ -1134,13 +1414,21 @@ fn on_response(
         Ok(_) -> {
           write_notification(conn, "initialized", json.object([]))
           let state =
-            State(..state, status: Running(conn), backoff: 0, last_error: "")
+            State(
+              ..state,
+              status: Running(conn),
+              backoff: 0,
+              last_error: "",
+              generation: unique_integer([Monotonic, Positive]),
+            )
           let state = broadcast_status(state, "connected", "")
+          // Lifecycle subscribers hear about the new connection before any
+          // reply written on it can reach them through a caller.
+          emit_lifecycle(state, Connected(state.label, state.generation))
           // Flush requests queued while the handshake was in flight.
           let state =
             list.fold(list.reverse(queued), state, fn(state, queued_request) {
-              let #(method, params, reply) = queued_request
-              send_request(state, conn, method, params, Caller(reply))
+              dispatch_queued(state, conn, queued_request)
             })
           // Re-open the threads this manager had loaded before the
           // disconnect, so their notifications flow on this connection too.
@@ -1158,7 +1446,7 @@ fn on_response(
           io.println_error(
             "[codex " <> state.label <> "] initialize failed: " <> message,
           )
-          list.each(queued, fn(q) { process.send(q.2, Error(message)) })
+          fail_queued(queued, message)
           close_conn(conn)
           let state =
             State(
@@ -1176,7 +1464,7 @@ fn on_response(
       }
     _ ->
       case dict.get(state.pending, id) {
-        Ok(Pending(method, thread, reply_to, started_at)) -> {
+        Ok(Pending(method, thread, reply_to, started_at, generation)) -> {
           let at = oauth.now()
           diagnostics.record(state.label, at, "rpc_result", [
             #("id", json.int(id)),
@@ -1204,14 +1492,40 @@ fn on_response(
               state
             }
           }
-          case reply_to {
-            Caller(subject) -> process.send(subject, reply)
-            Discard -> Nil
+          let state = case reply_to {
+            Caller(subject) -> {
+              process.send(subject, reply)
+              state
+            }
+            TrackedCaller(ticket, subject) -> {
+              let result = case error {
+                Ok(err) ->
+                  Error(Rejected(
+                    jsonx.field_int(err, ["code"]) |> result.unwrap(0),
+                    jsonx.field_string(err, ["message"])
+                      |> result.unwrap("codex error"),
+                  ))
+                Error(_) ->
+                  Ok(
+                    decode.run(msg, decode.at(["result"], decode.dynamic))
+                    |> result.unwrap(dynamic.nil()),
+                  )
+              }
+              process.send(subject, TrackedReply(generation, result))
+              State(..state, tickets: dict.delete(state.tickets, ticket))
+            }
+            Discard -> state
           }
           let state = State(..state, pending: dict.delete(state.pending, id))
           track_resumed(state, method, thread, reply_to, reply)
         }
-        Error(_) -> state
+        // Most often the answer to a tracked request that already expired.
+        Error(_) -> {
+          diagnostics.record(state.label, oauth.now(), "late_response", [
+            #("id", json.int(id)),
+          ])
+          state
+        }
       }
   }
 }
@@ -1441,21 +1755,43 @@ fn fail_all(state: State, message: String) -> State {
   dict.each(state.pending, fn(_, pending) {
     case pending.reply_to {
       Caller(subject) -> process.send(subject, failure)
+      TrackedCaller(_, subject) ->
+        process.send(
+          subject,
+          TrackedReply(pending.generation, Error(Lost(message))),
+        )
       Discard -> Nil
     }
   })
   case state.status {
     Initializing(_, _, queued) | Connecting(queued) ->
-      list.each(queued, fn(q) { process.send(q.2, failure) })
+      fail_queued(queued, message)
     _ -> Nil
+  }
+  case state.generation {
+    0 -> Nil
+    generation -> emit_lifecycle(state, Disconnected(state.label, generation))
   }
   State(
     ..state,
     status: NotRunning,
     pending: dict.new(),
+    tickets: dict.new(),
+    generation: 0,
     buffer: <<>>,
     decoder: ws.new_decoder(),
   )
+}
+
+/// Requests still waiting for a connection were never written.
+fn fail_queued(queued: List(Queued), message: String) -> Nil {
+  list.each(queued, fn(request) {
+    case request.waiter {
+      Plain(reply) -> process.send(reply, Error(message))
+      Tracked(_, _, reply) ->
+        process.send(reply, TrackedReply(0, Error(NotSent(message))))
+    }
+  })
 }
 
 fn close_conn(conn: Conn) -> Nil {

@@ -42,6 +42,8 @@ pub opaque type Msg {
   )
   RecordThreads(host: String, threads: List(String))
   SubscribeAll(owner: Pid, subject: Subject(String))
+  SubscribeLifecycle(owner: Pid, subject: Subject(codex.Lifecycle))
+  Lookup(thread: String, reply: Subject(Result(String, Nil)))
   RunningManagers(reply: Subject(List(#(String, Codex))))
   Down(pid: Pid)
 }
@@ -103,6 +105,36 @@ pub fn subscribe_all(
   Nil
 }
 
+/// Subscribe to every manager's connection and turn lifecycle, current and
+/// future. Idempotent per owner; dropped when `owner` exits.
+pub fn subscribe_lifecycle(
+  registry: Registry,
+  owner: Pid,
+  subject: Subject(codex.Lifecycle),
+) -> Nil {
+  let _ =
+    exception.rescue(fn() {
+      process.send(
+        process.named_subject(registry),
+        SubscribeLifecycle(owner, subject),
+      )
+    })
+  Nil
+}
+
+/// The host a thread was last seen on. Unlike `resolve`, an unknown thread
+/// is an error rather than a fallback to local.
+pub fn lookup(registry: Registry, thread: String) -> Result(String, Nil) {
+  case
+    exception.rescue(fn() {
+      process.call(process.named_subject(registry), 5000, Lookup(thread, _))
+    })
+  {
+    Ok(found) -> found
+    Error(_) -> Error(Nil)
+  }
+}
+
 /// The managers currently running, for cross-host aggregation.
 pub fn running(registry: Registry) -> List(#(String, Codex)) {
   case
@@ -123,6 +155,7 @@ type State {
     names: Dict(String, Codex),
     threads: Dict(String, String),
     subscribers: List(#(Pid, Subject(String))),
+    lifecycle: List(#(Pid, Subject(codex.Lifecycle))),
   )
 }
 
@@ -157,6 +190,7 @@ fn start(name: Registry) -> actor.StartResult(Subject(Msg)) {
         names: dict.new(),
         threads: dict.new(),
         subscribers: [],
+        lifecycle: [],
       )
     // The local manager always exists, and configured backends start with
     // it so their sessions appear in the merged thread rail.
@@ -227,6 +261,31 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         }
       }
     }
+    SubscribeLifecycle(owner, subject) -> {
+      // Managers dedupe per owner themselves, so re-subscribing (after a
+      // registry restart, say) is safe.
+      dict.each(state.managers, fn(_, manager) {
+        codex.subscribe_lifecycle(manager.0, owner, subject)
+      })
+      let known = list.any(state.lifecycle, fn(s) { s.0 == owner })
+      case known {
+        True -> Nil
+        False -> {
+          let _ = process.monitor(owner)
+          Nil
+        }
+      }
+      actor.continue(
+        State(..state, lifecycle: [
+          #(owner, subject),
+          ..list.filter(state.lifecycle, fn(s) { s.0 != owner })
+        ]),
+      )
+    }
+    Lookup(thread, reply) -> {
+      process.send(reply, dict.get(state.threads, thread))
+      actor.continue(state)
+    }
     RunningManagers(reply) -> {
       process.send(
         reply,
@@ -243,6 +302,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             manager.1 != pid
           }),
           subscribers: list.filter(state.subscribers, fn(s) { s.0 != pid }),
+          lifecycle: list.filter(state.lifecycle, fn(s) { s.0 != pid }),
         ),
       )
   }
@@ -288,6 +348,9 @@ fn start_manager(
       // Existing stream subscribers hear the new host too.
       list.each(state.subscribers, fn(subscriber) {
         codex.subscribe(name, subscriber.0, subscriber.1)
+      })
+      list.each(state.lifecycle, fn(subscriber) {
+        codex.subscribe_lifecycle(name, subscriber.0, subscriber.1)
       })
       Ok(#(
         State(
