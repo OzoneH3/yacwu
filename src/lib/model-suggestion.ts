@@ -1,4 +1,4 @@
-import { filterAndSortModelChoices, modelDisplayProfile, type ModelChoiceSummary } from './model-display';
+import { filterAndSortModelChoices, isClaudeModelCatalog, modelDisplayProfile, type ModelChoiceSummary } from './model-display';
 
 export interface SuggestionModel extends ModelChoiceSummary {
 	efforts: string[];
@@ -12,7 +12,12 @@ export function suggestPromptSettings(prompt: string, models: SuggestionModel[],
 	const demanding = /\b(formal verification|mathematical proof|prove correctness|cryptograph\w*|safety.critical|distributed consensus)\b/i.test(text);
 	const complex = demanding || text.length > 3000 || /\b(architect\w*|refactor\w*|migration|concurrency|race condition|deadlock|root cause|multi.agent|security audit|implement|debug\w*|investigate|benchmark)\b/i.test(text);
 	const simple = !complex && !attachments && text.length < 600 && /\b(rename|typo|spelling|wording|center|colour|color|padding|margin|readme|summari[sz]e|translate|hide|label|button)\b/i.test(text);
-	const target = demanding ? 100 : simple ? 70 : 93;
+	// Each provider's scores are rough task-fit estimates, not a calibrated
+	// cross-provider benchmark. Claude's routine tier is Sonnet, with Opus for
+	// complex work and Fable for the most demanding reasoning.
+	const target = isClaudeModelCatalog(models)
+		? demanding ? 100 : simple ? 60 : complex ? 93 : 84
+		: demanding ? 100 : simple ? 70 : 93;
 	const preferredEffort = demanding ? 'high' : complex ? 'high' : simple ? 'low' : 'medium';
 	const candidates = filterAndSortModelChoices(models);
 	const known = candidates.filter((choice) => modelDisplayProfile(choice));

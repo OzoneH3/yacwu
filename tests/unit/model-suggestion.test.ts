@@ -25,3 +25,17 @@ test('only suggests available models and supported efforts, including unknown ca
 	expect(suggestPromptSettings('Prove correctness', limited)).toMatchObject({ model: 'gpt-6-luna', effort: 'low' });
 	expect(suggestPromptSettings('hello', [{ id: 'custom', displayName: 'Custom', efforts: ['max'], defaultEffort: 'max' }])).toMatchObject({ model: 'custom', effort: 'max' });
 });
+
+test('Claude suggestions use Haiku for scoped edits, Sonnet for routine work, Opus for complexity, and Fable for demanding reasoning', () => {
+	const claude = [
+		{ id: 'opus', displayName: 'Claude Opus 5.5' },
+		{ id: 'sonnet', displayName: 'Claude Sonnet 5' },
+		{ id: 'haiku', displayName: 'Claude Haiku 4.5' },
+		{ id: 'claude-fable-5-1', displayName: 'Claude Fable 5.1' }
+	].map((choice) => ({ ...choice, defaultEffort: 'medium', efforts: ['low', 'medium', 'high'] }));
+	expect(suggestPromptSettings('Center the archive button', claude)).toMatchObject({ model: 'haiku', effort: 'low' });
+	expect(suggestPromptSettings('Help with this', claude)).toMatchObject({ model: 'sonnet', effort: 'medium' });
+	expect(suggestPromptSettings('Investigate a race condition', claude)).toMatchObject({ model: 'opus', effort: 'high' });
+	expect(suggestPromptSettings('Prove correctness of distributed consensus', claude)).toMatchObject({ model: 'claude-fable-5-1', effort: 'high' });
+	expect(suggestPromptSettings('Prove correctness', claude.filter((choice) => choice.id !== 'claude-fable-5-1'))).toMatchObject({ model: 'opus' });
+});

@@ -57,8 +57,12 @@ state lives entirely in Codex's own persistent sessions, read back via
   It uses local text heuristics (no allowance consumed), not project or attachment
   analysis; suggestions are starting points rather than guaranteed best choices.
   Model capability, usage-efficiency, and value indicators appear in the model
-  choices. Value ratings emphasize capability per estimated 1% of Pro allowance used;
-  these are rough Yacwu comparisons, not official benchmark scores. After
+  choices. GPT value ratings emphasize capability per estimated 1% of Pro allowance used;
+  Claude uses published pricing and task-cost evidence as cost proxies.
+  Both catalogs hide rated choices with worse capability/efficiency tradeoffs
+  and sort by efficiency, then capability. These are rough Yacwu estimates,
+  not official benchmark scores or calibrated comparisons between providers;
+  see [rating evidence and methodology](docs/model-ratings.md). After
   selection, the picker shows only the model name. If you change models
   mid-turn, you can stop and restart the current prompt on the newly selected
   model without adding a duplicate prompt to the transcript

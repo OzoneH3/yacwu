@@ -47,7 +47,7 @@ import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-ch
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
-import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog } from '$lib/model-display';
+import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity } from '$lib/model-display';
 
 	let { children } = $props();
 
@@ -397,6 +397,11 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog } 
 		activeConfig && activeId
 			? (sessionModels[activeId]?.find((choice) => choice.id === activeConfig.model) ?? null)
 			: null
+	);
+	const activePickerModel = $derived(
+		activeClaude && activeModelChoice
+			? activeModels.find((choice) => claudeModelIdentity(choice) === claudeModelIdentity(activeModelChoice))?.id ?? activeConfig?.model
+			: activeConfig?.model
 	);
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
@@ -5254,9 +5259,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if activeTodoQueue?.tasks.length}<span class="todo-position">[{activeTodoPosition}/{activeTodoTotal}]</span>{/if}
 					<p>{sessionContextLine}</p>
 						<div class="session-bar-right">
-						{#if activeClaude}
-							<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true} title="Recorded Claude task tokens and runtime. Account allowance percentages are not supplied by this adapter.">Claude usage</button>
-						{/if}
 						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
 							<div class="usage-limits" aria-label={`${activeClaude ? 'Claude' : 'Codex'} usage remaining`}>
 								{#if activeAccountUsage.fiveHour}
@@ -6035,7 +6037,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<ModelSuggestion prompt={input} models={activeModels} attachments={selectedAttachments.length} disabled={modelPending || effortPending || switchingPromptModel} running={active?.status === 'running'} onapply={applySuggestedSettings} />
 								{/key}
 				{#if activeConfig && activeModels.length > 0}
-					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}`}>
+					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${modelDisplayProfile(activeModelChoice)?.estimateBasis ? ` · ${modelDisplayProfile(activeModelChoice)?.estimateBasis}` : ''}`}>
 						<span class="model-picker-copy">
 							<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
 						</span>
@@ -6045,16 +6047,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										<select
 											class="composer-select"
 											aria-label="Model"
-											value={activeConfig.model}
+											value={activePickerModel}
 											disabled={modelPending || effortPending || switchingPromptModel}
 											onchange={(event) => setComposerModel(event.currentTarget)}
 						>
-											{#if !activeModels.some((choice) => choice.id === activeConfig.model)}
+											{#if activeConfig.model !== 'default' && !activeModels.some((choice) => choice.id === activePickerModel)}
 												<option value={activeConfig.model} disabled>{activeModelChoice?.displayName ?? activeConfig.model} · current</option>
 											{/if}
 							{#each activeModels as choice (choice.id)}
 								{@const profile = modelDisplayProfile(choice)}
-								<option value={choice.id}>
+								<option value={choice.id} title={profile?.estimateBasis}>
 									{choice.displayName || choice.id}{profile ? ` · Cap ~${profile.capability} · ${profile.efficiency} · ${profile.valueRating.toFixed(1)}` : ''}
 								</option>
 							{/each}
