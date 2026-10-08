@@ -38,6 +38,8 @@ import yacwu/jsonx
 import yacwu/model_state.{type Store}
 import yacwu/oauth
 import yacwu/profiles
+import yacwu/relay
+import yacwu/relay_core
 import yacwu/remote
 import yacwu/session_lock
 import yacwu/ssh_config
@@ -52,6 +54,10 @@ pub type Context {
     profile_store: profiles.Store,
     static_dir: String,
     auth: auth.Config,
+    relay: relay.Relay,
+    /// Shared secret agents present on `/api/relay/*` (from the file named
+    /// by YACWU_RELAY_AUTH_FILE). Empty disables those routes.
+    relay_credential: String,
   )
 }
 
@@ -114,15 +120,20 @@ fn monotonic_ms() -> Int {
 /// flow (API callers get a plain 401); with forward auth alone the original
 /// 401/403 denials apply. With neither configured requests pass — boot only
 /// gets that far when `YACWU_INSECURE_SKIP_AUTH=1` opted into running open.
-fn gate(
+pub fn gate(
   conf: auth.Config,
-  req: Request(Connection),
+  req: Request(body),
 ) -> Result(Nil, Response(ResponseData)) {
   case request.path_segments(req), conf.oauth {
     // The login endpoints must be reachable while unauthenticated.
     ["oauth", "login"], Some(config) -> Error(oauth_login(req, config))
     ["oauth", "callback"], Some(config) -> Error(oauth_callback(req, config))
     ["oauth", "logout"], Some(_) -> Error(oauth_logout(req))
+    // Agent relay routes authenticate with the relay bearer credential in
+    // their handlers instead (see `relay_authorized`), so agents without a
+    // browser session or proxy header can reach them. Nothing else is
+    // exempt, and the gate never accepts that credential.
+    ["api", "relay", ..], _ -> Ok(Nil)
     _, _ -> {
       let session = case conf.oauth {
         Some(config) ->
@@ -158,7 +169,7 @@ fn gate(
 /// Unauthenticated while OAuth is configured: page loads bounce into the
 /// login flow (remembering where they were headed); API calls get a 401 —
 /// fetch/EventSource would only choke on a cross-origin redirect.
-fn login_required(req: Request(Connection)) -> Response(ResponseData) {
+fn login_required(req: Request(body)) -> Response(ResponseData) {
   case request.path_segments(req), req.method {
     ["api", ..], _ -> json_response(401, error_body("authentication required"))
     _, Get | _, http.Head -> {
@@ -175,7 +186,7 @@ fn login_required(req: Request(Connection)) -> Response(ResponseData) {
 /// Start a login: stash state + PKCE verifier + destination in a short-lived
 /// signed cookie and bounce to the provider's authorization endpoint.
 fn oauth_login(
-  req: Request(Connection),
+  req: Request(body),
   config: oauth.Config,
 ) -> Response(ResponseData) {
   case oauth.endpoints(config) {
@@ -219,7 +230,7 @@ fn oauth_login(
 /// verifier), resolve the user's identity, enforce the allowlist, and set the
 /// session cookie.
 fn oauth_callback(
-  req: Request(Connection),
+  req: Request(body),
   config: oauth.Config,
 ) -> Response(ResponseData) {
   let query = request.get_query(req) |> result.unwrap([])
@@ -286,7 +297,7 @@ fn oauth_callback(
 }
 
 fn complete_login(
-  req: Request(Connection),
+  req: Request(body),
   config: oauth.Config,
   code: String,
   verifier: String,
@@ -317,12 +328,12 @@ fn complete_login(
   }
 }
 
-fn oauth_logout(req: Request(Connection)) -> Response(ResponseData) {
+fn oauth_logout(req: Request(body)) -> Response(ResponseData) {
   redirect("/")
   |> set_auth_cookie(req, oauth.session_cookie, "", 0)
 }
 
-fn cookie_value(req: Request(Connection), name: String) -> Result(String, Nil) {
+fn cookie_value(req: Request(body), name: String) -> Result(String, Nil) {
   request.get_cookies(req) |> list.key_find(name)
 }
 
@@ -336,7 +347,7 @@ fn redirect(location: String) -> Response(ResponseData) {
 /// auth cookies, marking it Secure when the client reached us over HTTPS.
 fn set_auth_cookie(
   resp: Response(ResponseData),
-  req: Request(Connection),
+  req: Request(body),
   name: String,
   value: String,
   max_age: Int,
@@ -354,7 +365,7 @@ fn set_auth_cookie(
 
 /// The scheme the client used, honouring the reverse proxy's
 /// `X-Forwarded-Proto` (mist itself always terminates plain HTTP).
-fn forwarded_scheme(req: Request(Connection)) -> http.Scheme {
+fn forwarded_scheme(req: Request(body)) -> http.Scheme {
   case request.get_header(req, "x-forwarded-proto") {
     Ok("https") -> http.Https
     _ -> http.Http
@@ -364,7 +375,7 @@ fn forwarded_scheme(req: Request(Connection)) -> http.Scheme {
 /// The absolute callback URL registered with the provider: explicit
 /// configuration, or derived from the forwarding headers / Host of this
 /// request.
-fn redirect_uri(req: Request(Connection), config: oauth.Config) -> String {
+fn redirect_uri(req: Request(body), config: oauth.Config) -> String {
   case config.redirect_url {
     Some(url) -> url
     None -> {
@@ -530,6 +541,21 @@ fn dispatch(
       use host, cx <- with_codex(ctx, req, Some(id))
       git_diff(host, cx, req, id)
     }
+    ["api", "relay", "send"], Post ->
+      with_relay_auth(ctx, req, fn() { relay_send(ctx, req) })
+    ["api", "relay", "inbox"], Get ->
+      with_relay_auth(ctx, req, fn() { relay_inbox(ctx, req) })
+    ["api", "relay", "peers"], Get ->
+      with_relay_auth(ctx, req, fn() { relay_peers(ctx, req) })
+    ["api", "relay", "message"], Get ->
+      with_relay_auth(ctx, req, fn() { relay_message(ctx, req) })
+    ["api", "relay", ..], _ ->
+      with_relay_auth(ctx, req, fn() {
+        json_response(404, error_body("unknown relay endpoint"))
+      })
+    ["api", "threads", id, "relay"], Get -> relay_log(ctx, id)
+    ["api", "threads", id, "relay", "settings"], Post ->
+      relay_settings(ctx, req, id)
     ["api", "threads", id, "message"], Post -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       message(ctx, host, cx, req, id)
@@ -794,6 +820,7 @@ fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
     fn(subject) {
       process.send(subject, "{\"method\":\"yacwu/connected\",\"params\":{}}")
       hosts.subscribe_all(ctx.registry, process.self(), subject)
+      relay.subscribe(ctx.relay, process.self(), subject)
       let _ = process.send_after(subject, 15_000, ping)
       subject
     },
@@ -808,6 +835,7 @@ fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
               // Re-subscribing is idempotent and heals the stream if the
               // host registry restarted since the last tick.
               hosts.subscribe_all(ctx.registry, process.self(), subject)
+              relay.subscribe(ctx.relay, process.self(), subject)
               let _ = process.send_after(subject, 15_000, ping)
               actor.continue(subject)
             }
@@ -2368,10 +2396,35 @@ fn message(
     Error(message) -> json_response(400, error_body(message))
     Ok(#([], _)) -> json_response(400, error_body("empty message"))
     Ok(#(input, turn_id)) -> {
+      // Messages queued for this session ride along with the user's own
+      // prompt, as a separate input part after it. Never with a steer: the
+      // relay steers running turns itself.
+      let claim = case turn_id, hosts.is_local(host) {
+        None, True ->
+          relay.claim_start(ctx.relay, relay_core.Address(host, thread_id))
+        _, _ -> None
+      }
+      let input = case claim {
+        Some(claim) ->
+          list.append(input, [
+            json.object([
+              #("type", json.string("text")),
+              #("text", json.string(claim.text)),
+            ]),
+          ])
+        None -> input
+      }
       let params = [
         #("threadId", json.string(thread_id)),
         #("input", json.preprocessed_array(input)),
       ]
+      let params = case claim {
+        Some(claim) ->
+          list.append(params, [
+            #("clientUserMessageId", json.string(claim.submission)),
+          ])
+        None -> params
+      }
       let method = case turn_id {
         Some(turn_id) -> {
           #(
@@ -2433,7 +2486,16 @@ fn message(
           })
         None -> params
       }
-      rpc(cx, method, json.object(params))
+      case claim {
+        None -> rpc(cx, method, json.object(params))
+        Some(claim) -> {
+          relay.dispatching(ctx.relay, claim.submission)
+          let reply =
+            codex.request_tracked(cx, method, json.object(params), 60_000)
+          relay.finish(ctx.relay, claim.submission, reply)
+          tracked_start_response(reply)
+        }
+      }
     }
   }
 }
@@ -2804,5 +2866,492 @@ fn rollback(
         ]),
       )
     _ -> json_response(400, error_body("numTurns must be a positive integer"))
+  }
+}
+
+// -- Session relay ------------------------------------------------------------
+//
+// Agents reach `/api/relay/*` with the shared relay credential (a bearer
+// token read from YACWU_RELAY_AUTH_FILE); the browser reads the delivery log
+// and changes settings through the normal gated `/api/threads/:id/relay`
+// routes. Sender ids are self-reported: any process holding the credential
+// can claim any local session as sender.
+
+/// Constant-time check of `Authorization: Bearer <credential>`.
+pub fn relay_authorized(
+  authorization: Result(String, Nil),
+  credential: String,
+) -> Bool {
+  case credential, authorization {
+    "", _ -> False
+    _, Ok(value) ->
+      case string.split_once(string.trim(value), " ") {
+        Ok(#(scheme, token)) ->
+          string.lowercase(scheme) == "bearer"
+          && crypto.secure_compare(
+            bit_array.from_string(string.trim(token)),
+            bit_array.from_string(credential),
+          )
+        Error(_) -> False
+      }
+    _, Error(_) -> False
+  }
+}
+
+fn with_relay_auth(
+  ctx: Context,
+  req: Request(Connection),
+  handler: fn() -> Response(ResponseData),
+) -> Response(ResponseData) {
+  case
+    relay_authorized(
+      request.get_header(req, "authorization"),
+      ctx.relay_credential,
+    )
+  {
+    True -> handler()
+    False ->
+      json_response(401, error_body("relay credential required"))
+      |> response.set_header("www-authenticate", "Bearer")
+  }
+}
+
+fn relay_provider(host: String) -> relay_core.Provider {
+  case is_claude_backend(host) {
+    True -> relay_core.ClaudeAdapter
+    False -> relay_core.CodexBackend
+  }
+}
+
+/// The host a session lives on. Unknown sessions are looked for in the
+/// local hosts' listings (which also teaches the registry about them);
+/// there is no fallback to "local".
+fn locate(ctx: Context, thread: String) -> Result(String, Nil) {
+  case hosts.lookup(ctx.registry, thread) {
+    Ok(host) -> Ok(host)
+    Error(_) -> {
+      list.each(local_managers(ctx), fn(manager) {
+        let _ = listed_threads(ctx, manager.0, manager.1)
+        Nil
+      })
+      hosts.lookup(ctx.registry, thread)
+    }
+  }
+}
+
+fn local_managers(ctx: Context) -> List(#(String, Codex)) {
+  hosts.running(ctx.registry)
+  |> list.filter(fn(manager) { hosts.is_local(manager.0) })
+}
+
+/// One page of a host's non-archived sessions, recorded in the registry.
+fn listed_threads(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+) -> Result(List(Dynamic), String) {
+  case
+    codex.request_tracked(cx, "thread/list", thread_list_params(False), 10_000)
+  {
+    codex.TrackedReply(_, Ok(page)) -> {
+      let entries =
+        decode.run(page, decode.at(["data"], decode.list(decode.dynamic)))
+        |> result.unwrap([])
+      hosts.record_threads(
+        ctx.registry,
+        host,
+        list.filter_map(entries, jsonx.field_string(_, ["id"])),
+      )
+      Ok(entries)
+    }
+    codex.TrackedReply(_, Error(failure)) -> Error(relay_failure(failure))
+  }
+}
+
+fn relay_failure(failure: codex.Failure) -> String {
+  case failure {
+    codex.NotSent(reason) -> reason
+    codex.Rejected(_, message) -> message
+    codex.Lost(reason) -> reason
+    codex.Expired -> "no answer before the deadline"
+  }
+}
+
+/// Whether `thread` is in the host's archive (the Thread object itself
+/// carries no archived flag; only the archived listing establishes it).
+fn archived(
+  cx: Codex,
+  thread: String,
+  cursor: String,
+  pages: Int,
+) -> Result(Bool, String) {
+  let params = case cursor {
+    "" -> thread_list_params(True)
+    _ ->
+      json.object([
+        #("archived", json.bool(True)),
+        #("limit", json.int(100)),
+        #("sortKey", json.string("updated_at")),
+        #("modelProviders", json.preprocessed_array([])),
+        #("cursor", json.string(cursor)),
+      ])
+  }
+  case codex.request_tracked(cx, "thread/list", params, 10_000) {
+    codex.TrackedReply(_, Error(failure)) -> Error(relay_failure(failure))
+    codex.TrackedReply(_, Ok(page)) -> {
+      let ids =
+        decode.run(
+          page,
+          decode.at(["data"], decode.list(decode.at(["id"], decode.string))),
+        )
+        |> result.unwrap([])
+      let next = jsonx.field_string(page, ["nextCursor"]) |> result.unwrap("")
+      case list.contains(ids, thread), next, pages >= 20 {
+        True, _, _ -> Ok(True)
+        False, "", _ | False, _, True -> Ok(False)
+        False, next, False -> archived(cx, thread, next, pages + 1)
+      }
+    }
+  }
+}
+
+/// POST /api/relay/send {from, to, text, id?}
+fn relay_send(
+  ctx: Context,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  let body = read_json_body(req)
+  let field = fn(name) {
+    jsonx.field_string(body, [name]) |> result.unwrap("") |> string.trim
+  }
+  let text = jsonx.field_string(body, ["text"]) |> result.unwrap("")
+  let id = case field("id") {
+    "" ->
+      "rm-"
+      <> string.lowercase(
+        bit_array.base16_encode(crypto.strong_random_bytes(12)),
+      )
+    id -> id
+  }
+  case field("from"), field("to") {
+    "", _ | _, "" ->
+      json_response(400, error_body("from and to session ids are required"))
+    from, to ->
+      case locate(ctx, to), locate(ctx, from) {
+        Error(_), _ ->
+          json_response(
+            404,
+            error_body(
+              "unknown recipient session; use `peers` to list sessions you can message",
+            ),
+          )
+        _, Error(_) -> json_response(400, error_body("unknown sender session"))
+        Ok(to_host), Ok(from_host) ->
+          case hosts.is_local(to_host) {
+            False ->
+              json_response(
+                400,
+                error_body(
+                  "the recipient runs on a remote machine; the relay only reaches sessions on this machine",
+                ),
+              )
+            True ->
+              case verify_recipient(ctx, to_host, to) {
+                Error(#(status, message)) ->
+                  json_response(status, error_body(message))
+                Ok(Nil) ->
+                  case
+                    relay.send(
+                      ctx.relay,
+                      relay_core.SendInput(
+                        id: id,
+                        from: relay_core.Address(from_host, from),
+                        to: relay_core.Address(to_host, to),
+                        text: text,
+                        provider: relay_provider(to_host),
+                        created_at: oauth.now(),
+                      ),
+                    )
+                  {
+                    Ok(relay_core.Fresh(m)) ->
+                      json_response(
+                        200,
+                        json.object([
+                          #("duplicate", json.bool(False)),
+                          #("message", relay.message_json(m)),
+                        ]),
+                      )
+                    Ok(relay_core.Duplicate(Some(m))) ->
+                      json_response(
+                        200,
+                        json.object([
+                          #("duplicate", json.bool(True)),
+                          #("message", relay.message_json(m)),
+                        ]),
+                      )
+                    Ok(relay_core.Duplicate(None)) ->
+                      json_response(
+                        200,
+                        json.object([
+                          #("duplicate", json.bool(True)),
+                          #("id", json.string(id)),
+                          #("message", json.null()),
+                        ]),
+                      )
+                    Error(reason) -> {
+                      let status = case
+                        string.contains(reason, "already used"),
+                        string.contains(reason, "full")
+                      {
+                        True, _ -> 409
+                        _, True -> 429
+                        _, _ -> 400
+                      }
+                      json_response(status, error_body(reason))
+                    }
+                  }
+              }
+          }
+      }
+  }
+}
+
+/// The recipient must exist, be persistent and not archived.
+fn verify_recipient(
+  ctx: Context,
+  host: String,
+  thread: String,
+) -> Result(Nil, #(Int, String)) {
+  use #(_, cx) <- result.try(
+    hosts.resolve(ctx.registry, Some(host), None)
+    |> result.map_error(fn(message) { #(503, message) }),
+  )
+  let read =
+    codex.request_tracked(
+      cx,
+      "thread/read",
+      json.object([
+        #("threadId", json.string(thread)),
+        #("includeTurns", json.bool(False)),
+      ]),
+      10_000,
+    )
+  case read.result {
+    Error(codex.Rejected(_, message)) ->
+      case relay_core.missing_thread(message) {
+        True -> Error(#(404, "the recipient session does not exist"))
+        False -> Error(#(503, "could not verify the recipient: " <> message))
+      }
+    Error(failure) ->
+      Error(#(503, "could not verify the recipient: " <> relay_failure(failure)))
+    Ok(value) ->
+      case jsonx.field_bool(value, ["thread", "ephemeral"]) {
+        Ok(True) ->
+          Error(#(
+            400,
+            "the recipient is an ephemeral session and cannot be messaged",
+          ))
+        _ ->
+          case archived(cx, thread, "", 0) {
+            Ok(True) -> Error(#(400, "the recipient session is archived"))
+            Ok(False) -> Ok(Nil)
+            Error(message) ->
+              Error(#(503, "could not check the archive: " <> message))
+          }
+      }
+  }
+}
+
+/// GET /api/relay/inbox?session=ID — read-only: listing never consumes.
+fn relay_inbox(
+  ctx: Context,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  let session = query_value(req, "session")
+  case session, relay.for_thread(ctx.relay, session) {
+    "", _ -> json_response(400, error_body("session is required"))
+    _, Error(_) -> json_response(503, error_body("the relay is restarting"))
+    _, Ok(#(epoch, messages)) ->
+      json_response(
+        200,
+        json.object([
+          #("epoch", json.string(epoch)),
+          #(
+            "received",
+            json.preprocessed_array(
+              messages
+              |> list.filter(fn(m) { m.to.thread == session })
+              |> list.map(relay.message_json),
+            ),
+          ),
+          #(
+            "sent",
+            json.preprocessed_array(
+              messages
+              |> list.filter(fn(m) { m.from.thread == session })
+              |> list.map(relay.message_json),
+            ),
+          ),
+        ]),
+      )
+  }
+}
+
+/// GET /api/relay/message?id=ID
+fn relay_message(
+  ctx: Context,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  case relay.get_message(ctx.relay, query_value(req, "id")) {
+    Ok(m) -> json_response(200, relay.message_json(m))
+    Error(_) ->
+      json_response(
+        404,
+        error_body(
+          "no such message (unknown, or no longer retained since a relay restart)",
+        ),
+      )
+  }
+}
+
+/// GET /api/relay/peers?session=ID — other sessions on this machine in the
+/// same project folder. A discovery aid only: sends are not restricted to
+/// these sessions.
+fn relay_peers(
+  ctx: Context,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  let session = query_value(req, "session")
+  case locate(ctx, session) {
+    Error(_) -> json_response(404, error_body("unknown session"))
+    Ok(host) -> {
+      let cwd = case hosts.resolve(ctx.registry, Some(host), None) {
+        Ok(#(_, cx)) ->
+          case
+            codex.request_tracked(
+              cx,
+              "thread/read",
+              json.object([
+                #("threadId", json.string(session)),
+                #("includeTurns", json.bool(False)),
+              ]),
+              10_000,
+            )
+          {
+            codex.TrackedReply(_, Ok(value)) ->
+              jsonx.field_string(value, ["thread", "cwd"]) |> result.unwrap("")
+            _ -> ""
+          }
+        Error(_) -> ""
+      }
+      let peers =
+        local_managers(ctx)
+        |> list.flat_map(fn(manager) {
+          let #(peer_host, cx) = manager
+          listed_threads(ctx, peer_host, cx)
+          |> result.unwrap([])
+          |> list.filter_map(fn(entry) {
+            use id <- result.try(jsonx.field_string(entry, ["id"]))
+            let entry_cwd =
+              jsonx.field_string(entry, ["cwd"]) |> result.unwrap("")
+            case id != session && cwd != "" && entry_cwd == cwd {
+              False -> Error(Nil)
+              True ->
+                Ok(
+                  json.object([
+                    #("session", json.string(id)),
+                    #("host", json.string(peer_host)),
+                    #(
+                      "provider",
+                      json.string(case is_claude_backend(peer_host) {
+                        True -> "claude"
+                        False -> "codex"
+                      }),
+                    ),
+                    #(
+                      "name",
+                      json.string(
+                        jsonx.field_string(entry, ["name"]) |> result.unwrap(""),
+                      ),
+                    ),
+                    #(
+                      "preview",
+                      json.string(
+                        jsonx.field_string(entry, ["preview"])
+                        |> result.unwrap("")
+                        |> string.slice(0, 120),
+                      ),
+                    ),
+                    #(
+                      "acceptsMessages",
+                      json.bool(relay.is_enabled(ctx.relay, id)),
+                    ),
+                  ]),
+                )
+            }
+          })
+        })
+      json_response(
+        200,
+        json.object([
+          #("cwd", json.string(cwd)),
+          #("peers", json.preprocessed_array(peers)),
+        ]),
+      )
+    }
+  }
+}
+
+/// GET /api/threads/:id/relay — the browser's delivery log for a session.
+fn relay_log(ctx: Context, thread: String) -> Response(ResponseData) {
+  case relay.for_thread(ctx.relay, thread) {
+    Error(_) -> json_response(503, error_body("the relay is restarting"))
+    Ok(#(epoch, messages)) ->
+      json_response(
+        200,
+        json.object([
+          #("epoch", json.string(epoch)),
+          #("enabled", json.bool(relay.is_enabled(ctx.relay, thread))),
+          #(
+            "messages",
+            json.preprocessed_array(list.map(messages, relay.message_json)),
+          ),
+        ]),
+      )
+  }
+}
+
+/// POST /api/threads/:id/relay/settings {enabled} — browser only.
+fn relay_settings(
+  ctx: Context,
+  req: Request(Connection),
+  thread: String,
+) -> Response(ResponseData) {
+  case jsonx.field_bool(read_json_body(req), ["enabled"]) {
+    Error(_) -> json_response(400, error_body("enabled must be a boolean"))
+    Ok(enabled) ->
+      case relay.set_enabled(ctx.relay, thread, enabled) {
+        Ok(enabled) ->
+          json_response(200, json.object([#("enabled", json.bool(enabled))]))
+        Error(_) -> json_response(503, error_body("the relay is restarting"))
+      }
+  }
+}
+
+/// A user `turn/start` that carries relay messages: unlike a plain start,
+/// its outcome must say whether the backend can have accepted it.
+fn tracked_start_response(reply: codex.TrackedReply) -> Response(ResponseData) {
+  case reply.result {
+    Ok(value) -> json_response(200, jsonx.to_json(value))
+    Error(codex.Rejected(_, message)) -> json_response(500, error_body(message))
+    Error(codex.NotSent(reason)) ->
+      json_response(503, error_body("The prompt was not sent: " <> reason))
+    Error(codex.Lost(_)) | Error(codex.Expired) ->
+      json_response(
+        504,
+        error_body(
+          "The backend did not confirm the prompt. It may have started; check the transcript before sending it again.",
+        ),
+      )
   }
 }

@@ -11,6 +11,16 @@
 	import { clearsStalledWorkerPrompt } from '$lib/stalled-worker';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
+	import {
+		applyRelayEvent,
+		applyRelaySnapshot,
+		attributeRelayPart,
+		emptyRelayStore,
+		relayStatusLabel,
+		shortSession,
+		type AttributedFrame,
+		type RelayRecord
+	} from '$lib/relay';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
 	import { settleTranscriptBottom } from '$lib/transcript-scroll';
 	import { runtimeOutcome, interruptionReason } from '$lib/runtime-reconciliation';
@@ -151,7 +161,8 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 
 	type RenderPart =
 		| { type: 'text'; text: string }
-		| { type: 'image'; path: string; source: 'local' | 'remote' };
+		| { type: 'image'; path: string; source: 'local' | 'remote' }
+		| { type: 'relay'; frames: AttributedFrame[] };
 
 	let localCounter = 0;
 
@@ -315,6 +326,11 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 		'The previous task was stopped. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
 	let runningTasks: Record<string, string> = {};
 	let todoQueues = $state<Record<string, TodoQueue>>({});
+	// Session relay: server delivery records (the only source of sender
+	// attribution) and each session's server-side message setting.
+	let relayStore = $state(emptyRelayStore());
+	let relaySeq = 0;
+	let relayEnabled = $state<Record<string, boolean>>({});
 	let archiveNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// The active session is whatever is in the URL (/s/<id>); / shows the welcome.
@@ -1440,6 +1456,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (!duplicate) addStalledWorkerPrompt(sessionId, workerId, String(p.turnId ?? ''), worker, minutes);
 				break;
 			}
+			case 'yacwu/relay/update': {
+				const record = p.message as RelayRecord | undefined;
+				if (record?.id && typeof p.epoch === 'string') {
+					relayStore = applyRelayEvent(relayStore, p.epoch, record, ++relaySeq);
+					noteRelayRecord(relayStore.records[record.id] ?? record);
+				}
+				break;
+			}
 			case 'yacwu/host/status': {
 				const host = String(p.host ?? '');
 				if (!host) break;
@@ -2218,9 +2242,48 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	/** Delivery records and the server-side setting for one session. */
+	async function loadRelayLog(id: string) {
+		const requestSeq = ++relaySeq;
+		try {
+			const res = await fetch(`/api/threads/${encodeURIComponent(id)}/relay`);
+			if (!res.ok) return;
+			const data = await res.json();
+			relayStore = applyRelaySnapshot(relayStore, { epoch: data.epoch, messages: data.messages ?? [] }, requestSeq, ++relaySeq);
+			relayEnabled = { ...relayEnabled, [id]: data.enabled !== false };
+		} catch {
+			/* Attribution falls back to showing text as written. */
+		}
+	}
+
+	async function setRelayEnabled(id: string, enabled: boolean): Promise<boolean> {
+		try {
+			const res = await fetch(`/api/threads/${encodeURIComponent(id)}/relay/settings`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ enabled })
+			});
+			if (!res.ok) return false;
+			const data = await res.json();
+			relayEnabled = { ...relayEnabled, [id]: data.enabled !== false };
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Show a relayed message's progress in the sender's and recipient's transcripts. */
+	function noteRelayRecord(record: RelayRecord) {
+		for (const [threadId, direction] of [[record.to.thread, 'in'], [record.from.thread, 'out']] as const) {
+			if (!threads[threadId]) continue;
+			upsertItem(threadId, { type: 'relayNotice', id: `relay-${direction}-${record.id}`, direction, record } as any, true);
+		}
+	}
+
 	async function openSession(id: string, force: boolean) {
 		if (sessionHistoryLoaded[id] || sessionOpening[id]) return;
 		sessionOpening[id] = true;
+		void loadRelayLog(id);
 		try {
 			const res = await fetch(threadApi(id, '/open'), {
 				method: 'POST',
@@ -3733,6 +3796,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const parts: RenderPart[] = [];
 		for (const c of item.content ?? []) {
 			if (typeof c?.text === 'string' && c.text) {
+				const frames = viewedId ? attributeRelayPart(c.text, { threadId: viewedId, turnId: item._turnId }, relayStore.records) : null;
+				if (frames) {
+					parts.push({ type: 'relay', frames });
+					continue;
+				}
 				const text = visibleUserText(c.text);
 				if (text) parts.push({ type: 'text', text });
 			}
@@ -4663,6 +4731,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (msg.method === 'yacwu/connected') {
 					connected = true;
 					void reconcileInterruptedSessions();
+					if (activeId) void loadRelayLog(activeId);
 					return;
 				}
 				handleNotification(msg);
@@ -5538,7 +5607,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						{/if}
 					</dl>
-					{#key activeId}<SessionRulesEditor rules={sessionRules[activeId] ?? defaultSessionRules} onsave={(rules) => saveSessionRules(activeId, rules)} />{/key}
+					{#key activeId}<SessionRulesEditor rules={sessionRules[activeId] ?? defaultSessionRules} onsave={(rules) => saveSessionRules(activeId, rules)} relayEnabled={relayEnabled[activeId] ?? null} onrelaychange={(enabled) => setRelayEnabled(activeId, enabled)} />{/key}
 					<button class="mini" type="button" onclick={() => { sessionInfoDialog?.close(); usageHistoryOpen = true; }}>Task usage history</button>
 					<div class="session-detail-actions">
 						{#if !isSideChat(activeSummary)}
@@ -5702,6 +5771,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{#each userParts(item) as part}
 											{#if part.type === 'text'}
 												<span>{part.text}</span>
+											{:else if part.type === 'relay'}
+												<div class="relay-block">
+													{#each part.frames as frame}
+														<div class="relay-frame">
+															<div class="relay-meta" title={relayStatusLabel(frame.record)}>Relayed message from session {shortSession(frame.fromThread)} ({frame.fromHost}) · sender reported by the sending agent</div>
+															<div class="relay-text">{frame.body}</div>
+														</div>
+													{/each}
+												</div>
 											{:else}
 												<a class="message-image" href={imageSrc(part.path)} target="_blank" rel="noreferrer">
 													<img src={imageSrc(part.path)} alt={imageLabel(part.path)} loading="lazy" />
@@ -5731,7 +5809,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										{#each agentParts((item as any).text ?? '') as part}
 											{#if part.type === 'text'}
 												<div class="markdown-body">{@render markdownBlocks(parseCodexMarkdown(part.text))}</div>
-											{:else}
+											{:else if part.type === 'image'}
 												<a class="message-image" href={imageSrc(part.path)} target="_blank" rel="noreferrer">
 													<img src={imageSrc(part.path)} alt={imageLabel(part.path)} loading="lazy" />
 													<span>{imageLabel(part.path)}</span>
@@ -5892,6 +5970,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<div class="body">{(item as any).text}{#if (item as any).resumeAvailable && viewed?.status !== 'running'}
 										<button class="mini ghost stopped-resume" type="button" disabled={sendingMessage} onclick={() => resumeStoppedTask(activeId, (item as any).id)}>Resume</button>
 									{/if}</div>
+								</div>
+							{:else if item.type === 'relayNotice'}
+								{@const record = (item as any).record as RelayRecord}
+								<div class="item note relay-notice relay-{record.state}">
+									<span class="gutter">⇄</span>
+									<details class="body">
+										<summary>{(item as any).direction === 'in' ? `Message from session ${shortSession(record.from.thread)}` : `Message to session ${shortSession(record.to.thread)}`}: {relayStatusLabel(record)}</summary>
+										<div class="relay-text">{record.text}</div>
+									</details>
 								</div>
 							{:else if item.type === 'stalledWorkerPrompt'}
 								<div class="item note stalled-worker-prompt">
@@ -8264,6 +8351,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.activity-toolbar { position: absolute; top: 0; right: var(--space-sm); z-index: 1; font-size: var(--text-xs); color: var(--color-muted); }
 	.activity-toolbar label { display: flex; align-items: center; gap: var(--space-xs); min-height: 2rem; cursor: pointer; }
 	.item.compact-activity { display: block; min-width: 0; padding-block: var(--space-2xs); }
+	.relay-block { display: grid; gap: var(--space-2xs); margin-block: var(--space-2xs); }
+	.relay-frame { border-left: 2px solid var(--color-rule); padding-left: var(--space-xs); }
+	.relay-meta { color: var(--color-muted); font-size: var(--text-xs); }
+	.relay-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+	.relay-notice summary { cursor: pointer; color: var(--color-muted); }
+	.relay-notice .relay-text { margin-top: var(--space-2xs); }
 	.activity-group-toggle { display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-2xs) var(--space-xs); border: none; border-radius: var(--radius-input); background: transparent; color: var(--color-muted); font: inherit; font-size: var(--text-xs); cursor: pointer; }
 	.activity-group-toggle:hover { background: var(--color-paper-3); color: var(--color-ink); }
 	.activity-group-toggle { min-width: 0; max-width: 100%; text-align: start; }

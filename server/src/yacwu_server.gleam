@@ -19,6 +19,8 @@ import yacwu/config
 import yacwu/hosts
 import yacwu/model_state
 import yacwu/profiles
+import yacwu/relay
+import yacwu/relay_env
 import yacwu/router
 import yacwu/unix_proxy
 
@@ -78,6 +80,9 @@ authentication (e.g. bound to localhost only).",
   let registry_name = process.new_name("yacwu_hosts")
   let store_name = process.new_name("yacwu_models")
   let profile_store_name = process.new_name("yacwu_profiles")
+  let relay_name = process.new_name("yacwu_relay")
+  // Exported before any backend child can be spawned.
+  let relay_credential = relay_env.setup(conf)
 
   let ctx =
     router.Context(
@@ -86,6 +91,8 @@ authentication (e.g. bound to localhost only).",
       profile_store: profile_store_name,
       static_dir: conf.static_dir,
       auth: auth_config,
+      relay: relay_name,
+      relay_credential: relay_credential,
     )
 
   // Everything lives under one supervision tree, including the HTTP
@@ -118,6 +125,18 @@ authentication (e.g. bound to localhost only).",
     supervisor.new(supervisor.OneForOne)
     |> supervisor.restart_tolerance(intensity: 5, period: 30)
     |> supervisor.add(hosts.supervised(registry_name))
+    |> supervisor.add(relay.supervised(
+      relay_name,
+      relay.Backends(
+        resolve: fn(host) {
+          hosts.resolve(registry_name, Some(host), None)
+          |> result.map(fn(resolved) { resolved.1 })
+        },
+        subscribe: fn(owner, subject) {
+          hosts.subscribe_lifecycle(registry_name, owner, subject)
+        },
+      ),
+    ))
     |> supervisor.add(model_state.supervised(store_name))
     |> supervisor.add(profiles.supervised(profile_store_name))
     |> supervisor.add(mist.supervised(web))

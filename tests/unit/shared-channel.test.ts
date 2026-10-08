@@ -49,3 +49,18 @@ describe('shared background channel', () => {
 		expect(visibleUserText(`${prompt}\n\n<!-- YACWU_TASK_PROGRESS -->private instructions`)).toBe(prompt);
 	});
 });
+
+describe('direct-message guidance', () => {
+	test('names the relay CLI with this session as sender', () => {
+		const text = withSharedChannelContext('Work', '/tmp/shared', 'thread-a');
+		expect(text).toContain('node "$YACWU_RELAY_CLI" send --from thread-a');
+		expect(text).toContain('peers --session thread-a');
+		expect(visibleUserText(text)).toBe('Work');
+	});
+
+	test('sessions joined before the relay existed receive the guidance once', () => {
+		const legacy = withSharedChannelContext('Work', '/tmp/shared', 'thread-a').replace(/\n\nDirect messages[^\n]*/, '');
+		expect(hasSharedChannelContext(legacy, '/tmp/shared')).toBe(false);
+		expect(hasSharedChannelContext(withSharedChannelContext(legacy, '/tmp/shared', 'thread-a'), '/tmp/shared')).toBe(true);
+	});
+});

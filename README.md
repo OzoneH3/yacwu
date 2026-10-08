@@ -53,6 +53,9 @@ rules locally, and records usage/diagnostic journals on the server.
 - 📝 Per-session rules: toggle progress reporting and shared coordination
   notes, or add custom instructions. Shared coordination lets Codex and Claude
   sessions in the same project folder leave notes for each other
+- 📨 Session messages: agents in Codex and Claude sessions on this machine can
+  message each other; a working recipient gets them at its next input
+  boundary, an idle one with its next prompt (see [docs/relay.md](docs/relay.md))
 - 🎛️ Per-session Codex profiles from `$CODEX_HOME/<name>.config.toml`
 - 🧾 `/todo <task>` queues follow-up work to run after the current turn
 - 🔁 Alternative backends via `YACWU_BACKENDS`, such as
@@ -81,7 +84,8 @@ Agent events, approvals, steering and backend-specific slash commands depend on
 what the adapter exposes; identical behavior across providers is not guaranteed.
 Switching a GPT conversation to Claude in place is not supported: create a
 separate session for the other provider instead. Sessions in the same project
-folder can use shared coordination notes, but do not share conversation history.
+folder can use shared coordination notes and direct session messages, but do
+not share conversation history.
 
 ## Slash commands
 
@@ -413,6 +417,9 @@ browser ──HTTP/SSE──> Gleam server (mist, server/)
   process has a session's rollout file open before we resume it.
 - `server/src/yacwu/model_state.gleam` — per-thread model/effort overrides and
   the model catalog.
+- `server/src/yacwu/relay.gleam`, `relay_core.gleam` — session messages: a
+  pure delivery state machine and the actor that runs it (see
+  [docs/relay.md](docs/relay.md)).
 - `src/routes/+layout.svelte` — the terminal-style UI; routes streamed events
   to the right session by `threadId`.
 
