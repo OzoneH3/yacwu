@@ -4,6 +4,50 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { createClaudeUsageReader, normalizeClaudeTokenUsage, readClaudeCredentials } from './claude-usage.mjs';
+
+/**
+ * Supplement CLI aliases with concrete IDs available to the signed-in account.
+ * @param {{fetchModels?: (url: string, options: RequestInit) => Promise<Response>, token?: string}} options
+ */
+export async function accountModels({ fetchModels = fetch, token } = {}) {
+  if (!token) {
+    const auth = await readClaudeCredentials().catch(() => null);
+    token = process.env.CLAUDE_CODE_OAUTH_TOKEN || auth?.accessToken;
+  }
+  if (!token) return [];
+  const models = [];
+  let after;
+  do {
+    const url = new URL('https://api.anthropic.com/v1/models');
+    url.searchParams.set('limit', '100');
+    if (after) url.searchParams.set('after_id', after);
+    const response = await fetchModels(url.href, {
+      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'anthropic-version': '2023-06-01' },
+      signal: AbortSignal.timeout(8_000)
+    });
+    if (!response.ok) throw new Error(`Claude model catalog unavailable (${response.status})`);
+    const page = await response.json();
+    if (!Array.isArray(page.data)) throw new Error('Invalid Claude model catalog');
+    for (const model of page.data) {
+      if (typeof model.id === 'string' && model.id.startsWith('claude-')) {
+        models.push({ id: model.id, sdkModel: model.id, displayName: typeof model.display_name === 'string' ? model.display_name : model.id, description: '', isDefault: false });
+      }
+    }
+    const next = page.has_more && typeof page.last_id === 'string' ? page.last_id : undefined;
+    if (page.has_more && (!next || next === after)) throw new Error('Invalid Claude model catalog pagination');
+    after = next;
+  } while (after);
+  return models;
+}
+
+/** @param {ReturnType<typeof adapterModels>} cliModels @param {Awaited<ReturnType<typeof accountModels>>} availableModels */
+export function mergeModelCatalogs(cliModels, availableModels) {
+  const models = new Map(cliModels.map((model) => [model.id, model]));
+  for (const model of availableModels) if (!models.has(model.id)) models.set(model.id, model);
+  return [...models.values()];
+}
 
 /** @param {Array<{value: string, resolvedModel?: string, displayName: string, description?: string}>} models */
 export function adapterModels(models) {
@@ -22,14 +66,14 @@ export function adapterModels(models) {
 }
 
 /** @param {string} adapterPath */
-export async function discoverModels(adapterPath) {
+async function discoverCliModels(adapterPath) {
   const require = createRequire(pathToFileURL(adapterPath));
   const { query } = await import(pathToFileURL(require.resolve('@anthropic-ai/claude-agent-sdk')).href);
   const abortController = new AbortController();
   let release = () => {};
   const waiting = new Promise((resolveWaiting) => { release = () => resolveWaiting(undefined); });
   async function* noPrompt() { await waiting; }
-  const session = query({ prompt: noPrompt(), options: { abortController, persistSession: false, settingSources: [] } });
+  const session = query({ prompt: noPrompt(), options: { abortController, persistSession: false, settingSources: [], ...(process.env.CLAUDE_CODEX_CLI ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODEX_CLI } : {}) } });
   const timer = setTimeout(() => abortController.abort(), 15000);
   try {
     return adapterModels(await session.supportedModels());
@@ -38,6 +82,14 @@ export async function discoverModels(adapterPath) {
     session.close();
     release();
   }
+}
+
+/** @param {string} adapterPath */
+export async function discoverModels(adapterPath) {
+  const [cli, account] = await Promise.allSettled([discoverCliModels(adapterPath), accountModels()]);
+  if (cli.status === 'rejected' && account.status === 'rejected') throw cli.reason;
+  if (account.status === 'rejected') console.error(`[yacwu claude] Account model discovery unavailable; using CLI catalog: ${account.reason instanceof Error ? account.reason.message : 'request failed'}`);
+  return mergeModelCatalogs(cli.status === 'fulfilled' ? cli.value : [], account.status === 'fulfilled' ? account.value : []);
 }
 
 async function main() {
@@ -53,10 +105,28 @@ async function main() {
     }
   }
   const args = process.argv.slice(3);
-  const child = spawn(process.execPath, [adapterPath, ...(args.length ? args : ['app-server', '--listen', 'stdio://'])], { stdio: 'inherit', env });
+  const child = spawn(process.execPath, [adapterPath, ...(args.length ? args : ['app-server', '--listen', 'stdio://'])], { stdio: ['pipe', 'pipe', 'inherit'], env });
+  const readUsage = createClaudeUsageReader();
+  const input = createInterface({ input: process.stdin });
+  const output = createInterface({ input: child.stdout });
+  input.on('line', (line) => {
+    let request;
+    try { request = JSON.parse(line); } catch { /* Forward adapter parse errors. */ }
+    if (request?.method === 'account/rateLimits/read' && request.id != null) {
+      void readUsage().then((result) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result })}\n`));
+    } else {
+      child.stdin.write(`${line}\n`);
+    }
+  });
+  input.on('close', () => child.stdin.end());
+  output.on('line', (line) => {
+    try { line = JSON.stringify(normalizeClaudeTokenUsage(JSON.parse(line))); } catch { /* Preserve non-JSON adapter output. */ }
+    process.stdout.write(`${line}\n`);
+  });
+  child.stdin.on('error', () => input.close());
   for (const signal of /** @type {NodeJS.Signals[]} */ (['SIGTERM', 'SIGINT'])) process.on(signal, () => child.kill(signal));
-  child.on('error', (error) => { console.error(error.message); process.exitCode = 1; });
-  child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });
+  child.on('error', (error) => { input.close(); process.stdin.pause(); console.error(error.message); process.exitCode = 1; });
+  child.on('exit', (code, signal) => { input.close(); process.stdin.pause(); process.exitCode = code ?? (signal ? 1 : 0); });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();

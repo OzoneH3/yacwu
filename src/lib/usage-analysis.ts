@@ -326,6 +326,12 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 				const value = event.total[field];
 				next[field] = typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 			}
+			// Older Claude recordings count cache reads separately from input.
+			// Normalize stored snapshots too, so old and new cumulative counters
+			// share one convention and their deltas remain consistent.
+			if (next.cachedInputTokens > 0 && next.inputTokens + next.cachedInputTokens + next.outputTokens === next.totalTokens) {
+				next.inputTokens += next.cachedInputTokens;
+			}
 			const previous = totals.get(id);
 			const task = event.turnId ? tasksByTurn.get(`${id}:${event.turnId}`) : active.get(id);
 			const validTurn = task && (!event.turnId || event.turnId === task.turnId);

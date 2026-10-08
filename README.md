@@ -243,6 +243,20 @@ cd ..
 YACWU_BACKENDS="claude=node ./scripts/claude-backend.mjs ./claude-codex/dist/src/adapter.mjs" bun run start
 ```
 
+The Claude wrapper supplies the 5-hour and 7-day subscription allowance using
+Claude Code's local login (`~/.claude/.credentials.json`, or under
+`CLAUDE_CONFIG_DIR`). It also accepts `CLAUDE_CODE_OAUTH_TOKEN`. Account reads
+are cached for two minutes and back off when rate limited; unavailable
+subscription data leaves the allowance windows hidden.
+Model discovery merges the CLI's aliases with concrete model IDs returned by
+the signed-in account's Models API. This lets newly available models appear
+even when the Agent SDK's bundled CLI catalog predates their release. If the
+account catalog cannot be read, discovery falls back to the CLI list.
+Claude task allowance uses the same observed weekly-quota calibration as Codex,
+with separate rates for each model and thinking level. Cache-read tokens are
+normalized for both live reports and older recordings. Task estimates and
+projections appear once sufficient clean observations exist; until then the UI
+shows that costs are still being learned.
 Each name appears in the host picker alongside the default local codex
 (`local`) and the SSH remotes, and runs its command as a child process on
 this machine — same working directory, file browser, Git viewer, profiles and
