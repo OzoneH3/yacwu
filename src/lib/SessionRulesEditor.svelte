@@ -38,6 +38,7 @@
 	<p class="description">Check and publish coordination notes for sessions in the same project folder, and send direct messages to them. Disabling does not erase existing notes or transcript instructions.</p>
 	<label><input type="checkbox" checked={relayEnabled ?? true} disabled={relayEnabled === null} onchange={changeRelay} /> Accept direct messages from other sessions</label>
 	<p class="description">Stored on the server and applied immediately, for every browser. Turning it off refuses new messages and drops ones still queued. Without a choice here the session follows the default in Settings; a choice here lasts until the server restarts.{#if relayStatus} <span role="status">{relayStatus}</span>{/if}</p>
+	<details><summary>Workspace rule · built-in</summary><p>Agents write only inside the session folder and keep scratch files, notes and temporary output in its <code>.workspace</code> folder (which ignores itself in Git), unless you ask for another path. Shared coordination notes live in <code>.workspace/coordination</code>.</p></details>
 	<details><summary>Image display rule · built-in</summary><p>Show generated images using a local file and an <code>&lt;agent-img&gt;</code> block. This is a backend instruction, not an editable per-prompt rule.</p></details>
 	<label for="session-custom-rules">Additional instructions</label>
 	<textarea id="session-custom-rules" bind:value={custom} oninput={() => saved = false} rows="5" placeholder="For example: check the README before committing feature changes."></textarea>

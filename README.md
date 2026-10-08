@@ -52,7 +52,10 @@ rules locally, and records usage/diagnostic journals on the server.
 - ⌨️ Slash commands (see below), message copy buttons, and prompt history
 - 📝 Per-session rules: toggle progress reporting and shared coordination
   notes, or add custom instructions. Shared coordination lets Codex and Claude
-  sessions in the same project folder leave notes for each other
+  sessions in the same project folder leave notes for each other in
+  `.workspace/coordination`
+- 📂 Agents are told to write only inside the session folder, keeping scratch
+  and temporary files in its self-ignoring `.workspace/`
 - 📨 Session messages: agents in Codex and Claude sessions on this machine can
   message each other; a working recipient gets them at its next input
   boundary, an idle one with its next prompt (see [docs/relay.md](docs/relay.md))

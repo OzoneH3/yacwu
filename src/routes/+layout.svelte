@@ -66,7 +66,7 @@
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
-	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
+	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
 import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, archiveDeletionSupported, loadArchiveCatalog } from '$lib/archive';
@@ -878,9 +878,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return LOCAL_HOST;
 	}
 
+	/** The session's working folder as last reported by its backend. */
+	function sessionFolder(id: string): string {
+		return cwds[id] ?? sessions.find((session) => session.id === id)?.cwd ?? '';
+	}
+
 	function sharedChannelPathForSession(id: string): string | null {
-		const summary = sessions.find((session) => session.id === id);
-		return sharedChannelPath(sessionHost(id), cwds[id] ?? summary?.cwd ?? '', hostChoices);
+		return sharedChannelPath(sessionFolder(id));
 	}
 
 	async function addSharedChannelContext(id: string, text: string): Promise<string> {
@@ -2485,7 +2489,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
 		const rules = rulesFor(id);
-		const ruleText = withSessionRules(rules.sharedChannel ? await addSharedChannelContext(id, text) : visibleUserText(text), rules);
+		const sessionText = withSessionRules(rules.sharedChannel ? await addSharedChannelContext(id, text) : visibleUserText(text), rules);
+		// Agents keep everything they write inside the session folder.
+		const ruleText = withWorkspaceRule(sessionText, sessionFolder(id));
 		// Only Yacwu's Claude backend sends progress reminders; tell it how often.
 		const reminders = isClaudeSession(id) ? (settings.claudeProgressReminders ? settings.claudeReminderMinutes : null) : undefined;
 		const progressText = rules.progress ? withTaskProgressInstructions(ruleText, reminders) : ruleText;

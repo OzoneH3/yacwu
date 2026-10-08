@@ -1,24 +1,22 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	hasSharedChannelContext,
+	sessionWorkspace,
 	sharedChannelPath,
 	visibleUserText,
-	withSharedChannelContext
+	withSharedChannelContext,
+	withWorkspaceRule
 } from '../../src/lib/shared-channel';
-import type { HostInfo } from '../../src/lib/protocol';
 
 describe('shared background channel', () => {
-	test('Claude and Codex providers on the same machine and workspace share notes', () => {
-		const hosts: HostInfo[] = [
-			{ name: 'local', kind: 'local', state: 'connected', provider: 'codex' },
-			{ name: 'anthropic', kind: 'backend', state: 'connected', provider: 'claude' },
-			{ name: 'claude', kind: 'remote', state: 'connected', provider: 'codex' }
-		];
-		const local = sharedChannelPath('local', '/work/project', hosts);
-		expect(sharedChannelPath('anthropic', '/work/project/', hosts)).toBe(local);
-		expect(sharedChannelPath('claude', '/work/project', hosts)).not.toBe(local);
-		expect(sharedChannelPath('anthropic', '/work/other', hosts)).not.toBe(local);
-		expect(sharedChannelPath('unknown', '/work/project', hosts)).not.toBe(local);
+	test('notes live in the session folder\'s own .workspace, shared by every session there', () => {
+		expect(sharedChannelPath('/work/project')).toBe('/work/project/.workspace/coordination');
+		// Any provider in the same (normalized) folder gets the same path.
+		expect(sharedChannelPath('/work//project/')).toBe('/work/project/.workspace/coordination');
+		expect(sharedChannelPath('/work/other')).not.toBe(sharedChannelPath('/work/project'));
+		expect(sharedChannelPath('/')).toBe('/.workspace/coordination');
+		expect(sharedChannelPath('  ')).toBeNull();
+		expect(sessionWorkspace('/work/project/')).toBe('/work/project/.workspace');
 	});
 
 	test('sessions with old provider-specific instructions rejoin the common folder', () => {
@@ -30,12 +28,23 @@ describe('shared background channel', () => {
 		expect(updated).not.toContain('/tmp/old-provider-folder');
 		expect(updated).toContain('including Codex and Claude sessions');
 	});
-	test('sessions in the same normalized workspace and host share one opaque path', () => {
-		const path = sharedChannelPath('local', '/work/project/');
-		expect(path).toMatch(/^\/tmp\/yacwu-background-[0-9a-f]{16}$/);
-		expect(sharedChannelPath('local', '/work//project')).toBe(path);
-		expect(sharedChannelPath('remote', '/work/project')).not.toBe(path);
-		expect(sharedChannelPath('local', '/work/other')).not.toBe(path);
+	test('sessions that joined the old /tmp folder are moved to .workspace once', () => {
+		const old = withSharedChannelContext('Work', '/tmp/yacwu-background-0af9592c8d15e3d8', 'session');
+		const path = sharedChannelPath('/work/project')!;
+		expect(hasSharedChannelContext(old, path)).toBe(false);
+		const moved = withSharedChannelContext(old, path, 'session');
+		expect(hasSharedChannelContext(moved, path)).toBe(true);
+		expect(moved).not.toContain('/tmp/');
+	});
+
+	test('every prompt confines writes to the session folder, hidden from the transcript', () => {
+		const text = withWorkspaceRule('Fix the bug', '/work/project/');
+		expect(text).toContain('Write files only inside the session folder /work/project.');
+		expect(text).toContain('/work/project/.workspace/');
+		expect(text).toContain('not in other locations such as system temp directories');
+		expect(visibleUserText(text)).toBe('Fix the bug');
+		// No known folder: nothing to confine to.
+		expect(withWorkspaceRule('Fix the bug', '')).toBe('Fix the bug');
 	});
 
 	test('channel instructions are added once and stripped from transcript text', () => {
