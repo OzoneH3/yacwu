@@ -8,6 +8,7 @@
 	import { mcpActivityLabel } from '$lib/mcp-activity';
 	import { compactActivity, compactActivityLabel } from '$lib/compact-activity';
 	import { removePendingTodo } from '$lib/todo-queue';
+	import { clearsStalledWorkerPrompt } from '$lib/stalled-worker';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
@@ -1415,6 +1416,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const tid: string | undefined = p.threadId;
 		const affectedThreadId: string | undefined = tid ?? p.thread?.id;
 		const shouldScroll = affectedThreadId === viewedId && isTranscriptAtBottom();
+		if (tid && clearsStalledWorkerPrompt(msg.method)) {
+			for (const [sessionId, thread] of Object.entries(threads)) {
+				for (const id of [...thread.order]) {
+					const item = thread.byId[id] as any;
+					if (item?.type === 'stalledWorkerPrompt' && item.workerId === tid) dismissStalledWorkerPrompt(sessionId, id);
+				}
+			}
+		}
 
 		switch (msg.method) {
 			case 'yacwu/diagnostic/stalled': {

@@ -474,6 +474,8 @@ Confirmed running commands, MCP calls and agent waits get at least 10 minutes.
 Warnings produce a `turn_silent` snapshot, repeated at most once every two minutes.
 Silence can also mean legitimate reasoning or a long-running tool; Yacwu does
 not cancel the turn automatically.
+The waiting/status/stop prompt closes automatically when that worker reports
+new activity or its turn ends.
 
 With progress reporting enabled, Claude receives a silent reminder after five
 minutes without an estimate, only if other task activity occurred in those five
