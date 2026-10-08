@@ -4,7 +4,7 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
-	import { compactActivity } from '$lib/compact-activity';
+	import { compactActivity, compactActivityLabel } from '$lib/compact-activity';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
@@ -681,7 +681,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	const viewedItems = $derived(
 		separateTaskProgressEntries(itemsOf(viewed)).filter(isRenderableTranscriptItem)
 	);
-	const displayedItems = $derived(showAllActivity ? viewedItems : compactActivity(viewedItems, (id) => Boolean(expandedActivity[`${viewedId}:${id}`])));
+	const displayedItems = $derived(showAllActivity ? viewedItems : compactActivity(viewedItems, (id) => Boolean(expandedActivity[`${viewedId}:${id}`]), viewed?.status === 'running'));
 	const virtualTranscript = $derived(
 		virtualizeItems(displayedItems, transcriptScrollTop, transcriptViewportHeight, transcriptHeightVersion)
 	);
@@ -5778,8 +5778,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{/if}
 							{:else if item.type === 'compactActivity'}
 								<div class="item compact-activity">
-									<button type="button" class="activity-group-toggle" aria-expanded={Boolean(expandedActivity[`${viewedId}:${item.id}`])} onclick={() => toggleActivityGroup(item.id)}>
-										<span aria-hidden="true">{expandedActivity[`${viewedId}:${item.id}`] ? '▾' : '▸'}</span> Background work · {(item as any).count} {(item as any).count === 1 ? 'command' : 'commands'} · {(item as any).status}
+									<button type="button" class="activity-group-toggle" title={compactActivityLabel(item)} aria-expanded={Boolean(expandedActivity[`${viewedId}:${item.id}`])} onclick={() => toggleActivityGroup(item.id)}>
+										<span aria-hidden="true">{expandedActivity[`${viewedId}:${item.id}`] ? '▾' : '▸'}</span><span class="activity-group-label">{compactActivityLabel(item)}</span>
 									</button>
 								</div>
 							{:else if item.type === 'commandExecution'}
@@ -8239,9 +8239,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 	.activity-toolbar { position: absolute; top: 0; right: var(--space-sm); z-index: 1; font-size: var(--text-xs); color: var(--color-muted); }
 	.activity-toolbar label { display: flex; align-items: center; gap: var(--space-xs); min-height: 2rem; cursor: pointer; }
-	.compact-activity { padding-block: var(--space-2xs); }
+	.item.compact-activity { display: block; min-width: 0; padding-block: var(--space-2xs); }
 	.activity-group-toggle { display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-2xs) var(--space-xs); border: 1px solid var(--color-rule); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-muted); font: inherit; font-size: var(--text-sm); cursor: pointer; }
 	.activity-group-toggle:hover { background: var(--color-paper-3); color: var(--color-ink); }
+	.activity-group-toggle { min-width: 0; max-width: 100%; text-align: start; }
+	.activity-group-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.activity-group-toggle:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 
 	.transcript-frame.has-position-rail .transcript {

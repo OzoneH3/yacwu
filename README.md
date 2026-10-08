@@ -29,8 +29,9 @@ rules locally, and records usage/diagnostic journals on the server.
   has loaded
 - ⚡ Live streaming of messages, reasoning, commands, plans, and file changes;
   steer a running turn, stop it, or resume it later
-- 🧹 Compact activity view folds routine commands into expandable
-  "Background work" rows; **Show all activity** shows the full trace
+- 🧹 Compact activity folds older commands, file changes and agent updates into
+  expandable groups. The latest activity stays visible while working, as does a
+  final failure; **Show all activity** shows the full trace
 - ⏱️ Session bar with task progress, time-left estimates, elapsed time, and
   5-hour / 7-day usage with reset countdowns
 - 🤝 Multi-agent visibility: switch between a session and its spawned agents,
