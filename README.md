@@ -466,8 +466,11 @@ Yacwu records Codex RPC timing, lifecycle event metadata, connection changes,
 and browser Stop/SSE observations automatically. Every 30 seconds it records a
 manager snapshot with pending request ages, active turn activity, subscriber
 count, and the local Codex process ID. On Linux, snapshots also include
-process state, CPU counters, thread count, and resident memory pages. A turn without an event for two minutes
-produces a `turn_silent` snapshot, repeated at most once every two minutes.
+process state, CPU counters, thread count, and resident memory pages. Quiet-turn
+warnings use the turn's starting thinking level: None/Minimal/Low 2 minutes,
+Medium 4, High 6, XHigh 10, Max 15, and Ultra 20 (unknown defaults to 4).
+Confirmed running commands, MCP calls and agent waits get at least 10 minutes.
+Warnings produce a `turn_silent` snapshot, repeated at most once every two minutes.
 Silence can also mean legitimate reasoning or a long-running tool; Yacwu does
 not cancel the turn automatically.
 

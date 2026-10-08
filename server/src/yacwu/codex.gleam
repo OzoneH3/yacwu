@@ -699,6 +699,7 @@ fn send_request(
   let at = oauth.now()
   usage.request(state.label, method, params)
   usage.snapshot_request(state.label, id, method, params)
+  let state = State(..state, activity: diagnostics.request(state.activity, method, params, at))
   let turn_id =
     json.parse(json.to_string(params), decode.at(["turnId"], decode.string))
     |> result.unwrap(

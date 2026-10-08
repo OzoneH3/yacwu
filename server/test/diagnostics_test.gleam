@@ -2,6 +2,7 @@ import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/json
+import gleam/list
 import gleam/string
 import gleeunit/should
 import simplifile
@@ -14,10 +15,108 @@ fn parsed(text: String) {
   value
 }
 
+pub fn thinking_thresholds_and_tool_floor_test() {
+  let cases = [
+    #("none", 120),
+    #("minimal", 120),
+    #("low", 120),
+    #("medium", 240),
+    #("high", 360),
+    #("xhigh", 600),
+    #("max", 900),
+    #("ultra", 1200),
+    #("", 240),
+  ]
+  list.each(cases, fn(entry) {
+    should.equal(diagnostics.quiet_threshold(entry.0, False), entry.1)
+    should.equal(
+      diagnostics.quiet_threshold(entry.0, True),
+      case entry.1 < 600 {
+        True -> 600
+        False -> entry.1
+      },
+    )
+  })
+}
+
+pub fn request_effort_is_frozen_until_next_turn_test() {
+  let params =
+    json.object([
+      #("threadId", json.string("thread")),
+      #("effort", json.string("high")),
+    ])
+  let tracker = diagnostics.request(dict.new(), "turn/start", params, 0)
+  should.equal(diagnostics.is_silent(tracker, 9999), False)
+  let start =
+    parsed(
+      "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread\",\"turn\":{\"id\":\"one\"}}}",
+    )
+  let tracker = diagnostics.observe(tracker, start, 100)
+  let low =
+    json.object([
+      #("threadId", json.string("thread")),
+      #("effort", json.string("low")),
+    ])
+  let tracker = diagnostics.request(tracker, "turn/steer", low, 200)
+  let tracker = diagnostics.request(tracker, "thread/settings/update", low, 200)
+  should.equal(diagnostics.is_silent(tracker, 459), False)
+  should.equal(diagnostics.is_silent(tracker, 460), True)
+  let done =
+    parsed(
+      "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"thread\"}}",
+    )
+  let tracker = diagnostics.observe(tracker, done, 461)
+  let tracker = diagnostics.request(tracker, "turn/start", low, 500)
+  let tracker = diagnostics.observe(tracker, start, 500)
+  should.equal(diagnostics.is_silent(tracker, 620), True)
+}
+
+pub fn only_confirmed_running_tools_raise_the_timeout_test() {
+  let start =
+    parsed(
+      "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread\",\"turn\":{\"id\":\"turn\",\"reasoningEffort\":\"low\"}}}",
+    )
+  let tracker = diagnostics.observe(dict.new(), start, 0)
+  let tool =
+    parsed(
+      "{\"method\":\"item/started\",\"params\":{\"threadId\":\"thread\",\"item\":{\"id\":\"tool\",\"type\":\"mcpToolCall\",\"status\":\"inProgress\"}}}",
+    )
+  let tracker = diagnostics.observe(tracker, tool, 10)
+  should.equal(diagnostics.is_silent(tracker, 609), False)
+  should.equal(diagnostics.is_silent(tracker, 610), True)
+  let done =
+    parsed(
+      "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"thread\",\"item\":{\"id\":\"tool\",\"type\":\"mcpToolCall\",\"status\":\"completed\"}}}",
+    )
+  let tracker = diagnostics.observe(tracker, done, 611)
+  should.equal(diagnostics.is_silent(tracker, 730), False)
+  should.equal(diagnostics.is_silent(tracker, 731), True)
+}
+
+pub fn pending_request_restores_with_running_tool_test() {
+  let params =
+    json.object([
+      #("threadId", json.string("thread")),
+      #("effort", json.string("high")),
+    ])
+  let tracker = diagnostics.request(dict.new(), "turn/start", params, 0)
+  let reply =
+    parsed(
+      "{\"thread\":{\"id\":\"thread\",\"status\":{\"type\":\"active\"},\"turns\":[{\"id\":\"turn\",\"status\":\"inProgress\",\"items\":[{\"id\":\"tool\",\"type\":\"commandExecution\",\"status\":\"inProgress\"}]}]}}",
+    )
+  let tracker = diagnostics.restore(tracker, reply, 10)
+  should.equal(diagnostics.is_silent(tracker, 609), False)
+  should.equal(diagnostics.is_silent(tracker, 610), True)
+  let snapshot = diagnostics.snapshot(tracker, 610) |> json.to_string
+  should.equal(string.contains(snapshot, "high"), True)
+  // Repeated reads must not postpone the warning.
+  should.equal(diagnostics.restore(tracker, reply, 600), tracker)
+}
+
 pub fn silence_tracks_events_and_completion_test() {
   let started =
     parsed(
-      "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread\",\"turn\":{\"id\":\"turn\"}}}",
+      "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thread\",\"turn\":{\"id\":\"turn\",\"reasoningEffort\":\"low\"}}}",
     )
   let tracker = diagnostics.observe(dict.new(), started, 100)
   should.equal(diagnostics.is_silent(tracker, 219), False)
@@ -44,7 +143,7 @@ pub fn silence_tracks_events_and_completion_test() {
 pub fn reads_do_not_reset_silence_timer_test() {
   let reply =
     parsed(
-      "{\"thread\":{\"id\":\"thread\",\"status\":{\"type\":\"active\"},\"turns\":[{\"id\":\"turn\",\"status\":\"inProgress\"}]}}",
+      "{\"reasoningEffort\":\"low\",\"thread\":{\"id\":\"thread\",\"status\":{\"type\":\"active\"},\"turns\":[{\"id\":\"turn\",\"status\":\"inProgress\"}]}}",
     )
   let tracker = diagnostics.restore(dict.new(), reply, 100)
   let tracker = diagnostics.restore(tracker, reply, 219)
