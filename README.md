@@ -192,6 +192,11 @@ bun run build                              # build the web UI into ./build
 YACWU_INSECURE_SKIP_AUTH=1 bun run start   # serve UI + API on http://127.0.0.1:3000
 ```
 
+`./start.sh` installs dependencies, builds the UI, and starts the server from
+the project directory. It defaults to authentication disabled for local use
+and the Claude backend below. Environment overrides are respected; use
+`YACWU_BACKENDS= ./start.sh` for Codex only.
+
 `bun run start` runs the Gleam server (`server/`), which serves the static UI
 build, the REST/SSE API, and spawns/manages one `codex app-server` process
 (plus one per configured [alternative backend](#alternative-backends)). The server fails closed: it refuses to start unless authentication
@@ -222,6 +227,17 @@ for `codex app-server` — for example
 [claude-codex](https://github.com/fuergaosi233/claude-codex), which serves
 the protocol backed by Claude Code. Declare such backends with
 `YACWU_BACKENDS`, semicolon-separated `name=command` entries:
+
+Prepare the optional adapter checkout before enabling Claude (Node.js is also
+required). It is managed separately and ignored by this repository:
+
+```bash
+git clone https://github.com/fuergaosi233/claude-codex.git
+cd claude-codex
+bun install
+bun run build
+cd ..
+```
 
 ```bash
 YACWU_BACKENDS="claude=node ./scripts/claude-backend.mjs ./claude-codex/dist/src/adapter.mjs" bun run start

@@ -15,3 +15,6 @@ scripts/.gen-assets.js
 
 # AppImage build output
 /dist
+
+# Optional external Claude adapter checkout (managed in its own repository)
+/claude-codex/
