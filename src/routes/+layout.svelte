@@ -1156,7 +1156,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const queue = { ...existing, tasks: [...existing.tasks, task] };
 		todoQueues = { ...todoQueues, [id]: queue };
 		persistTodoQueues();
-		addLocalNote(id, `Queued todo (${queue.tasks.length + (queue.initialTask ? 1 : 0)} total): ${task}`, 'info');
+		addLocalNote(id, `Todo queued (${queue.tasks.length + (queue.initialTask ? 1 : 0)} total).`, 'info');
 		if (sessionHistoryLoaded[id] && threads[id]?.status !== 'running') advanceTodoQueue(id);
 	}
 

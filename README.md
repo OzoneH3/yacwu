@@ -181,7 +181,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when
   creating a session (or with `/profile`)
 - 🧾 Queue follow-up work with `/todo <task>`; queued tasks start one at a time
-  after the current turn, and `/todo` shows the queue with progress numbering
+  after the current turn. Confirmations do not repeat the task description;
+  `/todo` shows the queue with progress numbering
   that includes an already-running prompt
 - 🔁 Alternative backends: `YACWU_BACKENDS` registers other local app-server
   commands (e.g. [claude-codex](https://github.com/fuergaosi233/claude-codex))
