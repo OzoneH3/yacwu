@@ -19,6 +19,11 @@ test('bottom button reaches the real end of a long virtualized transcript and re
 	const transcript = page.locator('.transcript');
 	const remaining = () => transcript.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
 	await expect(page.getByText('Very last response', { exact: true })).toBeVisible();
+	await page.getByRole('button', { name: /^Session details,/ }).click();
+	const details = page.getByRole('dialog', { name: 'Session details', exact: true });
+	await expect(details.getByRole('heading', { name: 'Agents', exact: true })).toHaveCount(0);
+	await expect(details.getByRole('heading', { name: 'Session rules', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Close session details', exact: true }).click();
 	await expect.poll(remaining).toBeLessThanOrEqual(2);
 	await transcript.evaluate((el) => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })); el.scrollTop = 0; });
 	await page.getByRole('button', { name: 'Scroll to bottom', exact: true }).click();

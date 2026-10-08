@@ -49,7 +49,8 @@ state lives entirely in Codex's own persistent sessions, read back via
   estimated from elapsed task time on hover when the progress marker omits it.
 - 🤝 Multi-agent visibility: switch between the session and spawned agents,
   see which agents are active, and browse finished agents in a separate
-  Previous group; agent transcripts are read-only, and agent activity links
+  Previous group on the main page (not duplicated in session details);
+  agent transcripts are read-only, and agent activity links
   jump directly to the corresponding transcript
 - 🧠 Choose a model and reasoning effort per session.
   “Suggest settings” recommends an available model and supported thinking level

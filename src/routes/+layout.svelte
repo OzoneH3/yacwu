@@ -5466,31 +5466,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{isSideChat(activeSummary) ? 'Remove side conversation' : 'Archive session'}
 						</button>
 					</div>
-					{#if activeAgents.length > 0}
-						<div class="session-info-agents">
-							<h3 id="session-info-agents-title">Agents</h3>
-							<div class="session-info-agent-list" role="group" aria-labelledby="session-info-agents-title">
-								{#each activeAgents as agent (agent.id)}
-									<button
-										type="button"
-										class="session-info-agent"
-										class:current={agent.id === viewedAgentId}
-										class:closed={agent.closed}
-										aria-current={agent.id === viewedAgentId ? 'true' : undefined}
-										title={agentTitle(agent)}
-										onclick={() => {
-											sessionInfoDialog?.close();
-											toggleAgent(agent.id);
-										}}
-									>
-										<span class="agent-dot" class:running={agentIsRunning(agent)} aria-hidden="true"></span>
-										<span class="session-info-agent-name">{agentLabel(agent)}{#if agent.role}&nbsp;<span class="agent-menu-role">[{agent.role}]</span>{/if}</span>
-										<span class="session-info-agent-state">{agentStateLabel(agent)}</span>
-									</button>
-								{/each}
-							</div>
-						</div>
-					{/if}
 				</div>
 			</dialog>
 
@@ -8053,71 +8028,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		align-items: baseline;
 		min-width: 0;
 		font-weight: 600;
-	}
-
-	/* Agent list inside the session-details dialog (the mobile path). */
-	.session-info-agents {
-		padding-block-start: var(--space-xs);
-	}
-
-	.session-info-agents h3 {
-		margin: 0 0 var(--space-2xs);
-		color: var(--color-muted);
-		font-family: var(--font-body);
-		font-size: var(--text-sm);
-		font-weight: 500;
-	}
-
-	.session-info-agent-list {
-		display: flex;
-		flex-direction: column;
-	}
-
-	.session-info-agent {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) auto;
-		gap: var(--space-sm);
-		align-items: center;
-		min-height: var(--control-height);
-		padding: var(--space-2xs) var(--space-2xs);
-		border: 0;
-		border-block-end: var(--rule-hair) solid var(--color-rule);
-		border-radius: 0;
-		background: transparent;
-		color: var(--color-ink-2);
-		cursor: pointer;
-		font-family: var(--font-outlier);
-		font-size: var(--text-sm);
-		text-align: start;
-	}
-
-	.session-info-agent:last-child {
-		border-block-end: 0;
-	}
-
-	.session-info-agent:hover,
-	.session-info-agent:focus-visible {
-		background: var(--color-paper-3);
-	}
-
-	.session-info-agent.current {
-		color: var(--color-accent-active);
-		font-weight: 600;
-	}
-
-	.session-info-agent.closed {
-		color: var(--color-muted);
-	}
-
-	.session-info-agent-name {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.session-info-agent-state {
-		color: var(--color-muted);
 	}
 
 	.spacer {
