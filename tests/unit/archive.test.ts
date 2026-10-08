@@ -1,5 +1,12 @@
 import { expect, test } from 'bun:test';
-import { archiveDeletionSupported, archiveProviderLabel, loadArchiveCatalog } from '../../src/lib/archive';
+import { archiveDeletionSupported, archiveProviderLabel, filterArchives, loadArchiveCatalog } from '../../src/lib/archive';
+
+test('archive provider filters include remote Codex sessions and leave All unchanged', () => {
+	const sessions = [thread('a', 'anthropic'), thread('b', 'local'), thread('c', 'remote')];
+	expect(filterArchives(sessions, hosts, 'all')).toEqual(sessions);
+	expect(filterArchives(sessions, hosts, 'claude').map((session) => session.id)).toEqual(['a']);
+	expect(filterArchives(sessions, hosts, 'codex').map((session) => session.id)).toEqual(['b', 'c']);
+});
 import type { HostInfo, ThreadSummary } from '../../src/lib/protocol';
 
 const hosts: HostInfo[] = [{ name: 'local', kind: 'local', provider: 'codex', state: 'connected' },

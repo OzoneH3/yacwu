@@ -4,6 +4,7 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
+	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
 	import { settleTranscriptBottom } from '$lib/transcript-scroll';
@@ -222,6 +223,10 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	const usageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let archiveBrowserDialog = $state<HTMLDialogElement | null>(null);
 	let archivedSessions = $state<ThreadSummary[]>([]);
+	let archiveFilter = $state<ArchiveFilter>('all');
+	let deletingAllArchives = $state(false);
+	const visibleArchivedSessions = $derived(filterArchives(archivedSessions, hostChoices, archiveFilter));
+	const deletableArchives = $derived(visibleArchivedSessions.filter((session) => archiveDeletionSupported(session, hostChoices)));
 	let archivedSessionsLoading = $state(false);
 	let archivedSessionsError = $state<string | null>(null);
 	let restoringArchivedSessionId = $state<string | null>(null);
@@ -3402,6 +3407,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function openArchiveBrowser() {
+		archiveFilter = 'all';
 		archiveBrowserDialog?.showModal();
 		await loadArchivedSessions();
 	}
@@ -3455,20 +3461,51 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (!window.confirm(`Permanently delete “${label}”? This cannot be undone.`)) return;
 		deletingArchivedSessionId = session.id;
 		try {
-			const response = await fetch(`/api/threads/${session.id}/delete${hostQuery(session.host)}`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({})
-			});
-			const data = await response.json().catch(() => ({}));
-			if (!response.ok) throw new Error(data.error ?? 'Could not delete the archived session.');
-			archivedSessions = archivedSessions.filter((entry) => entry.id !== session.id);
+			await performArchiveDeletion(session);
 			showArchiveNotice({ tone: 'info', message: `Permanently deleted ${label}` });
 		} catch (error) {
 			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) }, 6000);
 		} finally {
 			deletingArchivedSessionId = null;
 		}
+	}
+
+	async function performArchiveDeletion(session: ThreadSummary) {
+		const response = await fetch(`/api/threads/${session.id}/delete${hostQuery(session.host)}`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({})
+		});
+		const data = await response.json().catch(() => ({}));
+		if (!response.ok) throw new Error(data.error ?? 'Could not delete the archived session.');
+		archivedSessions = archivedSessions.filter((entry) => entry.id !== session.id || entry.host !== session.host);
+	}
+
+	async function deleteAllArchivedSessions() {
+		if (restoringArchivedSessionId || deletingArchivedSessionId || !deletableArchives.length) return;
+		const targets = [...deletableArchives];
+		const skipped = visibleArchivedSessions.length - targets.length;
+		if (!window.confirm(`Permanently delete ${targets.length} archived session(s) in the ${archiveFilter} filter? This cannot be undone.${skipped ? ` ${skipped} unsupported Claude session(s) will remain untouched.` : ''}`)) return;
+		deletingAllArchives = true;
+		let deleted = 0;
+		const errors: string[] = [];
+		try {
+			for (const session of targets) {
+				deletingArchivedSessionId = session.id;
+				try { await performArchiveDeletion(session); deleted++; }
+				catch (error) { errors.push(`${shortLabel(session)}: ${error instanceof Error ? error.message : String(error)}`); }
+			}
+			showArchiveNotice({ tone: errors.length ? 'error' : 'info', message: `Deleted ${deleted} archived session(s).${skipped ? ` ${skipped} unsupported Claude session(s) were left untouched.` : ''}${errors.length ? ` ${errors.length} failed: ${errors.join(' · ')}` : ''}` }, 10000);
+		} finally {
+			deletingArchivedSessionId = null;
+			deletingAllArchives = false;
+		}
+	}
+
+	function tooltipInTopLayer(node: HTMLElement, _tooltip: unknown) {
+		const show = () => { try { if (node.matches(':popover-open')) node.hidePopover(); node.showPopover(); } catch { /* Older browsers retain the positioned tooltip. */ } };
+		show();
+		return { update: show, destroy() { try { node.hidePopover(); } catch { /* Already removed. */ } } };
 	}
 
 	function onKeydown(e: KeyboardEvent) {
@@ -6122,21 +6159,27 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				<div class="archive-browser-panel">
 					<div class="session-info-heading">
 						<h2 id="archive-browser-title">Archived sessions</h2>
-						<button class="mini ghost" type="button" onclick={loadArchivedSessions} disabled={archivedSessionsLoading}>Refresh</button>
+						<button class="mini ghost" type="button" onclick={loadArchivedSessions} disabled={archivedSessionsLoading || Boolean(restoringArchivedSessionId || deletingArchivedSessionId)}>Refresh</button>
 						<button class="session-info-close" type="button" onclick={() => archiveBrowserDialog?.close()} aria-label="Close archived sessions" title="Close">
 							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
 						</button>
 					</div>
+					<div class="archive-filter-controls">
+						<label>Provider <select aria-label="Archived session provider" bind:value={archiveFilter} disabled={deletingAllArchives}><option value="all">All</option><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
+						<button class="mini archive-delete" type="button" disabled={archivedSessionsLoading || Boolean(restoringArchivedSessionId || deletingArchivedSessionId) || !deletableArchives.length} onclick={deleteAllArchivedSessions}>{deletingAllArchives ? 'Deleting…' : 'Delete all'}</button>
+					</div>
+					{#if archiveNotice}<p class="archive-browser-empty" role={archiveNotice.tone === 'error' ? 'alert' : 'status'}>{archiveNotice.message}</p>{/if}
+					{#if visibleArchivedSessions.some((session) => !archiveDeletionSupported(session, hostChoices))}<p class="archive-browser-empty">Claude's current adapter supports archive and restore, but not permanent deletion. Delete all leaves those sessions untouched.</p>{/if}
 					{#if archivedSessionsLoading && archivedSessions.length === 0}
 						<p class="archive-browser-empty">Loading archived sessions…</p>
 					{:else if archivedSessionsError && archivedSessions.length === 0}
 						<p class="archive-browser-empty error" role="alert">{archivedSessionsError}</p>
-					{:else if archivedSessions.length === 0}
-						<p class="archive-browser-empty">No archived sessions.</p>
+					{:else if visibleArchivedSessions.length === 0}
+						<p class="archive-browser-empty">No archived sessions in this filter.</p>
 					{:else}
 						{#if archivedSessionsError}<p class="archive-browser-empty error" role="alert">{archivedSessionsError}</p>{/if}
 						<div class="archive-browser-list">
-							{#each archivedSessions as session (`${session.host}:${session.id}`)}
+							{#each visibleArchivedSessions as session (`${session.host}:${session.id}`)}
 								<div class="archive-browser-row">
 									<div class="archive-browser-copy">
 										<strong>{shortLabel(session)}</strong>
@@ -6180,6 +6223,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		id="yacwu-instant-tooltip"
 		class="instant-tooltip"
 		class:wide={instantTooltip.wide}
+		popover="manual"
+		use:tooltipInTopLayer={instantTooltip}
 		role="tooltip"
 		style={`left: ${instantTooltip.left}px; top: ${instantTooltip.top}px`}
 	>{instantTooltip.text}</div>
@@ -6197,6 +6242,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	@import '../../tokens.css';
 
 	.instant-tooltip {
+		margin: 0;
+		inset: auto;
 		position: fixed;
 		z-index: 10000;
 		width: max-content;
@@ -6219,6 +6266,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		max-height: min(60vh, 28rem);
 		overflow: auto;
 	}
+	.archive-filter-controls { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); margin-block: var(--space-sm); }
+	.archive-filter-controls label { display: flex; align-items: center; gap: var(--space-xs); }
+	.archive-filter-controls select { color: var(--color-ink); background: var(--color-paper); border: 1px solid var(--color-rule); border-radius: var(--radius-input); padding: var(--space-2xs); }
 
 	:global(*) {
 		box-sizing: border-box;

@@ -43,6 +43,12 @@ rules locally, and records usage/diagnostic journals on the server.
   backend. Older archive pages are included. Permanent deletion is available
   for Codex; the current Claude adapter supports archive/restore but not delete.
   A provider failure leaves other providers' archives visible with a notice.
+- 🗃️ Archive browser provider filter (All / Codex / Claude), reset to All on
+  opening. Delete all confirms and deletes supported sessions in the selected
+  filter, reports partial failures, and leaves unsupported Claude archives
+  untouched. The current Claude adapter has no permanent-delete RPC; restore
+  remains available. Notices stay visible inside the modal and tooltips appear
+  above it.
 - ✅ Background completion indicators mark finished sessions until you open
   them, so completed work is easy to spot in the session list
 - 🔒 In-use detection warns before opening a session another Codex process has

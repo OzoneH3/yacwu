@@ -10,6 +10,11 @@ export function archiveDeletionSupported(session: ThreadSummary, hosts: HostInfo
 	return !hosts.some((entry) => entry.name === session.host && entry.provider === 'claude');
 }
 
+export type ArchiveFilter = 'all' | 'codex' | 'claude';
+export function filterArchives(sessions: ThreadSummary[], hosts: HostInfo[], filter: ArchiveFilter): ThreadSummary[] {
+	return sessions.filter((session) => filter === 'all' || (archiveProviderLabel(session, hosts) === 'Claude' ? 'claude' : 'codex') === filter);
+}
+
 /** Include unopened local providers without connecting disconnected SSH machines. */
 export async function loadArchiveCatalog(hosts: HostInfo[], read: (host: string) => Promise<ThreadSummary[]>) {
 	const targets = ['', ...hosts.filter((host) => host.kind === 'backend').map((host) => host.name)];
