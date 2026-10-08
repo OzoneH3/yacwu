@@ -53,6 +53,12 @@ rules locally, and records usage/diagnostic journals on the server.
   them, so completed work is easy to spot in the session list
 - 🔒 In-use detection warns before opening a session another Codex process has
   loaded, helping prevent two processes from modifying the same conversation
+- 🧹 Compact activity is the default transcript view: adjacent routine commands
+  collapse into expandable “Background work” rows with counts and running/completed
+  status. Expand a group to inspect its original commands and output, or select
+  **Show all activity** for the full trace. Assistant messages, questions, file
+  changes, errors and failed/interrupted commands remain visible and in order;
+  this is presentation only, not a change to stored history or agent context.
 - ⚡ Live streaming of assistant messages, reasoning, commands, plans, file
   changes, and current activity; send steering instructions while a turn runs,
   or stop and resume it later from the Resume button beside the stop note;

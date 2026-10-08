@@ -305,6 +305,7 @@ test('command activity aligns status and collapses long output', async ({ page }
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 	await page.locator('button.new').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
+	await page.getByLabel('Show all activity').check();
 
 	const textarea = page.locator('.composer textarea');
 	await textarea.fill('/shell printf short');

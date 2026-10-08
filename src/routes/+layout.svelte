@@ -4,6 +4,7 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
+	import { compactActivity } from '$lib/compact-activity';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
@@ -661,6 +662,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let cwdInputEl = $state<HTMLInputElement | null>(null);
 
 	let transcriptEl = $state<HTMLDivElement | null>(null);
+	let showAllActivity = $state(false);
+	let expandedActivity = $state<Record<string, boolean>>({});
+	function toggleActivityGroup(id: string) {
+		cancelBottomJump();
+		const key = `${viewedId}:${id}`;
+		expandedActivity[key] = !expandedActivity[key];
+	}
 	let sessionRules = $state<Record<string, SessionRules>>({});
 	function saveSessionRules(id: string, rules: SessionRules) {
 		sessionRules = { ...sessionRules, [id]: rules };
@@ -672,15 +680,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	const viewedItems = $derived(
 		separateTaskProgressEntries(itemsOf(viewed)).filter(isRenderableTranscriptItem)
 	);
+	const displayedItems = $derived(showAllActivity ? viewedItems : compactActivity(viewedItems, (id) => Boolean(expandedActivity[`${viewedId}:${id}`])));
 	const virtualTranscript = $derived(
-		virtualizeItems(viewedItems, transcriptScrollTop, transcriptViewportHeight, transcriptHeightVersion)
+		virtualizeItems(displayedItems, transcriptScrollTop, transcriptViewportHeight, transcriptHeightVersion)
 	);
 	const transcriptJumpPoints = $derived.by(() => {
 		const total = Math.max(1, virtualTranscript.total);
 		let offset = 0;
 		const points: { id: string; index: number; offset: number; top: number; label: string }[] = [];
-		for (let index = 0; index < viewedItems.length; index += 1) {
-			const item = viewedItems[index];
+		for (let index = 0; index < displayedItems.length; index += 1) {
+			const item = displayedItems[index];
 			if (item.type === 'userMessage') {
 				const rawText = ((item as any).content ?? [])
 					.map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
@@ -1723,8 +1732,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		cancelBottomJump();
 		if (!transcriptEl) return;
 		let offset = 0;
-		for (let i = 0; i < index && i < viewedItems.length; i += 1) {
-			offset += measuredRowHeight(viewedItems[i]);
+		for (let i = 0; i < index && i < displayedItems.length; i += 1) {
+			offset += measuredRowHeight(displayedItems[i]);
 		}
 		transcriptEl.scrollTop = offset;
 		updateTranscriptViewport();
@@ -5637,6 +5646,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			{:else}
 				<div class="transcript-frame" class:has-position-rail={transcriptJumpPoints.length > 1}>
+					<div class="activity-toolbar"><label><input type="checkbox" bind:checked={showAllActivity} onchange={cancelBottomJump} /> Show all activity</label></div>
 				<div class="transcript" bind:this={transcriptEl} use:cancelJumpOnInput onscroll={onTranscriptScroll}>
 					{#if viewedAgentId ? agentHistoryLoading : sessionOpening[viewedId ?? '']}
 						<div class="sys">loading history…</div>
@@ -5764,6 +5774,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										<div class="body">{reasoningText(item)}</div>
 									</div>
 								{/if}
+							{:else if item.type === 'compactActivity'}
+								<div class="item compact-activity">
+									<button type="button" class="activity-group-toggle" aria-expanded={Boolean(expandedActivity[`${viewedId}:${item.id}`])} onclick={() => toggleActivityGroup(item.id)}>
+										<span aria-hidden="true">{expandedActivity[`${viewedId}:${item.id}`] ? '▾' : '▸'}</span> Background work · {(item as any).count} {(item as any).count === 1 ? 'command' : 'commands'} · {(item as any).status}
+									</button>
+								</div>
 							{:else if item.type === 'commandExecution'}
 								{@const output = commandOutput(item)}
 								{@const outputExpanded = commandOutputIsExpanded(item, output)}
@@ -8212,12 +8228,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.transcript-frame {
+		padding-top: 2rem;
 		position: relative;
 		display: flex;
 		flex-direction: column;
 		flex: 1;
 		min-height: 0;
 	}
+	.activity-toolbar { position: absolute; top: 0; right: var(--space-sm); z-index: 1; font-size: var(--text-xs); color: var(--color-muted); }
+	.activity-toolbar label { display: flex; align-items: center; gap: var(--space-xs); min-height: 2rem; cursor: pointer; }
+	.compact-activity { padding-block: var(--space-2xs); }
+	.activity-group-toggle { display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-2xs) var(--space-xs); border: 1px solid var(--color-rule); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-muted); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+	.activity-group-toggle:hover { background: var(--color-paper-3); color: var(--color-ink); }
+	.activity-group-toggle:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 
 	.transcript-frame.has-position-rail .transcript {
 		padding-inline-end: calc(var(--space-sm) + 1.25rem);
