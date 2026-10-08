@@ -501,6 +501,12 @@ error details. `RUST_LOG` defaults to `info` for newly spawned local children
 and respects an existing override. Remote Codex stderr stays on the remote
 host; local connection/RPC diagnostics are still recorded.
 
+Yacwu also checks saved running tasks against backend runtime state every
+15 seconds and on reconnect. Loaded-but-idle interrupted tasks (including
+Claude tasks interrupted by adapter restarts) stop their activity timer and
+show a recovery action. Failed reads retain the current state; silence alone
+never stops a task that is still reported active.
+
 To inspect a stalled session without waiting for a Codex RPC, read
 `GET /api/threads/<session-id>/diagnostics` (add `?host=<host>` for remote
 routing). This uses the same authentication as the other API endpoints and

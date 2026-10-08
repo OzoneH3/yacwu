@@ -4,6 +4,7 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
+	import { runtimeOutcome } from '$lib/runtime-reconciliation';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import {
@@ -1139,7 +1140,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	let reconcilingRuntime = false;
 	async function reconcileInterruptedSessions() {
+		if (reconcilingRuntime) return;
+		reconcilingRuntime = true;
 		const checking = new Set<string>();
 		try {
 			const rawRunning = JSON.parse(localStorage.getItem(RUNNING_TASKS_KEY) ?? '{}');
@@ -1147,33 +1151,61 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				? rawRunning as Record<string, string>
 				: {};
 			runningTasks = { ...previouslyRunning };
+			for (const [id, thread] of Object.entries(threads)) {
+				if (thread.status === 'running' && thread.turnStartedAt !== null && Date.now() - thread.turnStartedAt > 15000) {
+					previouslyRunning[id] = agents[id] ? agentRootId(agents, agents[id]) : id;
+					runningTasks[id] = previouslyRunning[id];
+				}
+			}
 			const rawInterrupted = JSON.parse(localStorage.getItem(INTERRUPTED_SESSIONS_KEY) ?? '[]');
 			if (Array.isArray(rawInterrupted)) {
 				for (const id of rawInterrupted) if (typeof id === 'string') interruptedSessions[id] = true;
 			}
 			for (const sessionId of Object.values(previouslyRunning)) {
-				if (typeof sessionId === 'string' && !interruptedSessions[sessionId]) {
+				if (!startupRecoveryComplete && typeof sessionId === 'string' && !interruptedSessions[sessionId]) {
 					recoveringSessions[sessionId] = true;
 					checking.add(sessionId);
 				}
 			}
 			if (Object.keys(previouslyRunning).length === 0) return;
-			const response = await fetch('/api/threads/loaded');
+			const response = await fetch('/api/threads/loaded', { signal: AbortSignal.timeout(5000) });
 			if (!response.ok) return;
 			const data = await response.json();
 			const loaded = new Set<string>(Array.isArray(data.data) ? data.data : []);
-			const stillRunning: Record<string, string> = {};
-			for (const [threadId, sessionId] of Object.entries(previouslyRunning)) {
-				if (loaded.has(threadId)) stillRunning[threadId] = sessionId;
-				else if (typeof sessionId === 'string') interruptedSessions[sessionId] = true;
-			}
+			await Promise.all(Object.entries(previouslyRunning).map(async ([threadId, sessionId]) => {
+				const observedTurnId = threads[threadId]?.turnId;
+				try {
+					let outcome: ReturnType<typeof runtimeOutcome> = 'interrupted';
+					let thread: { status?: { type: string }; turns?: Turn[] } = { status: { type: 'idle' } };
+					if (loaded.has(threadId)) {
+						const url = new URL(threadApi(threadId), window.location.origin);
+						url.searchParams.set('turns', '1');
+						const read = await fetch(url, { signal: AbortSignal.timeout(5000) });
+						if (!read.ok) return;
+						const data = await read.json();
+						if (!data.thread) return;
+						thread = data.thread;
+						outcome = runtimeOutcome(thread);
+					}
+					// A new streamed turn must not be overwritten by an older read.
+					if (threads[threadId]?.turnId !== observedTurnId) return;
+					if (outcome === 'unknown' || outcome === 'running') return;
+					syncThreadRuntime(threadId, thread);
+					const latest = thread.turns?.at(-1);
+					for (const item of latest?.items ?? []) upsertItem(threadId, item, false, latest?.id, true);
+					if (outcome === 'interrupted' && !interruptedSessions[sessionId]) {
+						interruptedSessions[sessionId] = true;
+						addLocalNote(sessionId, 'Task interrupted: the backend is no longer running it. Use Continue interrupted task to resume.', 'err');
+					}
+				} catch { /* Unreachable is not proof of interruption; retain state. */ }
+			}));
 			for (const sessionId of checking) delete recoveringSessions[sessionId];
-			runningTasks = stillRunning;
 			persistRunningTasks();
 			persistInterruptedSessions();
 		} catch {
 			// Keep the saved markers intact if storage or the backend is unavailable.
 		} finally {
+			reconcilingRuntime = false;
 			for (const sessionId of checking) delete recoveringSessions[sessionId];
 		}
 	}
@@ -4466,6 +4498,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		mobileQuery.addEventListener('change', updateMobileViewport);
 
 		void reconcileInterruptedSessions().finally(() => (startupRecoveryComplete = true));
+		const runtimeCheckTimer = setInterval(() => void reconcileInterruptedSessions(), 15000);
 		loadSessions();
 		const accountUsageTimer = setInterval(() => {
 			if (activeId) void loadAccountUsage(activeHost, true);
@@ -4503,6 +4536,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			window.removeEventListener('scroll', dismissTooltipOnViewportChange, true);
 			window.removeEventListener('resize', dismissTooltipOnViewportChange);
 			clearInterval(accountUsageTimer);
+			clearInterval(runtimeCheckTimer);
 			for (const timer of usageRefreshTimers.values()) clearTimeout(timer);
 			usageRefreshTimers.clear();
 			if (archiveNoticeTimer) clearTimeout(archiveNoticeTimer);
