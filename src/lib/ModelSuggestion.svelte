@@ -6,6 +6,12 @@
 	}>();
 	let open = $state(false);
 	const suggestion = $derived(suggestPromptSettings(prompt, models, attachments));
+	function applySuggestion() {
+		const selected = suggestion;
+		if (!selected || disabled) return;
+		open = false;
+		void onapply(selected.model, selected.effort);
+	}
 </script>
 
 <div class="suggestion">
@@ -16,7 +22,7 @@
 			<p>{suggestion.reason}</p>
 			<small>{suggestion.caveat}</small>
 			{#if running}<p>Applies to the next turn. Use the restart button to change the running prompt.</p>{/if}
-			<footer><a href={suggestion.guidanceUrl} target="_blank" rel="noreferrer">Selection guidance</a><button type="button" disabled={disabled} onclick={() => onapply(suggestion!.model, suggestion!.effort)}>Apply settings</button></footer>
+			<footer><a href={suggestion.guidanceUrl} target="_blank" rel="noreferrer">Selection guidance</a><button type="button" disabled={disabled} onclick={applySuggestion}>Apply settings</button></footer>
 		</section>
 	{/if}
 </div>

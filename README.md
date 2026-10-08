@@ -70,7 +70,8 @@ rules locally, and records usage/diagnostic journals on the server.
   jump directly to the corresponding transcript
 - 🧠 Choose a model and reasoning effort per session.
   “Suggest settings” recommends an available model and supported thinking level
-  for the draft prompt, explains its reasoning, and lets you apply both together.
+  for the draft prompt, explains its reasoning, and lets you apply both together;
+  applying closes the suggestion panel.
   Claude suggestions prefer Haiku for scoped edits, Sonnet for routine tasks,
   Opus for complex work, and Fable for demanding reasoning when available.
   Suggestions use each model’s advertised effort levels and link to its provider’s
