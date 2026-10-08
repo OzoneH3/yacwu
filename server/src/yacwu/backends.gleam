@@ -10,11 +10,12 @@
 ////
 //// Format: semicolon-separated `name=command` entries, e.g.
 ////
-////   YACWU_BACKENDS="claude=node /opt/claude-codex/dist/src/adapter.mjs"
+////   YACWU_BACKENDS="claude=node ./claude-codex/dist/src/adapter.mjs app-server --listen stdio://"
 ////
 //// The command is split on whitespace into argv (no quoting) and launched
 //// via /usr/bin/env, so bare program names resolve on $PATH and absolute
-//// paths work as-is. Entries with an invalid name (empty, "local", unsafe
+//// paths work as-is. Relative script paths use YACWU_BACKEND_ROOT or PWD.
+//// Entries with an invalid name (empty, "local", unsafe
 //// characters), an empty command, or a name an earlier entry already used
 //// are dropped. A backend name shadows an identical ~/.ssh/config alias.
 ////
@@ -23,6 +24,7 @@
 //// launch it is fixed at yacwu's start.
 
 import envoy
+import filepath
 import gleam/list
 import gleam/result
 import gleam/string
@@ -73,7 +75,35 @@ pub fn parse(raw: String) -> List(Backend) {
 pub fn command(name: String) -> Result(List(String), Nil) {
   discover()
   |> list.find(fn(backend) { backend.name == name })
-  |> result.map(fn(backend) { backend.command })
+  |> result.map(fn(backend) {
+    let root =
+      envoy.get("YACWU_BACKEND_ROOT")
+      |> result.lazy_or(fn() { envoy.get("PWD") })
+      |> result.unwrap(".")
+    resolve_command(backend.command, root)
+  })
+}
+
+/// Anchor explicit relative paths before the manager changes to session cwd.
+pub fn resolve_command(command: List(String), root: String) -> List(String) {
+  list.map(command, fn(arg) {
+    case
+      string.starts_with(arg, "./")
+      || string.starts_with(arg, "../")
+      || {
+        !string.starts_with(arg, "/")
+        && !string.starts_with(arg, "-")
+        && {
+          string.ends_with(arg, ".mjs")
+          || string.ends_with(arg, ".js")
+          || string.ends_with(arg, ".cjs")
+        }
+      }
+    {
+      True -> filepath.join(root, arg)
+      False -> arg
+    }
+  })
 }
 
 /// Backend names must not collide with the built-in local host and must be

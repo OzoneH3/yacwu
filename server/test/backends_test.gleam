@@ -71,6 +71,30 @@ pub fn parse_command_may_contain_further_equals_test() {
 
 // -- Environment discovery and host classification ----------------------------
 
+pub fn relative_adapter_paths_keep_protocol_arguments_unchanged_test() {
+  assert backends.resolve_command(
+      [
+        "node", "./claude-codex/dist/src/adapter.mjs", "app-server", "--listen",
+        "stdio://",
+      ],
+      "/projects/yacwu",
+    )
+    == [
+      "node",
+      "/projects/yacwu/./claude-codex/dist/src/adapter.mjs",
+      "app-server",
+      "--listen",
+      "stdio://",
+    ]
+  assert backends.resolve_command(["node", "adapter.mjs"], "/projects/yacwu")
+    == ["node", "/projects/yacwu/adapter.mjs"]
+  assert backends.resolve_command(
+      ["node", "/opt/adapter.mjs", "--mode=remote"],
+      "/projects/yacwu",
+    )
+    == ["node", "/opt/adapter.mjs", "--mode=remote"]
+}
+
 pub fn discover_reads_the_environment_test() {
   use <- with_env("claude=claude-codex app-server;mini=codex-mini app-server")
   assert list.map(backends.discover(), fn(backend) { backend.name })

@@ -221,7 +221,7 @@ the protocol backed by Claude Code. Declare such backends with
 `YACWU_BACKENDS`, semicolon-separated `name=command` entries:
 
 ```bash
-YACWU_BACKENDS="claude=node /opt/claude-codex/dist/src/adapter.mjs" bun run start
+YACWU_BACKENDS="claude=node ./claude-codex/dist/src/adapter.mjs app-server --listen stdio://" bun run start
 ```
 
 Each name appears in the host picker alongside the default local codex
@@ -233,6 +233,12 @@ else's. The command is split on whitespace (no quoting) and resolved via
 `/usr/bin/env`, so bare program names use `PATH` and absolute paths work
 as-is. Names must be URL-safe (letters, digits, `.-_@`) and may not be
 `local`; a backend name shadows an identical `~/.ssh/config` alias.
+
+Relative script paths resolve from the Yacwu project folder when using
+`bun run start` or `bun run dev:server`. For other launchers, set
+`YACWU_BACKEND_ROOT` to an absolute base directory; otherwise the launch
+environment's `PWD` is used. Backend session working directories remain
+independent of this script path.
 
 For a deployable artifact, `cd server && gleam export erlang-shipment`
 produces a self-contained BEAM release (needs only Erlang on the target), and
