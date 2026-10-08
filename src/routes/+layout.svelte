@@ -4130,6 +4130,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch {
 			/* not URL-encoded — use as written */
 		}
+		// Versioned Git branch names are not implicit file references. Explicit
+		// Markdown links and ./ or absolute paths still identify real folders.
+		if (requireSeparator && /^(?:refs\/(?:heads|tags)\/)?(?:release|releases|hotfix)\/v?\d+(?:\.\d+)+(?:[-+][\w.-]+)?$/.test(candidate)) return null;
 		let line: number | null = null;
 		let root: string | null = null;
 		const withLine = candidate.match(/^(.*?):(\d+)(?::\d+)?$/);
