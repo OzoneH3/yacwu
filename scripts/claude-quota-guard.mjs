@@ -1,6 +1,6 @@
 /** @typedef {{id?: string | number, method?: string, params?: Record<string, any>, result?: any, error?: any}} RpcMessage */
 /** Stop/block Claude turns when either allowance has 10% or less remaining.
- * @param {() => Promise<any>} readUsage
+ * @param {(options?: {force?: boolean}) => Promise<any>} readUsage
  * @param {(message: RpcMessage) => void} send
  * @param {(message: RpcMessage) => void} reply
  */
@@ -36,7 +36,9 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
     /** @param {RpcMessage | undefined} request */
     async allow(request) {
       if (!['turn/start', 'review/start', 'thread/compact/start'].includes(request?.method ?? '')) return true;
-      const usage = await readUsage();
+      // A cached pre-reset percentage must never reject a task after its
+      // allowance window may have rolled over. Ask Anthropic first.
+      const usage = await readUsage({ force: true });
       if (closed) return false;
       stop(usage);
       let message = reason(usage);
@@ -76,7 +78,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
     async poll() {
       if (closed || polling || !active.size) return;
       polling = true;
-      try { stop(await readUsage()); } finally { polling = false; }
+      try { stop(await readUsage({ force: true })); } finally { polling = false; }
     },
     close() { closed = true; active.clear(); pending.clear(); interrupted.clear(); }
   };

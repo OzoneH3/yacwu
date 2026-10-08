@@ -67,9 +67,9 @@ export function createClaudeUsageReader({
   let pending;
   /** @type {string | undefined} */
   let accountToken;
-  return async () => {
+  return async ({ force = false } = {}) => {
     if (pending) return pending;
-    if (now() < nextRead) return cached;
+    if (!force && now() < nextRead) return cached;
     pending = (async () => {
       nextRead = now() + 120_000;
       try {
@@ -79,7 +79,7 @@ export function createClaudeUsageReader({
           cached = claudeRateLimits(null);
           accountToken = token;
         }
-        if (!token) return cached;
+        if (!token) return force ? claudeRateLimits(null) : cached;
         const response = await fetchUsage('https://api.anthropic.com/api/oauth/usage', {
           headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' },
           signal: AbortSignal.timeout(8_000)
@@ -88,10 +88,11 @@ export function createClaudeUsageReader({
           const retry = Number(response.headers.get('retry-after'));
           nextRead = now() + Math.max(120_000, Number.isFinite(retry) ? retry * 1000 : 0);
         }
-        if (!response.ok) return cached;
+        if (!response.ok) return force ? claudeRateLimits(null) : cached;
         cached = claudeRateLimits(await response.json(), auth?.subscriptionType ?? null);
       } catch {
         // Missing login or a temporary service failure must not block Claude turns.
+        if (force) return claudeRateLimits(null);
       }
       return cached;
     })();
