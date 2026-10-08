@@ -8,6 +8,8 @@
 	import { goto } from '$app/navigation';
 	import {
 		currentContextTokens,
+		reportedTokenStatistics,
+		type TokenStatistics,
 		hostQuery,
 		isRemoteHost,
 		LOCAL_HOST,
@@ -43,7 +45,7 @@ import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-ch
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
-import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-display';
+import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog } from '$lib/model-display';
 
 	let { children } = $props();
 
@@ -56,6 +58,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	}
 
 	interface ThreadState {
+		tokenStatistics?: TokenStatistics;
 		order: string[];
 		byId: Record<string, ThreadItem>;
 		status: 'idle' | 'running';
@@ -386,6 +389,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	);
 	const activeSettingsChangedDuringTurn = $derived(activeModelChangedDuringTurn || activeEffortChangedDuringTurn);
 	const activeModels = $derived(activeId ? filterAndSortModelChoices(sessionModels[activeId] ?? []) : []);
+	const activeClaude = $derived(isClaudeModelCatalog(activeModels));
 	const activeEfforts = $derived(activeId ? (modelEfforts[activeId] ?? []) : []);
 	const activeModelChoice = $derived(
 		activeConfig && activeId
@@ -1495,6 +1499,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			case 'thread/tokenUsage/updated': {
 				if (tid) {
 					const t = ensureThread(tid);
+					const statistics = reportedTokenStatistics(p.tokenUsage);
+					if (statistics) t.tokenStatistics = statistics;
 					const tokens = currentContextTokens(p.tokenUsage);
 					if (tokens !== null) t.tokens = tokens;
 					t.contextWindow = p.tokenUsage?.modelContextWindow ?? t.contextWindow;
@@ -5159,7 +5165,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{/if}
 				</div>
 			</header>
-			{#if sessionContextLine || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
+			{#if sessionContextLine || activeClaude || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
 				<div class="original-prompt" aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
 					{#if active?.status === 'running' && !viewedAgentId}
 						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
@@ -5170,17 +5176,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else}
 								<span>Estimating…</span>
 							{/if}
+							{#if activeClaude}
+								<span class="task-cost" title="Recorded task tokens; Claude account allowance percentages are unavailable.">{activeTaskUsage ? `${activeTaskUsage.partial ? '≥' : ''}${activeTaskUsage.tokens.toLocaleString()} tokens` : 'Recording usage…'}</span>
+							{:else}
 							<span class="task-cost" title={projectedTaskUsage
 								? `Projected total weekly allowance from ${projectedTaskUsage.basis === 'progress' ? 'estimated completion' : 'elapsed time and time remaining'}. ${formatAllowancePercent(activeTaskUsage?.percent ?? null)} used so far; ${formatAllowancePercent(projectedTaskUsage.remaining)} estimated remaining. Includes recorded agent work.`
 								: activeTaskUsage ? taskUsageTitle(activeTaskUsage) : 'Waiting for task usage recording and sufficient calibration.'}>
 								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : activeTaskUsage?.knownPercent !== null && activeTaskUsage?.knownPercent !== undefined ? `${formatAllowancePercent(activeTaskUsage.knownPercent)} week · incomplete` : 'Cost learning…'}{#if activeTaskUsage?.knownPercent != null && activeTaskUsage.provisional} · early{/if}
 							</span>
+							{/if}
 						</div>
 					{/if}
 					<span class="session-label" title={sessionContextTitle}>Session</span>
 					{#if activeTodoQueue?.tasks.length}<span class="todo-position">[{activeTodoPosition}/{activeTodoTotal}]</span>{/if}
 					<p>{sessionContextLine}</p>
-					<div class="session-bar-right">
+						<div class="session-bar-right">
+						{#if activeClaude}
+							<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true} title="Recorded Claude task tokens and runtime. Account allowance percentages are not supplied by this adapter.">Claude usage</button>
+						{/if}
 						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
 							<div class="usage-limits" aria-label="Codex usage remaining">
 								{#if activeAccountUsage.fiveHour}
@@ -5311,6 +5324,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<dt>Tokens</dt>
 							<dd>{active?.tokens?.toLocaleString() ?? '—'}</dd>
 						</div>
+						{#if active?.tokenStatistics}
+							<div><dt>Reported total tokens</dt><dd>{active.tokenStatistics.totalTokens.toLocaleString()}</dd></div>
+							<div><dt>Input tokens</dt><dd>{active.tokenStatistics.inputTokens.toLocaleString()}</dd></div>
+							<div><dt>Cached input tokens</dt><dd>{active.tokenStatistics.cachedInputTokens.toLocaleString()}</dd></div>
+							<div><dt>Output tokens</dt><dd>{active.tokenStatistics.outputTokens.toLocaleString()}</dd></div>
+						{/if}
+						{#if activeClaude}
+							<div><dt>Claude allowance</dt><dd>Not reported by this adapter. Task usage history records tokens and runtime; live totals may reset when the adapter restarts.</dd></div>
+						{/if}
 						<div>
 							<dt>State</dt>
 							<dd>{active?.status ?? 'idle'}</dd>
@@ -5594,7 +5616,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
 										{#if typeof turnDuration === 'number'}<span class="agent-duration" title="Time taken for this task">{formatDuration(turnDuration)}</span>{/if}
-										{#if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? taskUsage.knownPercent !== null ? `${formatAllowancePercent(taskUsage.knownPercent)} week (incomplete${taskUsage.provisional ? ', early' : ''})` : 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
+										{#if taskUsage}<span class="agent-usage" title={activeClaude ? 'Recorded task tokens. Claude account allowance percentages are not reported by the adapter.' : taskUsageTitle(taskUsage)}>{#if !activeClaude}{taskUsage.percent === null ? taskUsage.knownPercent !== null ? `${formatAllowancePercent(taskUsage.knownPercent)} week (incomplete${taskUsage.provisional ? ', early' : ''})` : 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {/if}{taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
 										<button
 											type="button"
 											class="copy-agent"

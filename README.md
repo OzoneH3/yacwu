@@ -221,7 +221,7 @@ the protocol backed by Claude Code. Declare such backends with
 `YACWU_BACKENDS`, semicolon-separated `name=command` entries:
 
 ```bash
-YACWU_BACKENDS="claude=node ./claude-codex/dist/src/adapter.mjs app-server --listen stdio://" bun run start
+YACWU_BACKENDS="claude=node ./scripts/claude-backend.mjs ./claude-codex/dist/src/adapter.mjs" bun run start
 ```
 
 Each name appears in the host picker alongside the default local codex
@@ -243,6 +243,21 @@ independent of this script path.
 Claude model catalogs hide the adapter's GPT/Codex proxy choices in the
 model picker, suggestions and benchmark selection. Use a regular Codex
 session for GPT models; Claude sessions keep their Claude choices.
+
+The Claude launcher discovers the installed Agent SDK's supported models on
+backend startup without submitting a prompt. It labels aliases with their
+resolved versions (rather than hard-coding model releases), and disables
+the adapter's Codex proxy. Discovery failures fall back to the adapter's
+aliases; an explicit `CLAUDE_CODEX_MODELS` configuration is respected. The
+adapter must be built with its SDK dependency installed before launching.
+You can still invoke the adapter directly if you do not want discovery.
+
+Claude sessions have a **Claude usage** shortcut to recorded task token counts
+and runtime. Session details show the live reported total, input, cached-input
+and output counters when received. These live counters may reset on adapter
+restart; recorded task history is separate. The adapter does not supply Claude
+account allowance percentages, so these are not equivalent to its subscription
+usage meter.
 
 For a deployable artifact, `cd server && gleam export erlang-shipment`
 produces a self-contained BEAM release (needs only Erlang on the target), and

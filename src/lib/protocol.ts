@@ -168,6 +168,23 @@ export interface Turn {
 }
 
 /** Codex reports cumulative thread usage in `total` and active-context usage in `last`. */
+export interface TokenStatistics {
+	totalTokens: number;
+	inputTokens: number;
+	cachedInputTokens: number;
+	outputTokens: number;
+}
+
+export function reportedTokenStatistics(tokenUsage: unknown): TokenStatistics | null {
+	if (!tokenUsage || typeof tokenUsage !== 'object') return null;
+	const total = (tokenUsage as { total?: unknown }).total;
+	if (!total || typeof total !== 'object') return null;
+	const values = total as Record<string, unknown>;
+	const keys = ['totalTokens', 'inputTokens', 'cachedInputTokens', 'outputTokens'] as const;
+	if (keys.some((key) => typeof values[key] !== 'number' || !Number.isFinite(values[key]) || (values[key] as number) < 0)) return null;
+	return Object.fromEntries(keys.map((key) => [key, values[key]])) as unknown as TokenStatistics;
+}
+
 export function currentContextTokens(tokenUsage: unknown): number | null {
 	if (!tokenUsage || typeof tokenUsage !== 'object') return null;
 	const last = (tokenUsage as { last?: unknown }).last;

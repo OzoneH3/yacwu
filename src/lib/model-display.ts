@@ -9,6 +9,10 @@ export interface ModelChoiceSummary {
 	displayName: string;
 }
 
+export function isClaudeModelCatalog(choices: ModelChoiceSummary[]): boolean {
+	return choices.some((choice) => /claude|^(?:sonnet|opus|haiku)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
+}
+
 const profiles: Array<[RegExp, ModelDisplayProfile]> = [
 	[/gpt 6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional', valueRating: 5 }],
 	[/gpt 5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: 4.5 }],
@@ -37,7 +41,7 @@ export function modelDisplayProfile(choice: ModelChoiceSummary | null): ModelDis
 export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices: T[]): T[] {
 	// Claude adapters can advertise a Codex proxy too. Keep their picker
 	// provider-specific rather than offering unsafe cross-provider switches.
-	const hasClaudeModels = choices.some((choice) => /claude|^(?:sonnet|opus|haiku)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
+	const hasClaudeModels = isClaudeModelCatalog(choices);
 	const providerChoices = hasClaudeModels
 		? choices.filter((choice) => !/^(?:gpt|o[1-9])(?:[-\s.]|$)/i.test(choice.id)
 			&& !/^gpt(?:[-\s.]|$)/i.test(choice.displayName))
