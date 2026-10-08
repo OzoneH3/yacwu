@@ -6088,7 +6088,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<ModelSuggestion prompt={input} models={activeModels} attachments={selectedAttachments.length} disabled={modelPending || effortPending || switchingPromptModel} running={active?.status === 'running'} onapply={applySuggestedSettings} />
 								{/key}
 				{#if activeConfig && activeModels.length > 0}
-					<div class="model-picker" title={`Model: ${activeModelChoice?.displayName ?? activeConfig.model}${modelDisplayProfile(activeModelChoice)?.estimateBasis ? ` · ${modelDisplayProfile(activeModelChoice)?.estimateBasis}` : ''}`}>
+					<div class="model-picker">
 						<span class="model-picker-copy">
 							<span class="model-picker-label" aria-hidden="true">{activeModelChoice?.displayName ?? activeConfig.model}</span>
 						</span>
@@ -6127,7 +6127,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</button>
 								{/if}
 								{#if activeConfig && activeEfforts.length > 0}
-									<div class="effort" title={`Thinking strength: ${effortLabel(activeConfig.effort)} · ${thinkingCostLabel(activeConfig.effort)} allowance per 100k tokens, calibrated separately for each window using the observed token mix`}>
+									<div class="effort">
 										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)} <span class="thinking-cost">{thinkingCostLabel(activeConfig.effort)}</span></span>
 										<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />

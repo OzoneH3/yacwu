@@ -18,6 +18,11 @@ test('applying suggested settings closes the panel and sends the selected settin
 	});
 	await page.goto(`/s/${thread.id}`);
 	await page.locator('.composer textarea').fill('Fix a typo in README');
+	await expect(page.locator('.model-picker')).toBeVisible();
+	await page.locator('.model-picker').hover();
+	await expect(page.getByRole('tooltip')).toHaveCount(0);
+	await page.locator('.effort').hover();
+	await expect(page.getByRole('tooltip')).toHaveCount(0);
 	await page.getByRole('button', { name: 'Suggest settings', exact: true }).click();
 	await expect(page.getByRole('region', { name: 'Suggested prompt settings' })).toBeVisible();
 	await page.getByRole('button', { name: 'Apply settings', exact: true }).click();
