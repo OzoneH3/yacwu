@@ -33,6 +33,7 @@
 		isAgentRunning,
 		mergeAgentThreadMeta,
 		trackAgentItem,
+		visibleAgentMessageText,
 		type AgentInfo,
 		type AgentRegistry
 	} from '$lib/agents';
@@ -775,6 +776,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			next._at = Date.now();
 		}
 		if (completed) next._completed = true;
+		if (next.type === 'agentMessage' && typeof next.text === 'string') next.text = visibleAgentMessageText(next.text);
 		t.byId[item.id] = next;
 		// Collaboration items reveal sub-agent threads; keep the registry live
 		// for both streamed items and restored history.
@@ -1574,7 +1576,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (tid && p.itemId) {
 					const t = ensureThread(tid);
 					const it = t.byId[p.itemId] as any;
-					if (it) it.text = (it.text ?? '') + (p.delta ?? '');
+					if (it) it.text = visibleAgentMessageText((it.text ?? '') + (p.delta ?? ''));
 				}
 				break;
 			}

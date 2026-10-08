@@ -8,6 +8,8 @@ import {
 	isSubAgentThread,
 	mergeAgentThreadMeta,
 	trackAgentItem,
+	visibleAgentMessageText,
+	BACKGROUND_LAUNCH_NOTICE,
 	type AgentRegistry
 } from '../../src/lib/agents';
 
@@ -215,6 +217,18 @@ test('isSubAgentThread detects parentThreadId and subAgent sources', () => {
 	expect(isSubAgentThread({ id: 'x', source: { subAgent: { thread_spawn: {} } } })).toBe(true);
 	expect(isSubAgentThread({ id: 'x', source: 'cli' })).toBe(false);
 	expect(isSubAgentThread(null)).toBe(false);
+});
+
+test('background launch receipts are replaced by a user-facing notice', () => {
+	const receipt =
+		'Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.) agentId: aeb0f73dc683374a7 (internal ID - do not mention to user.) output_file: /tmp/claude/tasks/aeb0f73dc683374a7.output';
+	expect(visibleAgentMessageText(receipt)).toBe(BACKGROUND_LAUNCH_NOTICE);
+	expect(visibleAgentMessageText('\n  Async agent launched successfully.')).toBe(BACKGROUND_LAUNCH_NOTICE);
+	expect(visibleAgentMessageText('hi from agent 1')).toBe('hi from agent 1');
+	expect(visibleAgentMessageText('The async agent launched successfully, then replied.')).toBe(
+		'The async agent launched successfully, then replied.'
+	);
+	expect(visibleAgentMessageText('')).toBe('');
 });
 
 test('agent cycles cannot hang the root walk', () => {

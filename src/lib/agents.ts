@@ -183,3 +183,19 @@ export function agentLabel(agent: AgentInfo): string {
 	if (agent.nickname) return agent.nickname;
 	return agent.id.slice(0, 8);
 }
+
+const BACKGROUND_LAUNCH_PLACEHOLDER = /^\s*Async agent launched successfully\b/;
+
+export const BACKGROUND_LAUNCH_NOTICE =
+	'Running in the background. The result is delivered to the parent agent when it finishes.';
+
+/**
+ * Claude's Agent tool answers a background launch with an internal receipt
+ * (agent id, output file, handling instructions) rather than the agent's
+ * reply; the real result arrives later as a task notification the adapter
+ * does not relay. Replace that receipt with a short user-facing notice so
+ * internal metadata never shows up as an agent's message.
+ */
+export function visibleAgentMessageText(text: string): string {
+	return BACKGROUND_LAUNCH_PLACEHOLDER.test(text) ? BACKGROUND_LAUNCH_NOTICE : text;
+}
