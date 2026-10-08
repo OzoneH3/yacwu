@@ -161,3 +161,25 @@ function blockTokens(tokens: Token[]): MarkdownBlock[] {
 export function parseCodexMarkdown(markdown: string): MarkdownBlock[] {
 	return blockTokens(marked.lexer(markdown.replace(/^[\u200B-\u200F\uFEFF]/, ''), { gfm: true }));
 }
+
+/** File references in display order; ignore images, web links and fenced code. */
+export function markdownFileReferences(markdown: string): Array<{ text: string; requireSeparator: boolean }> {
+	const references: Array<{ text: string; requireSeparator: boolean }> = [];
+	function inlines(tokens: MarkdownInline[]) {
+		for (const token of tokens) {
+			if (token.type === 'link' && !token.external && token.href) references.push({ text: token.href, requireSeparator: false });
+			else if (token.type === 'code') references.push({ text: token.text, requireSeparator: true });
+			if ('children' in token && token.type !== 'link') inlines(token.children);
+		}
+	}
+	function blocks(tokens: MarkdownBlock[]) {
+		for (const token of tokens) {
+			if (token.type === 'paragraph' || token.type === 'heading') inlines(token.children);
+			else if (token.type === 'blockquote') blocks(token.children);
+			else if (token.type === 'list') for (const item of token.items) blocks(item.children);
+			else if (token.type === 'table') for (const cell of [...token.header, ...token.rows.flat()]) inlines(cell.children);
+		}
+	}
+	blocks(parseCodexMarkdown(markdown));
+	return references;
+}

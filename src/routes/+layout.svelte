@@ -38,7 +38,7 @@
 	import { summarizeTaskUsage, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
 	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
 	import { readWorkspaceLink } from '$lib/workspace-links';
-	import { parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
+	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext } from '$lib/shared-channel';
 import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
@@ -263,6 +263,7 @@ import { filterAndSortModelChoices, modelDisplayProfile } from '$lib/model-displ
 	// Per-message toggle between rendered and raw Markdown for Codex replies.
 	let agentRawShown = $state<Record<string, boolean>>({});
 	let agentCopyStatus = $state<Record<string, 'copied' | 'failed'>>({});
+	let agentFileCopyStatus = $state<Record<string, 'copying' | 'copied' | 'failed'>>({});
 	let agentCopyTimer: ReturnType<typeof setTimeout> | null = null;
 	// Touch devices have no hover: a tap on a message stands in for it,
 	// revealing that message's raw-Markdown toggle until a tap elsewhere.
@@ -4026,6 +4027,46 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}, 1800);
 	}
 
+	function responseFileTargets(item: any) {
+		const seen = new Set<string>();
+		return markdownFileReferences(stripTaskProgressMarkers(String(item.text ?? ''))).flatMap((reference) => {
+			const target = agentPathTarget(reference.text, reference.requireSeparator);
+			if (!target) return [];
+			const key = JSON.stringify([target.root, target.path]);
+			if (seen.has(key)) return [];
+			seen.add(key);
+			return [target];
+		});
+	}
+
+	async function copyResponseFiles(item: any) {
+		const id = activeId;
+		const key = agentRawKey(item);
+		if (!id || agentFileCopyStatus[key] === 'copying') return;
+		const targets = responseFileTargets(item);
+		const host = sessionHost(id);
+		agentFileCopyStatus[key] = 'copying';
+		try {
+			const sections: string[] = [];
+			for (const target of targets) {
+				const filename = target.root ? `${target.root.replace(/\/$/, '')}/${target.path}` : target.path;
+				try {
+					const data = await readWorkspaceLink(id, target.path, host, fetch, target.root ?? undefined);
+					if (!data.copyable) throw new Error('Cannot copy this file as text');
+					sections.push(`## ${filename}\n\n${data.content}`);
+				} catch (error) {
+					throw new Error(`${filename}: ${error instanceof Error ? error.message : 'Could not read file'}`);
+				}
+			}
+			await navigator.clipboard.writeText(sections.join('\n\n'));
+			agentFileCopyStatus[key] = 'copied';
+		} catch (error) {
+			agentFileCopyStatus[key] = 'failed';
+			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not copy linked files' }, 6000);
+		}
+		setTimeout(() => { delete agentFileCopyStatus[key]; }, 2000);
+	}
+
 	function agentTime(item: any): { label: string; iso: string; full: string } | null {
 		const at = (item as any)._at;
 		if (typeof at !== 'number') return null;
@@ -5562,6 +5603,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" /></svg>
 											{agentCopyStatus[agentRawKey(item)] === 'copied' ? 'Copied' : agentCopyStatus[agentRawKey(item)] === 'failed' ? 'Copy failed' : 'Copy'}
 										</button>
+										{#if responseFileTargets(item).length}
+											<button type="button" class="copy-agent" disabled={agentFileCopyStatus[agentRawKey(item)] === 'copying'} title="Copy all linked file contents with filename headings" onclick={() => copyResponseFiles(item)}>
+												{agentFileCopyStatus[agentRawKey(item)] === 'copying' ? 'Copying files…' : agentFileCopyStatus[agentRawKey(item)] === 'copied' ? 'Files copied' : agentFileCopyStatus[agentRawKey(item)] === 'failed' ? 'Copy files failed' : 'Copy files'}
+											</button>
+										{/if}
 										<button
 											type="button"
 											class="raw-toggle"

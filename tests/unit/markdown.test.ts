@@ -1,6 +1,15 @@
 /// <reference types="bun" />
 import { expect, test } from 'bun:test';
-import { parseCodexMarkdown } from '../../src/lib/markdown';
+import { markdownFileReferences, parseCodexMarkdown } from '../../src/lib/markdown';
+
+test('collects local response links across nested Markdown while excluding web, image and fenced-code references', () => {
+	const text = '> **[Review](/tmp/review.md:12)**\n\n- [Results][results]\n\n| File |\n| --- |\n| `docs/notes.md` |\n\n[results]: /tmp/counts.json\n\n[Website](https://example.com/file.md) ![Image](/tmp/photo.png)\n\n```md\n[Example](/tmp/not-a-link.md)\n```';
+	expect(markdownFileReferences(text)).toEqual([
+		{ text: '/tmp/review.md:12', requireSeparator: false },
+		{ text: '/tmp/counts.json', requireSeparator: false },
+		{ text: 'docs/notes.md', requireSeparator: true }
+	]);
+});
 
 test('preserves heading depth and inline emphasis without generating HTML', () => {
 	const blocks = parseCodexMarkdown('# Result\n\nUse **bold** and `code`.');
