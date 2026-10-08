@@ -4,7 +4,7 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
-	import { runtimeOutcome } from '$lib/runtime-reconciliation';
+	import { runtimeOutcome, interruptionReason } from '$lib/runtime-reconciliation';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import {
@@ -1195,7 +1195,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					for (const item of latest?.items ?? []) upsertItem(threadId, item, false, latest?.id, true);
 					if (outcome === 'interrupted' && !interruptedSessions[sessionId]) {
 						interruptedSessions[sessionId] = true;
-						addLocalNote(sessionId, 'Task interrupted: the backend is no longer running it. Use Continue interrupted task to resume.', 'err');
+						addLocalNote(sessionId, `Task interrupted.\nReason: ${interruptionReason(thread, loaded.has(threadId))}\nUse Continue interrupted task to resume.`, 'err');
 					}
 				} catch { /* Unreachable is not proof of interruption; retain state. */ }
 			}));

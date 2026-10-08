@@ -504,7 +504,8 @@ host; local connection/RPC diagnostics are still recorded.
 Yacwu also checks saved running tasks against backend runtime state every
 15 seconds and on reconnect. Loaded-but-idle interrupted tasks (including
 Claude tasks interrupted by adapter restarts) stop their activity timer and
-show a recovery action. Failed reads retain the current state; silence alone
+show a recovery action and log the backend's interruption reason (or explicitly
+state that no reason was reported). Failed reads retain the current state; silence alone
 never stops a task that is still reported active.
 
 To inspect a stalled session without waiting for a Codex RPC, read

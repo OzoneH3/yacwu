@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test';
-import { runtimeOutcome } from '../../src/lib/runtime-reconciliation';
+import { runtimeOutcome, interruptionReason } from '../../src/lib/runtime-reconciliation';
+
+test('interruption reason uses the latest backend error and does not invent restart causes', () => {
+	expect(interruptionReason({ turns: [{ id: 'old', status: 'failed', error: { message: 'old failure' } }, { id: 'new', status: 'interrupted', error: { message: 'server restarted before completing turn' } }] }, true)).toBe('server restarted before completing turn');
+	expect(interruptionReason({}, true)).toContain('supplied no reason');
+	expect(interruptionReason({}, false)).toContain('no longer loaded');
+});
 
 test('loaded idle Claude thread with a restart-interrupted turn needs recovery', () => {
 	expect(runtimeOutcome({ status: { type: 'idle' }, turns: [{ id: 'old', status: 'interrupted', error: { message: 'server restarted before completing turn' } }] })).toBe('interrupted');

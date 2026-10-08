@@ -23,5 +23,5 @@ test('loaded Claude thread becoming interrupted clears running UI without a comp
 	await page.clock.fastForward(16000);
 	await expect(page.getByRole('button', { name: 'Continue interrupted task', exact: true })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Stop current turn', exact: true })).toHaveCount(0);
-	await expect(page.getByText('Task interrupted: the backend is no longer running it. Use Continue interrupted task to resume.', { exact: true })).toBeVisible();
+	await expect(page.getByText('Task interrupted. Reason: server restarted before completing turn Use Continue interrupted task to resume.', { exact: true })).toBeVisible();
 });
