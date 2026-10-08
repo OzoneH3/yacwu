@@ -7,6 +7,37 @@ const quota = (at: number, usedPercent: number, resetsAt = 1_000) => event(at, '
 const setup = (id: string, model: string): UsageEvent[] => [event(0, 'newThread', { threadId: id }), event(0, 'metadata', { threadId: id, model, effort: 'medium' }), event(1, 'turn/started', { threadId: id, turnId: id })];
 const tokens = (at: number, id: string, total: number) => event(at, 'tokens', { threadId: id, turnId: id, total: { totalTokens: total, inputTokens: total } });
 
+test('5-hour and legacy weekly readings independently calibrate the same task', () => {
+	const history = [...setup('a', 'claude-sonnet-5-5'), quota(2, 10),
+		event(2, 'quota', { usedPercent: 20, resetsAt: 500, windowDurationMins: 300, limitId: 'codex' }),
+		tokens(3, 'a', 1000), event(4, 'turn/completed', { threadId: 'a', turnId: 'a' }),
+		quota(5, 12), event(5, 'quota', { usedPercent: 26, resetsAt: 500, windowDurationMins: 300, limitId: 'codex' })];
+	const weekly = analyzeObservedUsage(history, { settleMs: 0 });
+	const fiveHour = analyzeObservedUsage(history, { settleMs: 0, windowDurationMins: 300 });
+	expect(weekly.observations).toBe(1);
+	expect(fiveHour.observations).toBe(1);
+	expect(weekly.tasks[0].estimate?.value).toBeCloseTo(2);
+	expect(fiveHour.tasks[0].estimate?.value).toBeCloseTo(6);
+	expect(weekly.tasks[0].tokens).toEqual(fiveHour.tasks[0].tokens);
+});
+
+test('a 5-hour reset discards that observation without discarding weekly calibration', () => {
+	const history = [...setup('a', 'model'), quota(2, 10),
+		event(2, 'quota', { usedPercent: 90, resetsAt: 500, windowDurationMins: 300 }),
+		tokens(3, 'a', 1000), quota(5, 12),
+		event(5, 'quota', { usedPercent: 2, resetsAt: 800, windowDurationMins: 300 })];
+	expect(analyzeObservedUsage(history, { settleMs: 0 }).observations).toBe(1);
+	expect(analyzeObservedUsage(history, { settleMs: 0, windowDurationMins: 300 }).observations).toBe(0);
+});
+
+test('5-hour-only evidence never invents a weekly estimate', () => {
+	const history = [...setup('a', 'model'),
+		event(2, 'quota', { usedPercent: 10, resetsAt: 500, windowDurationMins: 300 }), tokens(3, 'a', 1000),
+		event(5, 'quota', { usedPercent: 14, resetsAt: 500, windowDurationMins: 300 })];
+	expect(analyzeObservedUsage(history, { settleMs: 0 }).tasks[0].estimate).toBeNull();
+	expect(analyzeObservedUsage(history, { settleMs: 0, windowDurationMins: 300 }).tasks[0].estimate?.value).toBeCloseTo(4);
+});
+
 test('settled benchmark boundaries keep one-percent stages separate without double counting', () => {
 	const history: UsageEvent[] = [quota(0, 20)];
 	let used = 20;

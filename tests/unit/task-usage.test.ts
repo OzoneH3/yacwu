@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { formatAllowancePercent, projectTaskUsage, summarizeTaskUsage } from '../../src/lib/task-usage';
+import { formatAllowancePercent, projectTaskUsage, summarizeTaskAllowances, summarizeTaskUsage } from '../../src/lib/task-usage';
 import type { UsageTask } from '../../src/lib/usage-analysis';
 
 function task(fields: Partial<UsageTask> = {}): UsageTask {
@@ -10,6 +10,20 @@ function task(fields: Partial<UsageTask> = {}): UsageTask {
 		estimatedWeeklyPercent: 0.1, quotaScope: 'scope', accountKey: 'account',
 		estimate: { value: 0.1, low: 0.05, high: 0.15, samples: 4, weighted: true }, settling: false, benchmark: false, ...fields };
 }
+
+test('task and agent totals keep 5-hour estimates separate and can project them without weekly evidence', () => {
+	const root = task({ estimate: null });
+	const child = task({ threadId: 'child', parentThreadId: 'root', startedAt: 2000, estimate: null });
+	const fiveHourRoot = task({ estimate: { value: 2, low: 1, high: 3, samples: 1, weighted: false, provisional: true } });
+	const fiveHourChild = task({ ...child, estimate: { value: 1, low: .5, high: 1.5, samples: 1, weighted: false, provisional: true } });
+	const summary = summarizeTaskAllowances([root, child], root, [fiveHourRoot, fiveHourChild]);
+	expect(summary.percent).toBeNull();
+	expect(summary.fiveHour?.percent).toBe(3);
+	expect(summary.fiveHour?.tokens).toBe(summary.tokens);
+	expect(summary.fiveHour?.provisional).toBe(true);
+	expect(projectTaskUsage(summary, { percent: 50, remainingMinutes: 2 }, 61_000)).toBeNull();
+	expect(projectTaskUsage(summary.fiveHour!, { percent: 50, remainingMinutes: 2 }, 61_000)?.total).toBe(6);
+});
 
 test('prompt totals include nested agent turns but exclude other sessions, hosts and work orders', () => {
 	const root = task(), child = task({ threadId: 'child', parentThreadId: 'root', startedAt: 2000 }),

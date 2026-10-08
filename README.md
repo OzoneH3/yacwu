@@ -261,6 +261,13 @@ with separate rates for each model and thinking level. Cache-read tokens are
 normalized for both live reports and older recordings. Task estimates and
 projections appear once sufficient clean observations exist; until then the UI
 shows that costs are still being learned.
+When available, 5-hour readings are also recorded and calibrated separately
+from the weekly allowance. Task usage history lets you select either window;
+task totals, projections, and thinking-cost labels show each learned estimate.
+Percentages from the two windows are never combined or converted using their
+durations. Older quota records remain weekly-only, and resets invalidate
+observations spanning that reset for the affected window.
+
 Each name appears in the host picker alongside the default local codex
 (`local`) and the SSH remotes, and runs its command as a child process on
 this machine — same working directory, file browser, Git viewer, profiles and

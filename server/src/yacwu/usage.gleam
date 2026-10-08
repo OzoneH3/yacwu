@@ -232,8 +232,9 @@ fn quota(label: String, data: Dynamic) -> Nil {
         case jsonx.field(limits, [key]) {
           Ok(window) ->
             case jsonx.field_int(window, ["windowDurationMins"]) {
-              Ok(10_080) ->
+              Ok(300) | Ok(10_080) ->
                 record(label, "quota", [
+                  #("windowDurationMins", value(window, ["windowDurationMins"])),
                   #("usedPercent", value(window, ["usedPercent"])),
                   #("resetsAt", value(window, ["resetsAt"])),
                   #("limitId", value(limits, ["limitId"])),

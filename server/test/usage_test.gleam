@@ -6,6 +6,29 @@ import gleeunit/should
 import simplifile
 import yacwu/usage
 
+pub fn records_separate_five_hour_and_weekly_quota_windows_test() {
+  let label = "usage-windows-unit-test"
+  let assert Ok(limits) =
+    json.parse(
+      "{\"rateLimits\":{\"limitId\":\"claude-code\",\"primary\":{\"usedPercent\":12.5,\"windowDurationMins\":300,\"resetsAt\":500},\"secondary\":{\"usedPercent\":5,\"windowDurationMins\":10080,\"resetsAt\":1000}}}",
+      decode.dynamic,
+    )
+  usage.response(label, "account/rateLimits/read", limits)
+  let saved = usage.history(label) |> json.to_string
+  json.parse(
+    saved,
+    decode.at(
+      ["events"],
+      decode.list(decode.at(["windowDurationMins"], decode.int)),
+    ),
+  )
+  |> should.equal(Ok([300, 10_080]))
+  string.contains(saved, "12.5") |> should.be_true
+  let path =
+    json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
+  simplifile.delete(path) |> should.be_ok
+}
+
 pub fn persists_usage_without_conversation_content_test() {
   let label = "usage-unit-test"
   usage.request(

@@ -18,6 +18,7 @@ export interface UsageEvent {
 	requestId?: number;
 	counterSnapshot?: boolean;
 	usedPercent?: number;
+	windowDurationMins?: number;
 	resetsAt?: number;
 	limitId?: string | null;
 	planType?: string | null;
@@ -46,6 +47,7 @@ export interface UsageTask {
 	tokens: TokenTotals;
 	partialTokens: boolean;
 	overlapping: boolean;
+	/** Legacy field names: values refer to the selected analysis window. */
 	weeklyLeftBefore: number | null;
 	weeklyLeftAfter: number | null;
 	sharedAllowanceDelta: number | null;
@@ -230,10 +232,15 @@ function resolveSpawnEvidence(events: UsageEvent[]): UsageEvent[] {
 	})].sort((a, b) => a.at - b.at);
 }
 
-export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; settleMs?: number } = {}) {
+export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; settleMs?: number; windowDurationMins?: 300 | 10080 } = {}) {
 	const host = options.host ?? 'local';
 	const settleMs = options.settleMs ?? 60_000;
-	const events = resolveSpawnEvidence(accountEvents(rawEvents, host));
+	const windowDurationMins = options.windowDurationMins ?? 10080;
+	// Legacy quotas and benchmark boundaries describe the weekly allowance.
+	// Analyze each window independently; never mix their percentages or resets.
+	const windowEvents = rawEvents.filter((event) => !['quota', 'benchmarkBoundary', 'benchmarkBoundaryEnd'].includes(event.event)
+		|| (event.windowDurationMins ?? 10080) === windowDurationMins);
+	const events = resolveSpawnEvidence(accountEvents(windowEvents, host));
 	const tasks: UsageTask[] = [];
 	const tasksByTurn = new Map<string, UsageTask>();
 	const active = new Map<string, UsageTask>();
@@ -436,5 +443,5 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			task.estimatedWeeklyPercent = task.estimate?.value ?? null;
 		}
 	}
-	return { tasks: tasks.reverse(), pools: pools.reverse(), rates, observations: observations.length, excludedIntervals, calibrated: learned.calibrated, hosts: [...new Set(events.map((event) => event.host))] };
+	return { windowDurationMins, tasks: tasks.reverse(), pools: pools.reverse(), rates, observations: observations.length, excludedIntervals, calibrated: learned.calibrated, hosts: [...new Set(events.map((event) => event.host))] };
 }

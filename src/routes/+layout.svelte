@@ -39,7 +39,7 @@
 	import UsageHistory from '$lib/UsageHistory.svelte';
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { analyzeUsage } from '$lib/usage-analysis';
-	import { summarizeTaskUsage, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
+	import { summarizeTaskAllowances, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
 	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
@@ -209,6 +209,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	let clearCreationSnapshot = $state<Set<string> | null>(null);
 	let activityClock = $state(Date.now());
 	let usageAnalysisByHost = $state<Record<string, ReturnType<typeof analyzeUsage>>>({});
+	let fiveHourUsageAnalysisByHost = $state<Record<string, ReturnType<typeof analyzeUsage>>>({});
 	const usageLoading = new Set<string>();
 	const usageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let archiveBrowserDialog = $state<HTMLDialogElement | null>(null);
@@ -508,11 +509,13 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 			: progress;
 	});
 	const activeUsageAnalysis = $derived(usageAnalysisByHost[activeHost] ?? null);
+	const activeFiveHourUsageAnalysis = $derived(fiveHourUsageAnalysisByHost[activeHost] ?? null);
 	const activeTaskUsage = $derived.by(() => {
 		const task = activeUsageAnalysis?.tasks.find((task) => task.threadId === activeId && task.host === activeHost && task.turnId === active?.turnId);
-		return task && activeUsageAnalysis ? summarizeTaskUsage(activeUsageAnalysis.tasks, task) : null;
+		return task && activeUsageAnalysis ? summarizeTaskAllowances(activeUsageAnalysis.tasks, task, activeFiveHourUsageAnalysis?.tasks ?? []) : null;
 	});
 	const projectedTaskUsage = $derived(projectTaskUsage(activeTaskUsage, activeTaskProgress, activityClock));
+	const projectedFiveHourTaskUsage = $derived(projectTaskUsage(activeTaskUsage?.fiveHour ?? null, activeTaskProgress, activityClock));
 	const completedUsageByItem = $derived.by(() => {
 		const result: Record<string, TaskUsageSummary> = {};
 		if (!activeUsageAnalysis || !viewedId) return result;
@@ -523,7 +526,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 		for (const task of activeUsageAnalysis.tasks) {
 			if (task.host !== activeHost || task.threadId !== viewedId || task.endedAt === null) continue;
 			const itemId = finals.get(task.turnId);
-			if (itemId) result[itemId] = summarizeTaskUsage(activeUsageAnalysis.tasks, task);
+			if (itemId) result[itemId] = summarizeTaskAllowances(activeUsageAnalysis.tasks, task, activeFiveHourUsageAnalysis?.tasks ?? []);
 		}
 		return result;
 	});
@@ -536,6 +539,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 			if (!response.ok) return;
 			const data = await response.json();
 			usageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host });
+			fiveHourUsageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host, windowDurationMins: 300 });
 		} catch { /* Retain the last learned rates if telemetry is unavailable. */ }
 		finally { usageLoading.delete(host); }
 	}
@@ -552,8 +556,16 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 
 	function thinkingCostLabel(effort: string) {
 		const rate = activeUsageAnalysis?.rates.find((rate) => rate.model === activeConfig?.model && rate.effort === effort);
-		return rate?.percentPer100kTokens !== null && rate?.percentPer100kTokens !== undefined
-			? `${formatAllowancePercent(rate.percentPer100kTokens)} /100k${rate.estimate?.provisional ? ' · early' : ''}` : 'Learning…';
+		const fiveHourRate = activeFiveHourUsageAnalysis?.rates.find((rate) => rate.model === activeConfig?.model && rate.effort === effort);
+		return [{ rate, label: 'week' }, { rate: fiveHourRate, label: '5h' }].flatMap(({ rate: selected, label }) => {
+			return selected?.percentPer100kTokens != null
+				? [`${formatAllowancePercent(selected.percentPer100kTokens)} ${label}/100k${selected.estimate?.provisional ? ' · early' : ''}`] : [];
+		}).join(' · ') || 'Learning…';
+	}
+
+	function fiveHourCostLabel(summary: TaskUsageSummary | undefined) {
+		if (!summary || summary.knownPercent === null) return '';
+		return `${formatAllowancePercent(summary.percent ?? summary.knownPercent)} 5h${summary.percent === null ? ' · incomplete' : ''}${summary.provisional ? ' · early' : ''}`;
 	}
 
 	function taskUsageTitle(summary: TaskUsageSummary) {
@@ -561,7 +573,9 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 			? `Known weekly allowance subtotal: ${formatAllowancePercent(summary.knownPercent)}. Excludes ${summary.unestimatedTurns} turn(s) with incomplete recording or uncalibrated model/thinking or token mix; this is not the full task cost.`
 			: 'Weekly allowance estimate unavailable until recording and calibration are sufficient.'
 			: `Estimated weekly allowance: ${formatAllowancePercent(summary.percent)} (${summary.low?.toFixed(3)}–${summary.high?.toFixed(3)}%).`;
-		return `${cost} ${summary.provisional ? 'Provisional estimate from single-setting observations with similar token mix. ' : ''}${summary.partial ? 'Partial token recording. ' : ''}Tokens include cached input and output, including reasoning once.${summary.agentTurns ? ` Includes ${summary.agentTurns} agent turns.` : ''}${summary.runningAgents ? ' Agent work is still running; totals will update.' : ''}`;
+		const fiveHour = summary.fiveHour;
+		const fiveHourCost = fiveHour?.knownPercent != null ? ` Independently estimated 5-hour allowance: ${fiveHourCostLabel(fiveHour)}.${fiveHour.low != null && fiveHour.high != null ? ` Range ${fiveHour.low.toFixed(3)}–${fiveHour.high.toFixed(3)}%.` : ''}` : '';
+		return `${cost}${fiveHourCost} ${summary.provisional ? 'Provisional estimate from single-setting observations with similar token mix. ' : ''}${summary.partial ? 'Partial token recording. ' : ''}Tokens include cached input and output, including reasoning once.${summary.agentTurns ? ` Includes ${summary.agentTurns} agent turns.` : ''}${summary.runningAgents ? ' Agent work is still running; totals will update.' : ''}`;
 	}
 
 	$effect(() => {
@@ -5253,6 +5267,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								: activeTaskUsage ? taskUsageTitle(activeTaskUsage) : 'Waiting for task usage recording and sufficient calibration.'}>
 								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : activeTaskUsage?.knownPercent !== null && activeTaskUsage?.knownPercent !== undefined ? `${formatAllowancePercent(activeTaskUsage.knownPercent)} week · incomplete` : 'Cost learning…'}{#if activeTaskUsage?.knownPercent != null && activeTaskUsage.provisional} · early{/if}
 							</span>
+							{#if activeTaskUsage?.fiveHour?.knownPercent != null}
+								<span class="task-cost" title={taskUsageTitle(activeTaskUsage)}>{projectedFiveHourTaskUsage ? `${formatAllowancePercent(projectedFiveHourTaskUsage.total)} 5h total${activeTaskUsage.fiveHour.provisional ? ' · early' : ''}` : fiveHourCostLabel(activeTaskUsage.fiveHour)}</span>
+							{/if}
 						</div>
 					{/if}
 					<span class="session-label" title={sessionContextTitle}>Session</span>
@@ -5678,7 +5695,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
 										{#if typeof turnDuration === 'number'}<span class="agent-duration" title="Time taken for this task">{formatDuration(turnDuration)}</span>{/if}
-										{#if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? taskUsage.knownPercent !== null ? `${formatAllowancePercent(taskUsage.knownPercent)} week (incomplete${taskUsage.provisional ? ', early' : ''})` : 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
+										{#if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? taskUsage.knownPercent !== null ? `${formatAllowancePercent(taskUsage.knownPercent)} week (incomplete${taskUsage.provisional ? ', early' : ''})` : 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {#if fiveHourCostLabel(taskUsage.fiveHour)}{fiveHourCostLabel(taskUsage.fiveHour)} · {/if}{taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
 										<button
 											type="button"
 											class="copy-agent"
@@ -6076,7 +6093,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</button>
 								{/if}
 								{#if activeConfig && activeEfforts.length > 0}
-									<div class="effort" title={`Thinking strength: ${effortLabel(activeConfig.effort)} · ${thinkingCostLabel(activeConfig.effort)} weekly allowance per 100k tokens, using the observed token mix`}>
+									<div class="effort" title={`Thinking strength: ${effortLabel(activeConfig.effort)} · ${thinkingCostLabel(activeConfig.effort)} allowance per 100k tokens, calibrated separately for each window using the observed token mix`}>
 										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)} <span class="thinking-cost">{thinkingCostLabel(activeConfig.effort)}</span></span>
 										<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />

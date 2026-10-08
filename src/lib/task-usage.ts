@@ -2,6 +2,7 @@ import type { UsageTask } from './usage-analysis';
 import type { TaskProgressEstimate } from './task-progress';
 
 export interface TaskUsageSummary {
+	fiveHour?: TaskUsageSummary;
 	tokens: number;
 	partial: boolean;
 	percent: number | null;
@@ -13,6 +14,14 @@ export interface TaskUsageSummary {
 	runningAgents: boolean;
 	startedAt: number;
 	provisional: boolean;
+}
+
+/** Attach the independently calibrated 5-hour estimate without adding it to weekly usage. */
+export function summarizeTaskAllowances(tasks: UsageTask[], task: UsageTask, fiveHourTasks: UsageTask[]): TaskUsageSummary {
+	const summary = summarizeTaskUsage(tasks, task);
+	const fiveHourTask = fiveHourTasks.find((other) => other.host === task.host && other.threadId === task.threadId && other.turnId === task.turnId);
+	if (fiveHourTask) summary.fiveHour = summarizeTaskUsage(fiveHourTasks, fiveHourTask);
+	return summary;
 }
 
 /** Charge only descendant turns begun under this prompt, never another session. */

@@ -12,7 +12,9 @@
 	let onlySession = $state(true);
 	let onlyConcurrentPools = $state(false);
 	let poolSetting = $state('');
-	const analysis = $derived(analyzeUsage(events, { host }));
+	let windowDurationMins = $state<300 | 10080>(10080);
+	const windowLabel = $derived(windowDurationMins === 300 ? '5-hour' : 'Weekly');
+	const analysis = $derived(analyzeUsage(events, { host, windowDurationMins }));
 	const pools = $derived(analysis.pools.filter((pool) =>
 		pool.groups.some((group) => (!poolSetting || JSON.stringify([group.model, group.effort]) === poolSetting)
 			&& (!onlyConcurrentPools || group.peakWorkers > 1))
@@ -69,15 +71,17 @@
 			<button type="button" onclick={refresh} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
 			<button type="button" onclick={onclose} aria-label="Close usage history">×</button>
 		</header>
-		<p>Estimates use token usage from hosts with matching account fingerprints: {analysis.hosts.join(', ')}. Weekly readings come from {host}. Usage outside Yacwu can still affect the allowance.</p>
+		<label>Allowance window <select bind:value={windowDurationMins}><option value={10080}>7-day</option><option value={300}>5-hour</option></select></label>
+		<p>Estimates use token usage from hosts with matching account fingerprints: {analysis.hosts.join(', ')}. {windowLabel} readings come from {host}. Each allowance window is calibrated separately. Usage outside Yacwu can still affect the allowance.</p>
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		<BenchmarkControls {host} {models} {selectedModel} {selectedEffort} oncomplete={() => void refresh()} />
+		{#if windowDurationMins === 300}<p class="meta">Manual benchmarks target weekly allowance. Their 5-hour readings are analyzed independently here. Earlier recordings contain weekly readings only.</p>{/if}
 		<h3>Model and thinking level</h3>
 		<p class="meta">A clean single-setting window supplies a provisional rate immediately, including rounding uncertainty. It applies only to a similar token mix and upgrades to a fitted estimate with sufficient independent evidence. Mixed windows alone cannot identify a model's individual cost.</p>
 		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded. Ordinary intervals close after at least 2% used, stable readings, and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
 		<div class="table-wrap">
 			<table>
-				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>Weekly cost / 100k (observed mix)</th><th>Uncached / cached / output per 100k</th></tr></thead>
+				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>{windowLabel} cost / 100k (observed mix)</th><th>Uncached / cached / output per 100k</th></tr></thead>
 				<tbody>
 					{#each analysis.rates as rate}
 						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}<small>{rate.singleSettingSamples} single-setting</small></td><td>{tokens(rate.tokens)}</td><td>{range(rate.estimate)}{#if rate.estimate}<small>{rate.estimate.provisional ? `Provisional · ${rate.estimate.samples} single-setting samples` : rate.estimate.weighted ? 'Separate token weights' : 'Total-token fallback'}</small>{/if}</td><td>{percent(rate.weights.uncached)} / {percent(rate.weights.cached)} / {percent(rate.weights.output)}</td></tr>
@@ -86,7 +90,7 @@
 			</table>
 		</div>
 		<h3>Combined observation windows</h3>
-		<p class="meta">All sessions on this account are included here. Sessions and agents using the same model and thinking level are added together; the weekly change is counted once per window. Single-setting windows provide a direct observed rate, even before enough samples exist for a fitted estimate.</p>
+		<p class="meta">All sessions on this account are included here. Sessions and agents using the same model and thinking level are added together; the selected allowance change is counted once per window. Single-setting windows provide a direct observed rate, even before enough samples exist for a fitted estimate.</p>
 		<div class="pool-filters">
 			<label>Model / thinking <select bind:value={poolSetting}>
 				<option value="">All combinations</option>
@@ -106,7 +110,7 @@
 							<span class="pool-rate" title={roundingRange(pool, pool.groups[0].tokens.totalTokens)}>{percent(observedRate(pool, pool.groups[0].tokens.totalTokens))} / 100k</span>
 						{/if}
 					</summary>
-					<p class="meta">Account week left: {pool.weeklyLeftBefore}% → {pool.weeklyLeftAfter}%. Window: {duration(pool.startedAt, pool.endedAt)}.
+					<p class="meta">Account {windowLabel.toLowerCase()} left: {pool.weeklyLeftBefore}% → {pool.weeklyLeftAfter}%. Window: {duration(pool.startedAt, pool.endedAt)}.
 						{#if pool.status === 'accumulating'}Waiting for enough usage and stable readings; this window is not used for calibration yet.
 						{:else if pool.status === 'excluded'}Incomplete or contaminated recording; excluded from calibration.
 						{:else if pool.groups.length > 1}The account change belongs to the whole window; separate model costs require independent mixtures.
@@ -114,7 +118,7 @@
 					</p>
 					<div class="table-wrap">
 						<table>
-							<thead><tr><th>Model / thinking</th><th>Workers / turns</th><th>Combined tokens</th><th>Worker time</th><th>Observed weekly cost / 100k</th></tr></thead>
+							<thead><tr><th>Model / thinking</th><th>Workers / turns</th><th>Combined tokens</th><th>Worker time</th><th>Observed {windowLabel.toLowerCase()} cost / 100k</th></tr></thead>
 							<tbody>
 								{#each pool.groups as group}
 									<tr>
@@ -145,7 +149,7 @@
 		<label><input type="checkbox" bind:checked={onlySession} /> This session and its agents</label>
 		<div class="table-wrap">
 			<table>
-				<thead><tr><th>Started / status</th><th>Model / thinking</th><th>Tokens</th><th>Time</th><th>Account week left</th><th>Task estimate</th></tr></thead>
+				<thead><tr><th>Started / status</th><th>Model / thinking</th><th>Tokens</th><th>Time</th><th>Account {windowLabel.toLowerCase()} left</th><th>Task estimate</th></tr></thead>
 				<tbody>
 					{#each tasks as task}
 						<tr>
