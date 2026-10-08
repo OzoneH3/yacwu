@@ -43,7 +43,8 @@ export function visibleUserText(text: string): string {
 	const markers = [
 		'<!-- YACWU_SESSION_RULES -->',
 		'<!-- YACWU_SHARED_BACKGROUND_CHANNEL -->',
-		'<!-- YACWU_TASK_PROGRESS -->'
+		'<!-- YACWU_TASK_PROGRESS -->',
+		'<!-- YACWU_ALLOWANCE_RESERVE'
 	];
 	const markerAt = markers
 		.map((marker) => text.indexOf(marker))

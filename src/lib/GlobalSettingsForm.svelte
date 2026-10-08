@@ -71,6 +71,15 @@
 		<p class="description note">Applies to prompts sent from now on.</p>
 	</section>
 
+	<section aria-labelledby="settings-allowance">
+		<h3 id="settings-allowance">Claude allowance lockout</h3>
+		<label class="row">
+			<span>Stop and block Claude tasks at</span>
+			<span class="number"><input type="number" aria-label="Lockout at % remaining" min={settingRanges.claudeAllowanceReserve.min} max={settingRanges.claudeAllowanceReserve.max} value={settings.claudeAllowanceReserve} onchange={(e) => setNumber('claudeAllowanceReserve', e)} /> % remaining</span>
+		</label>
+		<p class="description note">Applies to the 5-hour and 7-day allowance. Running tasks are interrupted and new ones refused once either has this much or less left. 0 turns the lockout off. Takes effect with the next prompt to each session.</p>
+	</section>
+
 	<section aria-labelledby="settings-monitoring">
 		<h3 id="settings-monitoring">Monitoring</h3>
 		<label class="check"><input type="checkbox" checked={settings.quietWorkerNotices} onchange={(e) => set('quietWorkerNotices', e.currentTarget.checked)} /> Notify when a worker has been quiet for a while</label>

@@ -3,12 +3,17 @@ import { expect, test, type Page } from '@playwright/test';
 // The global settings menu: opened from the sidebar, applied immediately to
 // every session, and kept across reloads.
 
-async function mock(page: Page) {
+async function mock(page: Page, host = 'local') {
 	const posted: string[] = [];
-	const summary = { id: 'settings-a', name: 'settings-a', cwd: '/tmp', status: { type: 'idle' }, turns: [] };
+	const summary = { id: 'settings-a', name: 'settings-a', cwd: '/tmp', host, status: { type: 'idle' }, turns: [] };
+	const hosts = [
+		{ name: 'local', kind: 'local', provider: 'codex', state: 'connected' },
+		{ name: 'claude', kind: 'backend', provider: 'claude', state: 'connected' }
+	];
 	await page.route('**/api/**', async (route) => {
 		const path = new URL(route.request().url()).pathname;
 		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+		if (path === '/api/hosts') return route.fulfill({ json: { hosts } });
 		if (path === '/api/threads') return route.fulfill({ json: { data: [summary], defaultCwd: '/tmp' } });
 		if (path === '/api/threads/loaded') return route.fulfill({ json: { data: ['settings-a'] } });
 		if (path.endsWith('/message')) {
@@ -79,4 +84,18 @@ test('theme and reset to defaults', async ({ page }) => {
 	await expect(page.getByLabel('Enter sends the message')).toBeChecked();
 	const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('yacwu-settings') ?? '{}'));
 	expect(stored.enterToSend).toBe(true);
+});
+
+test('Claude prompts carry the allowance lockout percentage, hidden from the transcript', async ({ page }) => {
+	const posted = await mock(page, 'claude');
+	await page.goto('/s/settings-a');
+	await openSettings(page);
+	await page.getByLabel('Lockout at % remaining').fill('20');
+	await page.getByLabel('Lockout at % remaining').press('Tab');
+	await page.getByRole('button', { name: 'Close settings' }).click();
+	await page.locator('.composer textarea').fill('Check the build');
+	await page.locator('.composer textarea').press('Enter');
+	await expect.poll(() => posted.length).toBe(1);
+	expect(posted[0]).toContain('<!-- YACWU_ALLOWANCE_RESERVE percent=20 -->');
+	await expect(page.locator('.item.user').last()).toHaveText('Check the build');
 });

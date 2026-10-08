@@ -12,7 +12,7 @@
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
 	import GlobalSettingsForm from '$lib/GlobalSettingsForm.svelte';
-	import { defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, type GlobalSettings } from '$lib/settings';
+	import { defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings } from '$lib/settings';
 	import {
 		applyRelayEvent,
 		applyRelaySnapshot,
@@ -2486,7 +2486,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const ruleText = withSessionRules(rules.sharedChannel ? await addSharedChannelContext(id, text) : visibleUserText(text), rules);
 		// Only Yacwu's Claude backend sends progress reminders; tell it how often.
 		const reminders = isClaudeSession(id) ? (settings.claudeProgressReminders ? settings.claudeReminderMinutes : null) : undefined;
-		const messageText = rules.progress ? withTaskProgressInstructions(ruleText, reminders) : ruleText;
+		const progressText = rules.progress ? withTaskProgressInstructions(ruleText, reminders) : ruleText;
+		// Yacwu's Claude backend enforces the allowance lockout; it strips this line.
+		const messageText = isClaudeSession(id) ? withAllowanceReserve(progressText, settings.claudeAllowanceReserve) : progressText;
 		if (attachments.length > 0) {
 			const body = new FormData();
 			body.set('text', messageText);

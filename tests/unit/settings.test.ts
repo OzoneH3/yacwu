@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { defaultSettings, readSettings, sendsMessage } from '../../src/lib/settings';
+import { defaultSettings, readSettings, sendsMessage, withAllowanceReserve } from '../../src/lib/settings';
+import { visibleUserText } from '../../src/lib/shared-channel';
 
 describe('global settings', () => {
 	test('missing, invalid or partial storage falls back to defaults', () => {
@@ -26,5 +27,14 @@ describe('global settings', () => {
 		expect(sendsMessage(key({ metaKey: true }), false)).toBe(true);
 		expect(sendsMessage(key({ shiftKey: true }), true)).toBe(false);
 		expect(sendsMessage(key({ key: 'a' }), true)).toBe(false);
+	});
+
+	test('the Claude allowance lockout is a clamped percentage sent as a hidden line', () => {
+		expect(defaultSettings.claudeAllowanceReserve).toBe(10);
+		expect(readSettings('{"claudeAllowanceReserve":0}').claudeAllowanceReserve).toBe(0);
+		expect(readSettings('{"claudeAllowanceReserve":80}').claudeAllowanceReserve).toBe(50);
+		const text = withAllowanceReserve('Do the task', 15);
+		expect(text).toContain('<!-- YACWU_ALLOWANCE_RESERVE percent=15 -->');
+		expect(visibleUserText(text)).toBe('Do the task');
 	});
 });

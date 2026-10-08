@@ -23,6 +23,8 @@ export interface GlobalSettings {
 	quietWorkerNotices: boolean;
 	/** Seconds between task usage refreshes while a session is open. */
 	usageRefreshSeconds: number;
+	/** Stop and block Claude tasks when an allowance has this % or less left (0: off). */
+	claudeAllowanceReserve: number;
 }
 
 export const GLOBAL_SETTINGS_KEY = 'yacwu-settings';
@@ -37,14 +39,16 @@ export const defaultSettings: GlobalSettings = {
 	claudeProgressReminders: true,
 	claudeReminderMinutes: 5,
 	quietWorkerNotices: true,
-	usageRefreshSeconds: 30
+	usageRefreshSeconds: 30,
+	claudeAllowanceReserve: 10
 };
 
 /** Allowed ranges for numeric settings. */
 export const settingRanges = {
 	collapseOutputLines: { min: 3, max: 200 },
 	claudeReminderMinutes: { min: 1, max: 60 },
-	usageRefreshSeconds: { min: 10, max: 600 }
+	usageRefreshSeconds: { min: 10, max: 600 },
+	claudeAllowanceReserve: { min: 0, max: 50 }
 } as const;
 
 export function clampSetting(key: keyof typeof settingRanges, value: unknown): number {
@@ -74,12 +78,18 @@ export function readSettings(raw: string | null): GlobalSettings {
 		claudeProgressReminders: flag('claudeProgressReminders'),
 		claudeReminderMinutes: key(parsed, 'claudeReminderMinutes'),
 		quietWorkerNotices: flag('quietWorkerNotices'),
-		usageRefreshSeconds: key(parsed, 'usageRefreshSeconds')
+		usageRefreshSeconds: key(parsed, 'usageRefreshSeconds'),
+		claudeAllowanceReserve: key(parsed, 'claudeAllowanceReserve')
 	};
 }
 
 function key(parsed: Record<string, unknown>, name: keyof typeof settingRanges): number {
 	return name in parsed ? clampSetting(name, parsed[name]) : defaultSettings[name];
+}
+
+/** Tell Yacwu's Claude backend the lockout reserve for this prompt; it removes the line before Claude sees it. */
+export function withAllowanceReserve(text: string, percent: number): string {
+	return `${text}\n\n<!-- YACWU_ALLOWANCE_RESERVE percent=${Math.round(percent)} -->`;
 }
 
 /** Whether a composer keydown should send, per the Enter setting. */

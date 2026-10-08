@@ -1,5 +1,32 @@
 /** @typedef {{id?: string | number, method?: string, params?: Record<string, any>, result?: any, error?: any}} RpcMessage */
-/** Stop/block Claude turns when either allowance has 10% or less remaining.
+
+/** Remaining allowance (%) below which Claude work stops, unless a prompt says otherwise. */
+export const DEFAULT_RESERVE = 10;
+const RESERVE_MARKER = /\s*<!-- YACWU_ALLOWANCE_RESERVE percent=(\d{1,3}) -->/g;
+
+/**
+ * Take the browser's lockout preference out of a request's text input, so
+ * Claude never sees it. Returns the requested reserve (clamped to 0–50) and
+ * whether the request changed.
+ * @param {RpcMessage | undefined} request
+ * @returns {{reserve: number | null, changed: boolean}}
+ */
+export function takeAllowanceReserve(request) {
+  let reserve = null;
+  let changed = false;
+  for (const part of request?.params?.input ?? []) {
+    if (typeof part?.text !== 'string' || !part.text.includes('YACWU_ALLOWANCE_RESERVE')) continue;
+    part.text = part.text.replace(RESERVE_MARKER, (/** @type {string} */ _, /** @type {string} */ percent) => {
+      reserve = Math.min(50, Math.max(0, Number(percent)));
+      return '';
+    });
+    changed = true;
+  }
+  return { reserve, changed };
+}
+
+/** Stop/block Claude turns when either allowance has the reserve or less remaining
+ * (10% by default; per session from the browser's setting; 0 turns it off).
  * @param {(options?: {force?: boolean}) => Promise<any>} readUsage
  * @param {(message: RpcMessage) => void} send
  * @param {(message: RpcMessage) => void} reply
@@ -8,24 +35,31 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
   const active = new Map();
   const interrupted = new Map();
   const pending = new Map();
+  /** threadId -> reserve (%) last requested for that session. */
+  const reserves = new Map();
   let serial = 0;
   let closed = false;
   let polling = false;
-  /** @param {any} usage */
-  function reason(usage) {
+  /** @param {string | undefined} threadId */
+  function reserveFor(threadId) {
+    return threadId ? reserves.get(threadId) ?? DEFAULT_RESERVE : DEFAULT_RESERVE;
+  }
+  /** @param {any} usage @param {number} reserve */
+  function reason(usage, reserve) {
+    if (reserve <= 0) return null;
     const limits = usage?.rateLimits;
     for (const [key, name] of [['primary', '5-hour'], ['secondary', '7-day']]) {
       const used = limits?.[key]?.usedPercent;
-      if (typeof used === 'number' && Number.isFinite(used) && used >= 90) return `Claude ${name} allowance has ${Math.max(0, 100 - used)}% remaining. Tasks are stopped and new starts blocked at 10% remaining.`;
+      if (typeof used === 'number' && Number.isFinite(used) && used >= 100 - reserve) return `Claude ${name} allowance has ${Math.max(0, 100 - used)}% remaining. Tasks are stopped and new starts blocked at ${reserve}% remaining.`;
     }
     return null;
   }
   /** @param {any} usage */
   function stop(usage) {
-    const message = reason(usage);
-    if (!message || closed) return;
+    if (closed) return;
     for (const [threadId, turnId] of active) {
-      if (interrupted.has(turnId)) continue;
+      const message = reason(usage, reserveFor(threadId));
+      if (!message || interrupted.has(turnId)) continue;
       interrupted.set(turnId, message);
       const id = `yacwu-quota-stop-${++serial}`;
       pending.set(id, turnId);
@@ -33,18 +67,23 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
     }
   }
   return {
-    /** @param {RpcMessage | undefined} request */
-    async allow(request) {
+    /** @param {RpcMessage | undefined} request @param {number | null} [requestedReserve] */
+    async allow(request, requestedReserve = null) {
       if (!['turn/start', 'review/start', 'thread/compact/start'].includes(request?.method ?? '')) return true;
+      const threadId = request?.params?.threadId;
+      if (typeof threadId === 'string' && requestedReserve !== null) reserves.set(threadId, requestedReserve);
+      const reserve = reserveFor(threadId);
+      // Lockout turned off for this session: nothing to verify.
+      if (reserve <= 0) return true;
       // The reader reuses recent valid readings and refreshes unknown/expired
       // ones, while respecting Anthropic's retry delay.
       const usage = await readUsage({ force: true });
       if (closed) return false;
       stop(usage);
-      let message = reason(usage);
+      let message = reason(usage, reserve);
       const windows = [usage?.rateLimits?.primary, usage?.rateLimits?.secondary];
-      if (!message && windows.some(w => typeof w?.usedPercent !== 'number' || !Number.isFinite(w.usedPercent))) message = 'Cannot verify Claude 5-hour and 7-day allowance. New tasks are blocked until usage is available to protect the 10% reserve.';
-      if (message && usage?.usageError?.code === 'rate_limited') message = `Claude usage endpoint is temporarily rate limited. Try again after ${new Date(usage.usageError.retryAt).toLocaleTimeString()}. Tasks remain blocked until the 10% reserve can be checked.`;
+      if (!message && windows.some(w => typeof w?.usedPercent !== 'number' || !Number.isFinite(w.usedPercent))) message = `Cannot verify Claude 5-hour and 7-day allowance. New tasks are blocked until usage is available to protect the ${reserve}% reserve.`;
+      if (message && usage?.usageError?.code === 'rate_limited') message = `Claude usage endpoint is temporarily rate limited. Try again after ${new Date(usage.usageError.retryAt).toLocaleTimeString()}. Tasks remain blocked until the ${reserve}% reserve can be checked.`;
       if (!message) return true;
       if (request?.id != null) reply({ id: request.id, error: { code: -32000, message } });
       return false;

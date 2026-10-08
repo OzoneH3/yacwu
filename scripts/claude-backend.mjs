@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline';
 import { createClaudeUsageReader, normalizeClaudeTokenUsage, readClaudeCredentials } from './claude-usage.mjs';
 import { createClaudeTurnRouter } from './claude-routing.mjs';
 import { createClaudeProgressReminders } from './claude-progress.mjs';
-import { createClaudeQuotaGuard } from './claude-quota-guard.mjs';
+import { createClaudeQuotaGuard, takeAllowanceReserve } from './claude-quota-guard.mjs';
 
 /**
  * Supplement CLI aliases with concrete IDs available to the signed-in account.
@@ -119,9 +119,11 @@ async function main() {
   const quotaTimer = setInterval(() => void quota.poll(), 30000);
   /** @param {import('./claude-routing.mjs').RpcMessage | undefined} message @param {string} line */
   async function forward(message, line) {
-    if (!await quota.allow(message)) return;
+    // The browser's lockout preference is for Yacwu, not for Claude.
+    const { reserve, changed } = takeAllowanceReserve(message);
+    if (!await quota.allow(message, reserve)) return;
     progress.request(message);
-    child.stdin.write(`${line}\n`);
+    child.stdin.write(`${changed ? JSON.stringify(message) : line}\n`);
   }
   const progress = createClaudeProgressReminders((message) => child.stdin.write(`${JSON.stringify(message)}\n`));
   const reminderTimer = setInterval(() => progress.tick(), 15000);
