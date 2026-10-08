@@ -1,20 +1,30 @@
-# yacwu
+# Yacwu — Codex & Claude Web Workspace
 
 > [!NOTE]
 > This repository continues development of [the original Yacwu by AFK-surf](https://github.com/AFK-surf/yacwu), with additional features and fixes. Credit to the original authors; their MIT license and copyright notice are preserved.
 
-**Yet Another Codex Web UI** — a focused, editorial web front-end for
-[Codex](https://developers.openai.com/codex), with a **Gleam (BEAM/OTP)**
-backend and a **Svelte** SPA front-end.
+**One workspace for Codex and Claude** — a focused web front-end for
+[Codex](https://developers.openai.com/codex) and, through an optional
+[Claude adapter](#alternative-backends), Claude Code. Built with a
+**Gleam (BEAM/OTP)** backend and a **Svelte** SPA front-end.
 
-It talks to Codex over the [app-server protocol](docs/codex-app-server.md)
-(JSON-RPC 2.0 over stdio) and keeps **no database of its own** — multi-session
-state lives entirely in Codex's own persistent sessions, read back via
-`thread/list` / `thread/read` and continued via `thread/resume`.
+The name originally stood for **Yet Another Codex Web UI**. Yacwu keeps that
+heritage while bringing both providers into the same browser workspace.
+
+It talks to Codex directly, and Claude through an adapter, over the
+[app-server protocol](docs/codex-app-server.md) (JSON-RPC 2.0 over stdio).
+Conversation history stays with the selected backend rather than in a Yacwu
+conversation database. Yacwu additionally keeps browser preferences and session
+rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
 - 🖥️ Light and dark themes, with a responsive workspace for desktop and mobile
+- 🔀 Codex and Claude sessions in one workspace. Choose the provider and project
+  folder when creating a session; Claude uses the optional adapter, with versioned
+  model names, thinking controls, token statistics and available subscription
+  allowance windows. Provider sessions remain separate; GPT entries are excluded
+  from Claude model pickers.
 - 🧵 Multi-session workspace: create sessions in chosen folders, rename and
   reorder them, switch between them, browse archived sessions, restore them, or
   permanently delete them in a wider archive browser, and resume interrupted
@@ -166,6 +176,28 @@ state lives entirely in Codex's own persistent sessions, read back via
   files outside the session's working directory
 - 🗄️ No storage layer — Codex is the source of truth
 
+## Codex and Claude
+
+Codex is the default backend. Enable the optional
+[claude-codex adapter](#alternative-backends) to add Claude to the new-session
+Provider picker; both providers' sessions then appear in the same sidebar.
+The file browser, diffs, session rules, prompt queue and transcript controls
+remain part of the shared Yacwu interface.
+
+Claude model names are discovered from its SDK and account catalog rather than
+hard-coded. Where available, its 5-hour and weekly allowance windows appear in
+the Session bar. Task history records tokens and runtime, and learns allowance
+costs separately for each provider/model/thinking combination. Missing readings
+or insufficient calibration are shown as unavailable or still learning, not
+treated as zero consumption.
+
+Claude support is adapter-based, not a native Anthropic app-server integration.
+Agent events, approvals, steering and backend-specific slash commands depend on
+what the adapter exposes; identical behavior across providers is not guaranteed.
+Switching a GPT conversation to Claude in place is not supported: create a
+separate session for the other provider instead. Sessions in the same project
+folder can use shared coordination notes, but do not share conversation history.
+
 ## Slash commands
 
 Type these in the composer (anything not starting with `/` is a normal model turn):
@@ -199,6 +231,8 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 - [Bun](https://bun.sh) ≥ 1.3 (builds the web UI)
 - [`codex`](https://developers.openai.com/codex) CLI on `PATH`, already
   authenticated (`codex login`)
+- Optional Claude support: Node.js ≥ 24, a built `claude-codex` checkout and
+  working Claude authentication. See [adapter setup](#alternative-backends).
 
 ## Run
 
