@@ -19,186 +19,46 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
-- 🖥️ Light and dark themes, with a responsive workspace for desktop and mobile
-- 🔀 Codex and Claude sessions in one workspace. Choose the provider and project
-  folder when creating a session; Claude uses the optional adapter, with versioned
-  model names, thinking controls, token statistics and available subscription
-  allowance windows. Provider sessions remain separate; GPT entries are excluded
-  from Claude model pickers.
-- 🧵 Multi-session workspace: create sessions in chosen folders, rename and
-  reorder them, switch between them, browse archived sessions, restore them, or
-  permanently delete them in a wider archive browser, and resume interrupted
-  work. Clear session sits beside Archive in Session details: it starts an
-  empty conversation with 0 conversation tokens, keeps the name, folder,
-  model/thinking, profile, fast mode and list position, and archives the old
-  history for restoration. The replacement stays hidden while being prepared,
-  then appears in the original list position without a temporary new-session row.
-  Empty sessions survive page refresh before their first prompt by recovering
-  their verified, still-loaded Codex thread, even before Codex indexes it.
-  Available after the session and its agents stop;
-  previously consumed account allowance is unchanged
-  The archive browser is available from the home screen without an open session
-  and includes configured Claude backends even before opening
-  a Claude session, labels each provider, and restores through its original
-  backend. Older archive pages are included. Permanent deletion is available
-  for Codex; the current Claude adapter supports archive/restore but not delete.
-  A provider failure leaves other providers' archives visible with a notice.
-- 🗃️ Archive browser provider filter (All / Codex / Claude), reset to All on
-  opening. Delete all confirms and deletes supported sessions in the selected
-  filter, reports partial failures, and leaves unsupported Claude archives
-  untouched. The current Claude adapter has no permanent-delete RPC; restore
-  remains available. Notices stay visible inside the modal and tooltips appear
-  above it.
-- ✅ Background completion indicators mark finished sessions until you open
-  them, so completed work is easy to spot in the session list
-- 🔒 In-use detection warns before opening a session another Codex process has
-  loaded, helping prevent two processes from modifying the same conversation
-- 🧹 Compact activity is the default transcript view: adjacent routine commands
-  collapse into expandable “Background work” rows with counts and running/completed
-  status. Expand a group to inspect its original commands and output, or select
-  **Show all activity** for the full trace. Assistant messages, questions, file
-  changes, errors and failed/interrupted commands remain visible and in order;
-  this is presentation only, not a change to stored history or agent context.
-- ⚡ Live streaming of assistant messages, reasoning, commands, plans, file
-  changes, and current activity; send steering instructions while a turn runs,
-  or stop and resume it later from the Resume button beside the stop note;
-  that button disappears whenever the session starts another turn.
-  manual stops are recorded in the transcript.
-  A quiet-turn monitor posts a notice after two minutes without activity;
-  it offers Keep waiting, Ask Codex for a status update, or Stop worker, and
-  never stops a worker automatically
-- ⏱️ The Session bar keeps the current prompt visible, puts task progress and
-  time-left estimates before the Session label, and shows 5-hour / 7-day usage
-  on the right, with reset countdowns and local reset dates/times on hover.
-  Progress updates appear as their own transcript entries, while repeated
-  identical estimates are omitted;
-  elapsed time appears while work runs and on its completed response. The
-  session list shows 0% until a running task reports progress, with time left
-  estimated from elapsed task time on hover when the progress marker omits it.
-- 🤝 Multi-agent visibility: switch between the session and spawned agents,
-  see which agents are active, and browse finished agents in a separate
-  Previous group on the main page (not duplicated in session details);
-  agent transcripts are read-only, and agent activity links
-  jump directly to the corresponding transcript
-- 🧠 Choose a model and reasoning effort per session.
-  “Suggest settings” recommends an available model and supported thinking level
-  for the draft prompt, explains its reasoning, and lets you apply both together;
-  applying closes the suggestion panel.
-  Claude suggestions prefer Haiku for scoped edits, Sonnet for routine tasks,
-  Opus for complex work, and Fable for demanding reasoning when available.
-  Suggestions use each model’s advertised effort levels and link to its provider’s
-  guidance; models without adjustable effort can still be applied.
-  It uses local text heuristics (no allowance consumed), not project or attachment
-  analysis; suggestions are starting points rather than guaranteed best choices.
-  Model capability, usage-efficiency, and value indicators appear in the model
-  choices. GPT value ratings emphasize capability per estimated 1% of Pro allowance used;
-  Claude uses published pricing and task-cost evidence as cost proxies.
-  Both catalogs hide rated choices with worse capability/efficiency tradeoffs
-  and sort by efficiency, then capability. These are rough Yacwu estimates,
-  not official benchmark scores or calibrated comparisons between providers;
-  see [rating evidence and methodology](docs/model-ratings.md). After
-  selection, the picker shows only the model name. If you change models
-  mid-turn, you can stop and restart the current prompt on the newly selected
-  model without adding a duplicate prompt to the transcript
-- 💸 Thinking-level choices show learned weekly allowance cost per 100k tokens
-  for the selected model. Running task progress includes a projected total
-  allowance cost from completion estimates, or elapsed/remaining time when
-  progress is not yet available. Completed responses show estimated weekly
-  allowance used and recorded token totals, including agent turns started
-  under that prompt. Usage refreshes every 30 seconds and at turn boundaries;
-  the open history dialog also refreshes automatically. One clean single-setting
-  observation provides an explicitly provisional “early” rate with rounding
-  uncertainty, for tasks with a broadly similar token mix. More independent
-  evidence upgrades it to fitted costs; unrelated sparse or inseparable mixed
-  models do not block a separately calibrated model.
-  Partial recordings and insufficient calibration are labeled rather than
-  assigned a fabricated percentage. If some contributing agent turns cannot
-  be estimated, the header and completed response show the known subtotal
-  marked “incomplete,” with a tooltip explaining the excluded turns. Incomplete
-  subtotals are never projected as the full task cost.
-  When a progress update omits its remaining time, Yacwu estimates it from the
-  current turn's elapsed time or the rate between progress updates.
-  Rereading a completed task after a collector restart preserves its recorded
-  totals rather than marking that historical task as a new recording gap.
-- 📊 Task usage history: click the weekly allowance or open it from Session
-  details to inspect recorded model, thinking level, cumulative token deltas,
-  elapsed time, and weekly allowance readings. Backend recording continues
-  with the browser closed; pooled observations learn estimated weekly cost
-  per model/thinking level, including overlapping turns. Separate token weights,
-  indicative uncertainty ranges, and matching-account hosts improve estimates;
-  combined observation windows group concurrent sessions and agents by model
-  and thinking level, show their token contributions and runtime, and count
-  each account allowance change once. Single-setting windows show a direct
-  observed cost per 100k tokens; mixed, pending, and incomplete windows are
-  identified separately, with model/thinking and concurrency filters.
-  Agent spawn evidence recovers first-turn settings and token baselines even
-  when the spawn receipt arrives late; completed-turn snapshots do not charge
-  historical tokens to new work.
-  Manual benchmarks provide bounded calibration workloads
-- 💬 Interactive answers: completed questions and action requests open a prompt
-  dialog; multiple choice blocks in one message are queued separately and remain
-  queued while you answer earlier ones. Streamed partial text cannot close a
-  question. Answers show confirmation after Codex accepts them, while the agent
-  prepares a response.
-  Answer or dismiss each to advance through the session's question queue,
-  including requests from agents. Session question badges reflect that same
-  unresolved queue, and dismissed questions stay dismissed after refresh.
-  Choice lists require an adjacent request; report tables and code examples
-  do not become question prompts
-- 📁 Workspace browser rooted at the session folder, with a Monaco text editor
-  (Ctrl/Cmd+S to save), file previews and copy actions, and clickable file
-  links in assistant messages. The file and diff viewer state is kept per
-  session, directory links expand their folder and preview/copy its listing,
-  and worktree-prefixed file links select the corresponding diff
-- ± Git changes inspector with All, Staged, and Unstaged scopes, added/removed
-  line counts in both the inspector and transcript file-change entries, lazy
-  unified diffs, and a resizable split view
-- 🖼️ Attach images (PNG, JPEG, WebP, non-animated GIF), PDFs, and common
-  text/code files through the picker or clipboard paste; image previews appear
-  inline, while other files are staged temporarily and passed to Codex by path
-- 🧭 Transcript position rail for jumping between messages, with a scroll-to-bottom
-  control whenever the latest message is out of view. Jumps settle after virtualized
-  rows are measured. Entering session or agent tabs jumps to the bottom; manual
-  scrolling cancels an in-progress jump.
-- 📋 Responses with file links offer **Copy files** beside the message copy
-  button. It copies each unique file linked using Markdown in response order,
-  with a filename heading followed by its contents. Plain paths in backticks
-  and directory links are excluded. Unreadable files report an error and leave
-  the clipboard unchanged.
-- ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
-  prompt history with the Codex TUI's shell-style recall semantics
-- 📝 Session details show built-in session rules. Toggle future-prompt progress
-  reporting and shared coordination, or save additional session instructions.
-  Rules are stored per session in this browser, survive refresh, and carry over
-  when clearing a session. Existing tasks/history are not rewritten; the backend
-  image-display instruction is shown read-only. Conversation-specific requests
-  such as commit/README policies are not automatically copied into new sessions.
-  Shared background coordination lets Codex and Claude sessions on the same
-  machine and project exchange notes in one temporary folder when enabled.
-  Remote machines and different projects remain separate. Notes are read at
-  work checkpoints; they do not wake idle sessions or provide instant delivery.
-  Existing sessions receive updated folder guidance on their next prompt.
-- 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when
-  creating a session (or with `/profile`)
-- 🧾 Queue follow-up work with `/todo <task>`; queued tasks start one at a time
-  after the current turn. Confirmations do not repeat the task description;
-  `/todo` shows the queue with progress numbering
-  that includes an already-running prompt
-- 🔁 Alternative backends: `YACWU_BACKENDS` registers other local app-server
-  commands (e.g. [claude-codex](https://github.com/fuergaosi233/claude-codex))
-  that appear in the host picker alongside the default local codex
-- 🔌 One `codex app-server` connection per machine, multiplexed; events fan
-  out to the browser via Server-Sent Events
-- 🌐 Remote machines over SSH: pick any concrete `Host` alias from
-  `~/.ssh/config` when creating a session. yacwu bootstraps a **persistent**
-  app-server on the remote machine (`--listen unix://` + streamlocal
-  forwarding — no TCP ports), and reconnects with backoff after SSH drops or
-  yacwu restarts while remote turns keep running. Full feature parity: the
-  file browser, Git viewer, images, profiles, and in-use detection all
-  operate on the remote machine. See [docs/remote.md](docs/remote.md)
-- 🔗 Transcript links to absolute files open at their linked folder, including
-  files outside the session's working directory
-- 🗄️ No storage layer — Codex is the source of truth
+- 🖥️ Light and dark themes, responsive for desktop and mobile
+- 🔀 Codex and Claude sessions side by side; pick the provider and project
+  folder per session
+- 🧵 Multi-session workspace: create, rename, reorder, clear, archive, restore,
+  and delete sessions, and resume interrupted work
+- ✅ Completion badges mark finished sessions until you open them
+- 🔒 In-use detection warns before opening a session another Codex process
+  has loaded
+- ⚡ Live streaming of messages, reasoning, commands, plans, and file changes;
+  steer a running turn, stop it, or resume it later
+- 🧹 Compact activity view folds routine commands into expandable
+  "Background work" rows; **Show all activity** shows the full trace
+- ⏱️ Session bar with task progress, time-left estimates, elapsed time, and
+  5-hour / 7-day usage with reset countdowns
+- 🤝 Multi-agent visibility: switch between a session and its spawned agents,
+  with read-only agent transcripts
+- 🧠 Per-session model and reasoning effort, with "Suggest settings" and
+  capability/efficiency indicators in the picker
+  (see [rating methodology](docs/model-ratings.md))
+- 💸 Learned allowance cost per model and thinking level, projected task cost
+  while work runs, and a task usage history with manual benchmarks
+- 💬 Interactive answers: questions and action requests open a prompt dialog
+  and queue per session, including requests from agents
+- 📁 Workspace browser with a Monaco editor, file previews, and clickable file
+  links in responses
+- ± Git changes inspector with All / Staged / Unstaged scopes and lazy diffs
+- 🖼️ Attach images, PDFs, and text files by picker or clipboard paste
+- 🧭 Transcript position rail and scroll-to-bottom control
+- 📋 **Copy files** collects the contents of every file a response links to
+- ⌨️ Slash commands (see below), message copy buttons, and prompt history
+- 📝 Per-session rules: toggle progress reporting and shared coordination
+  notes, or add custom instructions. Shared coordination lets Codex and Claude
+  sessions in the same project folder leave notes for each other
+- 🎛️ Per-session Codex profiles from `$CODEX_HOME/<name>.config.toml`
+- 🧾 `/todo <task>` queues follow-up work to run after the current turn
+- 🔁 Alternative backends via `YACWU_BACKENDS`, such as
+  [claude-codex](https://github.com/fuergaosi233/claude-codex)
+- 🌐 Remote machines over SSH with a persistent app-server and full feature
+  parity (see [docs/remote.md](docs/remote.md))
+- 🗄️ No storage layer — the backend is the source of truth
 
 ## Codex and Claude
 
