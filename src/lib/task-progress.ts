@@ -19,7 +19,12 @@ export function withTaskProgressInstructions(text: string): string {
 	const markerAt = text.indexOf(PROGRESS_CONTEXT_MARKER);
 	const visibleText = markerAt < 0 ? text : text.slice(0, markerAt).trimEnd();
 	return `${visibleText}\n\n${PROGRESS_CONTEXT_MARKER}
-For this user task, estimate how much work is complete and the rough time remaining. Include an initial estimate early, then update it about once a minute during long work and at meaningful milestones. Put a standalone line in your progress commentary using exactly this format: [[YACWU_PROGRESS percent=35 remaining_minutes=6]]. Percent is estimated completion from 0 to 100; remaining_minutes is a rough whole-minute estimate, or use “unknown” if you cannot estimate. Mark these as estimates, not measured facts. Finish with 100 percent and 0 minutes. Do not include the marker in the final answer.
+Progress reporting is required for this task. Report progress as a standalone line in your progress commentary, using exactly this format: [[YACWU_PROGRESS percent=35 remaining_minutes=6]]. Percent is estimated completion from 0 to 100; remaining_minutes is a rough whole-minute estimate. These are estimates, not measured facts.
+- Post the first line before your first tool call or substantive work.
+- Then post one at least every few tool calls (about once a minute) and at every meaningful milestone. Never let a long run of tool calls pass without one.
+- Give a numeric remaining_minutes whenever you can make even a rough guess; use “unknown” only when you truly cannot.
+- Before your final answer, post a last line with percent=100 remaining_minutes=0. Never put the marker in the final answer itself.
+Yacwu shows these lines as the task's progress, so a missing update makes working sessions look stalled.
 [/YACWU_TASK_PROGRESS]`;
 }
 

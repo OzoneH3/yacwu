@@ -15,6 +15,19 @@ describe('task progress reporting', () => {
 		expect(retried.match(/<!-- YACWU_TASK_PROGRESS -->/g)).toHaveLength(1);
 	});
 
+	test('states reporting as a requirement with cadence, numeric estimates and a final 100', () => {
+		const text = withTaskProgressInstructions('Do the task');
+		expect(text).toContain('Progress reporting is required');
+		expect(text).toContain('before your first tool call');
+		expect(text).toContain('Never let a long run of tool calls pass without one');
+		expect(text).toContain('use “unknown” only when you truly cannot');
+		expect(text).toContain('percent=100 remaining_minutes=0');
+		expect(text).toContain('Never put the marker in the final answer');
+		// Only the bracketed example counts as a marker; the prose about the
+		// final 100% must not read as a reported completion.
+		expect(parseTaskProgress(text)?.percent).toBe(35);
+	});
+
 	test('uses the latest estimate and clamps invalid bounds', () => {
 		expect(parseTaskProgress('Start [[YACWU_PROGRESS percent=25 remaining_minutes=12]] then [[YACWU_PROGRESS percent=130 remaining_minutes=unknown]]'))
 			.toEqual({ percent: 100, remainingMinutes: null });
