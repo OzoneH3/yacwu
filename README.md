@@ -1,4 +1,4 @@
-# Yacwu — Yet Another Coding Workspace UI
+# Yacwu — Yet Another Coding Web UI
 
 > [!NOTE]
 > This repository continues development of [the original Yacwu by AFK-surf](https://github.com/AFK-surf/yacwu), with additional features and fixes. Credit to the original authors; their MIT license and copyright notice are preserved.
@@ -9,7 +9,7 @@
 **Gleam (BEAM/OTP)** backend and a **Svelte** SPA front-end.
 
 Originally **Yet Another Codex Web UI**, Yacwu is now **Yet Another Coding
-Workspace UI**, bringing both providers into the same browser workspace.
+Web UI**, bringing both providers into the same browser workspace.
 
 It talks to Codex directly, and Claude through an adapter, over the
 [app-server protocol](docs/codex-app-server.md) (JSON-RPC 2.0 over stdio).
