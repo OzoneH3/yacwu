@@ -133,6 +133,12 @@ state lives entirely in Codex's own persistent sessions, read back via
   the clipboard unchanged.
 - ⌨️ Composer slash commands (see below), message copy buttons, and Up/Down
   prompt history with the Codex TUI's shell-style recall semantics
+- 📝 Session details show built-in session rules. Toggle future-prompt progress
+  reporting and shared coordination, or save additional session instructions.
+  Rules are stored per session in this browser, survive refresh, and carry over
+  when clearing a session. Existing tasks/history are not rewritten; the backend
+  image-display instruction is shown read-only. Conversation-specific requests
+  such as commit/README policies are not automatically copied into new sessions.
 - 🎛️ Per-session codex profiles: pick a `$CODEX_HOME/<name>.config.toml` when
   creating a session (or with `/profile`)
 - 🧾 Queue follow-up work with `/todo <task>`; queued tasks start one at a time

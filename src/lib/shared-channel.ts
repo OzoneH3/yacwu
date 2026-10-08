@@ -30,6 +30,7 @@ export function visibleUserText(text: string): string {
 	// App-server backends may trim leading blank lines before echoing user input,
 	// so match the sentinel itself rather than depending on its surrounding LFs.
 	const markers = [
+		'<!-- YACWU_SESSION_RULES -->',
 		'<!-- YACWU_SHARED_BACKGROUND_CHANNEL -->',
 		'<!-- YACWU_TASK_PROGRESS -->'
 	];

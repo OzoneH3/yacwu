@@ -4,6 +4,8 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
+	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
+	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
 	import { settleTranscriptBottom } from '$lib/transcript-scroll';
 	import { runtimeOutcome, interruptionReason } from '$lib/runtime-reconciliation';
 	import { page } from '$app/state';
@@ -653,6 +655,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let cwdInputEl = $state<HTMLInputElement | null>(null);
 
 	let transcriptEl = $state<HTMLDivElement | null>(null);
+	let sessionRules = $state<Record<string, SessionRules>>({});
+	function saveSessionRules(id: string, rules: SessionRules) {
+		sessionRules = { ...sessionRules, [id]: rules };
+		try { localStorage.setItem(SESSION_RULES_KEY, JSON.stringify(sessionRules)); return true; }
+		catch { showArchiveNotice({ tone: 'error', message: 'Rules apply for now, but could not be saved in this browser.' }); return false; }
+	}
 	// The transcript renders whichever thread is in view: the session itself,
 	// or a selected sub-agent's thread.
 	const viewedItems = $derived(
@@ -2358,7 +2366,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
-		const messageText = withTaskProgressInstructions(addSharedChannelContext(id, text));
+		const rules = sessionRules[id] ?? defaultSessionRules;
+		const ruleText = withSessionRules(rules.sharedChannel ? addSharedChannelContext(id, text) : visibleUserText(text), rules);
+		const messageText = rules.progress ? withTaskProgressInstructions(ruleText) : ruleText;
 		if (attachments.length > 0) {
 			const body = new FormData();
 			body.set('text', messageText);
@@ -3269,6 +3279,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					return fresh;
 				},
 				configure: async (newId) => {
+					if (sessionRules[id]) saveSessionRules(newId, { ...sessionRules[id] });
 					if (config?.model) await request(threadApi(newId, '/model', host), { model: config.model, effort: config.effort });
 					if (config) sessionConfigs[newId] = { ...config };
 					if (name) {
@@ -4546,6 +4557,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		mobileQuery.addEventListener('change', updateMobileViewport);
 
 		void reconcileInterruptedSessions().finally(() => (startupRecoveryComplete = true));
+		try { sessionRules = readSessionRules(localStorage.getItem(SESSION_RULES_KEY)); } catch { /* Defaults if storage is disabled. */ }
 		const runtimeCheckTimer = setInterval(() => void reconcileInterruptedSessions(), 15000);
 		loadSessions();
 		const accountUsageTimer = setInterval(() => {
@@ -5442,6 +5454,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						{/if}
 					</dl>
+					{#key activeId}<SessionRulesEditor rules={sessionRules[activeId] ?? defaultSessionRules} onsave={(rules) => saveSessionRules(activeId, rules)} />{/key}
 					<button class="mini" type="button" onclick={() => { sessionInfoDialog?.close(); usageHistoryOpen = true; }}>Task usage history</button>
 					<div class="session-detail-actions">
 						{#if !isSideChat(activeSummary)}

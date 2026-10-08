@@ -1,0 +1,38 @@
+import { expect, test } from '@playwright/test';
+
+test('session rules persist per session and are included only in future prompt transport', async ({ page }) => {
+	let sent = '';
+	const summary = (id: string) => ({ id, name: id, cwd: '/tmp', status: { type: 'idle' }, turns: [] });
+	await page.route('**/api/**', async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		let data: object = {};
+		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+		if (path === '/api/threads') data = { data: [summary('rules-a'), summary('rules-b')], defaultCwd: '/tmp' };
+		else if (path === '/api/threads/loaded') data = { data: ['rules-a', 'rules-b'] };
+		else if (path.endsWith('/message')) sent = route.request().postDataJSON().text;
+		else if (path.endsWith('/model')) data = { model: 'test', effort: 'medium', models: [] };
+		else if (path.startsWith('/api/threads/')) data = { thread: summary(path.split('/')[3]) };
+		await route.fulfill({ json: data });
+	});
+	await page.goto('/s/rules-a');
+	await page.getByRole('button', { name: /^Session details,/ }).click();
+	await page.getByLabel('Additional instructions').fill('Always check README before committing.');
+	await page.getByLabel('Progress reporting', { exact: true }).uncheck();
+	await page.getByLabel('Shared background coordination', { exact: true }).uncheck();
+	await page.getByRole('button', { name: 'Save rules', exact: true }).click();
+	await page.reload();
+	await page.getByRole('button', { name: /^Session details,/ }).click();
+	await expect(page.getByLabel('Additional instructions')).toHaveValue('Always check README before committing.');
+	await expect(page.getByLabel('Progress reporting', { exact: true })).not.toBeChecked();
+	await page.getByRole('button', { name: 'Close session details', exact: true }).click();
+	await page.locator('.composer textarea').fill('First task');
+	await page.locator('button.send').click();
+	await expect.poll(() => sent).toContain('Always check README before committing.');
+	expect(sent).not.toContain('<!-- YACWU_TASK_PROGRESS -->');
+	expect(sent).not.toContain('<!-- YACWU_SHARED_BACKGROUND_CHANNEL -->');
+	await expect(page.locator('.item.user')).not.toContainText('Always check README');
+	await page.goto('/s/rules-b');
+	await page.getByRole('button', { name: /^Session details,/ }).click();
+	await expect(page.getByLabel('Additional instructions')).toHaveValue('');
+	await expect(page.getByLabel('Progress reporting', { exact: true })).toBeChecked();
+});
