@@ -44,6 +44,13 @@ test('crossing cutoff interrupts active turns once and records the interruption 
 	const completed: any = { method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'interrupted' } } };
 	guard.observe(completed);
 	expect(completed.params.turn.error.message).toContain('5-hour');
+	expect(completed.params.turn.items).toEqual([expect.objectContaining({
+		type: 'localNote', id: 'quota-stop:turn', resumeAvailable: true, quotaStop: true
+	})]);
+	expect(completed.params.turn.items[0].text).toContain('Task stopped.');
+	const history: any = { result: { thread: { id: 'thread', turns: [completed.params.turn] } } };
+	guard.observe(history); guard.observe(history);
+	expect(history.result.thread.turns[0].items).toHaveLength(1);
 	expect(await guard.allow({ id: 3, method: 'turn/start' })).toBe(false);
 	guard.close();
 });

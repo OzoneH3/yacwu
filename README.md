@@ -506,6 +506,8 @@ minutes, account identity for fifteen minutes, and concurrent reads share one
 pending request. Browser allowance requests time out after eight seconds and
 retain the last displayed values. A percentage remains visible when its reset
 timestamp is unavailable.
+While an allowance is depleted or below Claude's reserve and its reset time is
+known, checks slow to once every fifteen minutes, with a fresh check after reset.
 
 With progress reporting enabled, Claude receives a silent reminder after five
 minutes without an estimate, only if other task activity occurred in those five
@@ -513,7 +515,10 @@ minutes. Reminders are sent at most once every five minutes and are hidden from
 the transcript, including after reload.
 
 Claude work is stopped and new tasks are blocked when either the five-hour or
-seven-day allowance reaches 90% used. If both readings are unavailable, new
+seven-day allowance reaches 90% used. Automatic stops appear in the transcript
+with the allowance reason and a Resume action, and queued todos stay paused.
+Sessions waiting for Claude's reserve or a depleted Codex allowance show a clock
+with the reset time when available. If both readings are unavailable, new
 tasks remain blocked until the allowance can be verified. Claude usage is
 checked before each new task. Recent valid readings are reused for up to two
 minutes; unknown readings and elapsed reset windows trigger a refresh. If the

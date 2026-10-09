@@ -822,12 +822,57 @@ fn state_diagnostics(state: State, at: Int) -> Json {
 }
 
 /// Sample the shared weekly quota; avoid stacking reads if Codex is unresponsive.
+fn account_cache_until(method: String, at: Int, reply: Reply) -> Int {
+  let normal =
+    at
+    + case method {
+      "account/read" -> 900
+      _ -> 120
+    }
+  case method, reply {
+    "account/rateLimits/read", Ok(data) -> {
+      let threshold = case jsonx.field_string(data, ["rateLimits", "limitId"]) {
+        Ok("claude-code") -> 90.0
+        _ -> 100.0
+      }
+      let resets =
+        ["primary", "secondary"]
+        |> list.filter_map(fn(window) {
+          let used =
+            decode.run(
+              data,
+              decode.at(
+                ["rateLimits", window, "usedPercent"],
+                decode.one_of(decode.float, [
+                  decode.map(decode.int, int.to_float),
+                ]),
+              ),
+            )
+            |> result.unwrap(0.0)
+          let reset =
+            jsonx.field_int(data, ["rateLimits", window, "resetsAt"])
+            |> result.unwrap(0)
+          case used >=. threshold && reset > at {
+            True -> Ok(reset)
+            False -> Error(Nil)
+          }
+        })
+      case list.sort(resets, int.compare) |> list.first {
+        Ok(reset) -> int.min(reset, at + 900)
+        Error(_) -> normal
+      }
+    }
+    _, _ -> normal
+  }
+}
+
 fn sample_usage(state: State) -> State {
   let now = oauth.now()
   let quota_recent = case
     dict.get(state.account_cache, "account/rateLimits/read")
   {
-    Ok(#(at, _)) -> now - at < 120
+    Ok(#(at, reply)) ->
+      now < account_cache_until("account/rateLimits/read", at, reply)
     Error(_) -> False
   }
   let pending =
@@ -873,12 +918,13 @@ fn account_request(
   reply: Subject(Reply),
 ) -> actor.Next(State, Msg) {
   let now = oauth.now()
-  let ttl = case method {
-    "account/read" -> 900
-    _ -> 120
+  let cached = dict.get(state.account_cache, method)
+  let until = case cached {
+    Ok(#(at, value)) -> account_cache_until(method, at, value)
+    Error(_) -> 0
   }
-  case dict.get(state.account_cache, method) {
-    Ok(#(at, value)) if now - at < ttl -> {
+  case cached {
+    Ok(#(_, value)) if now < until -> {
       process.send(reply, value)
       actor.continue(state)
     }

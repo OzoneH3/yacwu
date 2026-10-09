@@ -27,7 +27,7 @@ export function takeAllowanceReserve(request) {
 
 /** Stop/block Claude turns when either allowance has the reserve or less remaining
  * (10% by default; per session from the browser's setting; 0 turns it off).
- * @param {(options?: {force?: boolean}) => Promise<any>} readUsage
+ * @param {(options?: {force?: boolean, reserve?: number}) => Promise<any>} readUsage
  * @param {(message: RpcMessage) => void} send
  * @param {(message: RpcMessage) => void} reply
  */
@@ -40,6 +40,18 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
   let serial = 0;
   let closed = false;
   let polling = false;
+  /** @param {any} turn */
+  function annotateStop(turn) {
+    const why = interrupted.get(turn?.id);
+    if (!why || turn?.status !== 'interrupted') return;
+    turn.error = { ...turn.error, message: why, yacwuQuotaStopped: true };
+    const id = `quota-stop:${turn.id}`;
+    turn.items ??= [];
+    if (!turn.items.some(/** @param {any} item */ item => item.id === id)) turn.items.push({
+      type: 'localNote', id, text: `Task stopped.\n${why}`, tone: 'info',
+      resumeAvailable: true, quotaStop: true
+    });
+  }
   /** @param {string | undefined} threadId */
   function reserveFor(threadId) {
     return threadId ? reserves.get(threadId) ?? DEFAULT_RESERVE : DEFAULT_RESERVE;
@@ -77,7 +89,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
       if (reserve <= 0) return true;
       // The reader reuses recent valid readings and refreshes unknown/expired
       // ones, while respecting Anthropic's retry delay.
-      const usage = await readUsage({ force: true });
+      const usage = await readUsage({ force: true, reserve });
       if (closed) return false;
       stop(usage);
       let message = reason(usage, reserve);
@@ -103,14 +115,12 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
         void this.poll();
       }
       if (message.method === 'turn/completed') {
-        const why = interrupted.get(p.turn?.id);
-        if (why && p.turn?.status === 'interrupted') p.turn.error = { ...p.turn.error, message: why };
+        annotateStop(p.turn);
         if (active.get(p.threadId) === p.turn?.id) active.delete(p.threadId);
       }
       // Restore active turns when reconnecting to an already-loaded adapter.
       for (const turn of message.result?.thread?.turns ?? []) {
-        const why = interrupted.get(turn.id);
-        if (why && turn.status === 'interrupted') turn.error = { ...turn.error, message: why };
+        annotateStop(turn);
         if (turn.status === 'inProgress' && message.result.thread.id) active.set(message.result.thread.id, turn.id);
       }
       return false;

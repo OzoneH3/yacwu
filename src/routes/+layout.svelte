@@ -844,6 +844,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// any optimistic copies were wiped with the transcript above.
 		pendingUserEchoes[id] = [];
 		for (const turn of turns) {
+			clearStoppedResumeActions(id);
 			for (const item of turn.items ?? []) {
 				if ((item as any).id) upsertItem(id, item as any, false, turn.id, turn.status !== 'inProgress');
 			}
@@ -1626,6 +1627,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					markTaskCompleted(tid);
 					const t = ensureThread(tid);
 					t.status = 'idle';
+					for (const item of p.turn?.items ?? []) {
+						if (item.type === 'localNote' && item.quotaStop) upsertItem(tid, item, false, completedTurnId);
+					}
 					if (p.turn?.status === 'completed' && t.turnStartedAt !== null && isClaudeSession(tid)) recordClaudeEstimateBias(t, completedTurnId ?? currentTurnId ?? null, t.turnStartedAt);
 					const duration = t.turnStartedAt === null ? null : Math.max(0, Date.now() - t.turnStartedAt);
 					t.turnStartedAt = null;
@@ -1646,7 +1650,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					if (duration !== null) stampTurnDuration(tid, duration);
 					void refreshFileChangeLineStats(tid);
 					if (tid === activeId) filesRefresh += 1;
-					advanceTodoQueue(tid);
+					if (!p.turn?.error?.yacwuQuotaStopped) advanceTodoQueue(tid);
 					if (p.turn?.status === 'completed') {
 						const sessionId = agents[tid] ? agentRootId(agents, agents[tid]) : tid;
 						if (threads[sessionId]?.status === 'idle') markSessionFinished(sessionId);
@@ -2718,6 +2722,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function remainingPercent(window: RateLimitWindow): string {
 		const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
 		return Number.isInteger(remaining) ? String(remaining) : remaining.toFixed(1);
+	}
+
+	function quotaWaitLabel(id: string): string | null {
+		if (threads[id]?.status === 'running') return null;
+		const usage = accountUsageByHost[sessionHost(id)];
+		const reserve = isClaudeSession(id) ? settings.claudeAllowanceReserve : 0;
+		const now = activityClock / 1000;
+		const blocked = [usage?.fiveHour, usage?.sevenDay].filter((window): window is RateLimitWindow =>
+			Boolean(window) && window!.usedPercent >= 100 - reserve && (window!.resetsAt == null || window!.resetsAt > now));
+		if (blocked.length) {
+			const resets = blocked.map(window => window.resetsAt).filter((at): at is number => typeof at === 'number');
+			return resets.length === blocked.length ? `Waiting for allowance · resets in ${fmtReset(Math.max(...resets))}` : 'Waiting for allowance · reset time unknown';
+		}
+		if (!usage?.fiveHour && !usage?.sevenDay && itemsOf(threads[id] ?? null).some((item: any) => item.quotaStop && item.resumeAvailable)) return 'Waiting for allowance · reset time unknown';
+		return null;
 	}
 
 	async function loadAccountUsage(host: string, force = false) {
@@ -5334,13 +5353,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					>
 						<span
 							class="run-dot"
+							class:quota-waiting={Boolean(quotaWaitLabel(s.id))}
 							class:running={threads[s.id]?.status === 'running'}
 							class:error={Boolean(threads[s.id]?.error)}
 							class:interrupted={interruptedSessions[s.id]}
 							role="img"
-							aria-label={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
-							title={interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'}
-						></span>
+							aria-label={quotaWaitLabel(s.id) || (interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle')}
+							title={quotaWaitLabel(s.id) || (interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle')}
+						>{quotaWaitLabel(s.id) ? '◷' : ''}</span>
 		<span class="label">
 							{#if sessionAttentionById[s.id] && !(finishedSessions[s.id] && sessionAttentionById[s.id] === 'alert')}
 								<span
@@ -5571,8 +5591,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						class="session-info-trigger"
 						type="button"
 						onclick={openSessionInfo}
-						aria-label={`Session details, ${interruptedSessions[activeId] ? 'interrupted' : active?.error ? 'error' : active?.status === 'running' ? 'running' : 'idle'}`}
-						title={`Session details · ${interruptedSessions[activeId] ? 'Interrupted by restart' : active?.error ? 'Error' : active?.status === 'running' ? 'Running' : 'Idle'}`}
+						aria-label={`Session details, ${quotaWaitLabel(activeId) || (interruptedSessions[activeId] ? 'interrupted' : active?.error ? 'error' : active?.status === 'running' ? 'running' : 'idle')}`}
+						title={`Session details · ${quotaWaitLabel(activeId) || (interruptedSessions[activeId] ? 'Interrupted by restart' : active?.error ? 'Error' : active?.status === 'running' ? 'Running' : 'Idle')}`}
 					>
 						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 							<circle cx="12" cy="12" r="9" />
@@ -5581,11 +5601,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</svg>
 						<span
 							class="session-state-dot"
+							class:quota-waiting={Boolean(quotaWaitLabel(activeId))}
 							class:running={active?.status === 'running'}
 							class:error={Boolean(active?.error)}
 							class:interrupted={interruptedSessions[activeId]}
 							aria-hidden="true"
-						></span>
+						>{quotaWaitLabel(activeId) ? '◷' : ''}</span>
 					</button>
 					{#if active?.status === 'running'}
 						<button class="stop" type="button" onclick={interrupt} disabled={stoppingSessions[activeId]} aria-label="Stop current turn" title="Stop current turn">
@@ -7277,6 +7298,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		animation: pulse-status 1.8s var(--ease-in-out) infinite;
 	}
 
+	.session .run-dot.quota-waiting, .session-state .session-state-dot.quota-waiting {
+		width: 1rem;
+		height: 1rem;
+		display: grid;
+		place-items: center;
+		background: transparent;
+		border: 0;
+		color: var(--color-warning);
+		font-size: 1rem;
+		line-height: 1;
+		animation: none;
+	}
 	.run-dot.error {
 		background: var(--color-error);
 		animation: none;

@@ -130,7 +130,7 @@ test('failed forced Claude usage refresh never presents stale quota as current',
 	});
 	expect((await read()).rateLimits.primary?.usedPercent).toBe(95);
 	fail = true;
-	time += 120_001;
+	time += 900_001;
 	const refreshed = await read({ force: true });
 	expect(refreshed.rateLimits.primary).toBeNull();
 	expect(refreshed.rateLimits.secondary).toBeNull();
@@ -160,6 +160,23 @@ test('fresh usage survives repeated starts and forced reads respect HTTP 429 bac
 	time += 300_001;
 	expect((await read({ force: true })).rateLimits.primary?.usedPercent).toBe(10);
 	expect(calls).toBe(3);
+});
+
+test('blocked allowance checks wait fifteen minutes or until the known reset', async () => {
+	let time = Date.parse('2026-10-08T14:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => { calls++; return Response.json({ five_hour: { utilization: 95, resets_at: '2026-10-08T14:10:00Z' }, seven_day: { utilization: 20, resets_at: '2026-10-15T15:00:00Z' } }); }
+	});
+	await read({ force: true });
+	time += 120_001;
+	await read({ force: true });
+	expect(calls).toBe(1);
+	time = Date.parse('2026-10-08T14:10:01Z');
+	await read({ force: true });
+	expect(calls).toBe(2);
 });
 
 test('a reported zero usage percentage remains valid without a reset timestamp', () => {

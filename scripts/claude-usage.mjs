@@ -70,21 +70,22 @@ export function createClaudeUsageReader({
   let pending;
   /** @type {string | undefined} */
   let accountToken;
-  function currentReading() {
+  function currentReading(reserve = 10) {
     const limits = cached.rateLimits;
+    const blocked = reserve > 0 && [limits.primary, limits.secondary].some(window => window && window.usedPercent >= 100 - reserve && window.resetsAt !== null);
     return [limits.primary, limits.secondary].every(window => window && (window.resetsAt === null || window.resetsAt * 1000 > now()))
-      && lastSuccess > 0 && now() - lastSuccess < 120_000;
+      && lastSuccess > 0 && now() - lastSuccess < (blocked ? 900_000 : 120_000);
   }
   function unavailable() {
     return { ...claudeRateLimits(null), usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
   }
-  return async ({ force = false } = {}) => {
+  return async ({ force = false, reserve = 10 } = {}) => {
     if (pending) {
       const reading = await pending;
-      return force && !currentReading() ? unavailable() : reading;
+      return force && !currentReading(reserve) ? unavailable() : reading;
     }
     // A page reload/start must not turn a fresh reading into another HTTP call.
-    if (currentReading()) return cached;
+    if (currentReading(reserve)) return cached;
     // Honor throttling even when callers need a fresh safety check.
     if (now() < retryAt) return force ? unavailable() : { ...cached, usageError: { code: 'rate_limited', retryAt } };
     if (!force && now() < nextRead) return cached;
