@@ -143,7 +143,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	interface RateLimitWindow {
 		usedPercent: number;
 		windowDurationMins: number;
-		resetsAt: number;
+		resetsAt: number | null;
 	}
 
 	interface AccountUsage {
@@ -2648,7 +2648,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return sessionTimestampDate(timestamp)?.toISOString();
 	}
 
-	function fmtReset(resetsAt: number): string {
+	function fmtReset(resetsAt: number | null): string {
+		if (typeof resetsAt !== 'number') return 'unknown';
 		const diff = resetsAt - Math.floor(Date.now() / 1000);
 		const countdown = diff <= 0 ? 'now' : fmtDuration(diff);
 		const date = new Date(resetsAt * 1000);
@@ -2676,8 +2677,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const lastFetched = accountUsageFetchedAt[key] ?? 0;
 		if (accountUsagePending[key] || (!force && Date.now() - lastFetched < 120_000)) return;
 		accountUsagePending[key] = true;
+		accountUsageFetchedAt[key] = Date.now();
 		try {
-			const res = await fetch(`/api/account${hostQuery(key)}`);
+			const res = await fetch(`/api/account${hostQuery(key)}`, { signal: AbortSignal.timeout(8000) });
 			if (!res.ok) throw new Error('account rate limits unavailable');
 			const data = await res.json();
 			const windows = Object.values(data.rateLimits ?? {}).filter(
@@ -2685,8 +2687,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					Boolean(value) &&
 					typeof value === 'object' &&
 					typeof (value as RateLimitWindow).usedPercent === 'number' &&
-					typeof (value as RateLimitWindow).windowDurationMins === 'number' &&
-					typeof (value as RateLimitWindow).resetsAt === 'number'
+					typeof (value as RateLimitWindow).windowDurationMins === 'number'
 			);
 			accountUsageByHost[key] = {
 				fiveHour: windows.find((window) => window.windowDurationMins === 300) ?? null,

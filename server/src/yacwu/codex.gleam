@@ -454,6 +454,9 @@ type State {
     status: Status,
     next_id: Int,
     pending: Dict(Int, Pending),
+    account_cache: Dict(String, #(Int, Reply)),
+    account_waiters: Dict(String, List(Subject(Reply))),
+    next_usage_at: Int,
     subscribers: List(#(Pid, Subject(String))),
     buffer: BitArray,
     decoder: ws.Decoder,
@@ -491,6 +494,9 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     status: NotRunning,
     next_id: 1,
     pending: dict.new(),
+    account_cache: dict.new(),
+    account_waiters: dict.new(),
+    next_usage_at: 0,
     subscribers: [],
     buffer: <<>>,
     decoder: ws.new_decoder(),
@@ -544,7 +550,11 @@ fn classify_other(message: Dynamic) -> Msg {
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Request(method, params, reply) ->
-      on_request(state, Queued(method, params, Plain(reply)))
+      case method {
+        "account/read" | "account/rateLimits/read" ->
+          account_request(state, method, params, reply)
+        _ -> on_request(state, Queued(method, params, Plain(reply)))
+      }
     TrackedRequest(method, params, deadline, ticket, reply) -> {
       let now = now_ms()
       case deadline <= now {
@@ -813,15 +823,27 @@ fn state_diagnostics(state: State, at: Int) -> Json {
 
 /// Sample the shared weekly quota; avoid stacking reads if Codex is unresponsive.
 fn sample_usage(state: State) -> State {
+  let now = oauth.now()
+  let quota_recent = case
+    dict.get(state.account_cache, "account/rateLimits/read")
+  {
+    Ok(#(at, _)) -> now - at < 120
+    Error(_) -> False
+  }
   let pending =
     dict.values(state.pending)
     |> list.any(fn(request) { request.method == "account/rateLimits/read" })
-  case state.status, pending {
-    Running(conn), False -> {
+  case state.status, pending || quota_recent, now >= state.next_usage_at {
+    Running(conn), False, True -> {
+      let state = State(..state, next_usage_at: now + 120)
       let account_pending =
         dict.values(state.pending)
         |> list.any(fn(request) { request.method == "account/read" })
-      let state = case account_pending {
+      let account_recent = case dict.get(state.account_cache, "account/read") {
+        Ok(#(at, _)) -> now - at < 900
+        Error(_) -> False
+      }
+      let state = case account_pending || account_recent {
         False ->
           send_request(
             state,
@@ -840,7 +862,47 @@ fn sample_usage(state: State) -> State {
         Discard,
       )
     }
-    _, _ -> state
+    _, _, _ -> state
+  }
+}
+
+fn account_request(
+  state: State,
+  method: String,
+  params: Json,
+  reply: Subject(Reply),
+) -> actor.Next(State, Msg) {
+  let now = oauth.now()
+  let ttl = case method {
+    "account/read" -> 900
+    _ -> 120
+  }
+  case dict.get(state.account_cache, method) {
+    Ok(#(at, value)) if now - at < ttl -> {
+      process.send(reply, value)
+      actor.continue(state)
+    }
+    _ -> {
+      let pending =
+        dict.values(state.pending)
+        |> list.any(fn(request) { request.method == method })
+      case pending {
+        True -> {
+          let waiters =
+            dict.get(state.account_waiters, method) |> result.unwrap([])
+          actor.continue(
+            State(
+              ..state,
+              account_waiters: dict.insert(state.account_waiters, method, [
+                reply,
+                ..waiters
+              ]),
+            ),
+          )
+        }
+        False -> on_request(state, Queued(method, params, Plain(reply)))
+      }
+    }
   }
 }
 
@@ -1466,6 +1528,23 @@ fn on_response(
       case dict.get(state.pending, id) {
         Ok(Pending(method, thread, reply_to, started_at, generation)) -> {
           let at = oauth.now()
+          let state = case method {
+            "account/read" | "account/rateLimits/read" -> {
+              let waiters =
+                dict.get(state.account_waiters, method) |> result.unwrap([])
+              list.each(waiters, fn(subject) { process.send(subject, reply) })
+              State(
+                ..state,
+                account_cache: case reply {
+                  Ok(_) ->
+                    dict.insert(state.account_cache, method, #(at, reply))
+                  Error(_) -> dict.delete(state.account_cache, method)
+                },
+                account_waiters: dict.delete(state.account_waiters, method),
+              )
+            }
+            _ -> state
+          }
           diagnostics.record(state.label, at, "rpc_result", [
             #("id", json.int(id)),
             #("method", json.string(method)),
@@ -1752,6 +1831,16 @@ fn fail_all(state: State, message: String) -> State {
     #("snapshot", state_diagnostics(state, at)),
   ])
   let failure = Error(message)
+  dict.each(state.account_waiters, fn(_, waiters) {
+    list.each(waiters, fn(subject) { process.send(subject, failure) })
+  })
+  let state =
+    State(
+      ..state,
+      account_waiters: dict.new(),
+      account_cache: dict.new(),
+      next_usage_at: 0,
+    )
   dict.each(state.pending, fn(_, pending) {
     case pending.reply_to {
       Caller(subject) -> process.send(subject, failure)

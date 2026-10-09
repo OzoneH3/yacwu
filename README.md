@@ -498,6 +498,12 @@ not cancel the turn automatically.
 The waiting/status/stop prompt closes automatically when that worker reports
 new activity or its turn ends.
 
+Account polling is shared per backend: allowance reads are cached for two
+minutes, account identity for fifteen minutes, and concurrent reads share one
+pending request. Browser allowance requests time out after eight seconds and
+retain the last displayed values. A percentage remains visible when its reset
+timestamp is unavailable.
+
 With progress reporting enabled, Claude receives a silent reminder after five
 minutes without an estimate, only if other task activity occurred in those five
 minutes. Reminders are sent at most once every five minutes and are hidden from
