@@ -3,7 +3,8 @@ import { marked, type Token, type Tokens } from 'marked';
 export type MarkdownInline =
 	| { type: 'text'; text: string }
 	| { type: 'strong' | 'em' | 'del'; children: MarkdownInline[] }
-	| { type: 'code'; text: string }
+	/** `gitRef`: names a Git branch, tag or ref, so it is not offered as a file link. */
+	| { type: 'code'; text: string; gitRef?: boolean }
 	| { type: 'break' }
 	| { type: 'link'; href: string | null; title: string | null; external: boolean; children: MarkdownInline[] }
 	| { type: 'image'; src: string | null; alt: string; title: string | null };
@@ -38,13 +39,50 @@ function safeResource(value: string): { value: string | null; external: boolean 
 	return { value: href, external: false };
 }
 
+const REF_WORD_BEFORE = /\b(?:branch(?:es)?|refs?|tags?|checkout|check out|checked out|switch(?:ed)? to|merged?|merging|rebased? (?:on|onto)|push(?:ed)? to|pull request from|PR from)\s*$/i;
+const REF_WORD_AFTER = /^\s*(?:branch(?:es)?|ref|tag)\b/i;
+const BRANCH_PREFIX = /^(?:refs\/(?:heads|tags|remotes)\/|(?:feature|features|feat|fix|fixes|bugfix|hotfix|release|releases|chore|ux|ui|refactor|perf|ci|style|wip|spike|exp|experiment|codex|claude|dependabot|renovate|backport)\/)/i;
+
+/**
+ * Whether a code span names a Git branch, tag or ref rather than a file:
+ * the surrounding words say so ("branch `ux/page-audit-072`", "`x` branch"),
+ * or it is an extension-less name with a conventional branch prefix
+ * (`feature/…`, `fix/…`, `refs/heads/…`). Explicit `./` or absolute paths and
+ * names ending in a file extension are always files.
+ */
+export function isGitRefCode(text: string, before = '', after = ''): boolean {
+	const name = text.trim();
+	if (!name.includes('/') || /^(?:\.{1,2}\/|~\/|\/)/.test(name) || /\s/.test(name)) return false;
+	const last = name.split('/').pop() ?? '';
+	const hasExtension = /\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?::\d+)?)?$/.test(last);
+	if (REF_WORD_BEFORE.test(before) || REF_WORD_AFTER.test(after)) return !hasExtension || /^refs\//.test(name);
+	return !hasExtension && BRANCH_PREFIX.test(name);
+}
+
+/** Mark code spans that the neighbouring words identify as Git refs. */
+function markGitRefs(inlines: MarkdownInline[]): MarkdownInline[] {
+	return inlines.map((token, index) => {
+		if (token.type !== 'code') return token;
+		const previous = inlines[index - 1];
+		const next = inlines[index + 1];
+		const before = previous?.type === 'text' ? previous.text : '';
+		const after = next?.type === 'text' ? next.text : '';
+		return isGitRefCode(token.text, before, after) ? { ...token, gitRef: true } : token;
+	});
+}
+
 function inlineTokens(tokens: Token[]): MarkdownInline[] {
+	return markGitRefs(collectInlines(tokens));
+}
+
+function collectInlines(tokens: Token[]): MarkdownInline[] {
 	const result: MarkdownInline[] = [];
 	for (const token of tokens) {
 		switch (token.type) {
 			case 'text': {
 				const text = token as Tokens.Text;
-				if (text.tokens?.length) result.push(...inlineTokens(text.tokens));
+				// Flatten in place so neighbouring words stay adjacent to code spans.
+				if (text.tokens?.length) result.push(...collectInlines(text.tokens));
 				else if (text.text) result.push({ type: 'text', text: text.text });
 				break;
 			}

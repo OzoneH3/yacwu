@@ -4921,7 +4921,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{:else if token.type === 'del'}
 			<del>{@render markdownInlines(token.children)}</del>
 		{:else if token.type === 'code'}
-			{@const pathTarget = agentPathTarget(token.text)}
+			{@const pathTarget = token.gitRef ? null : agentPathTarget(token.text)}
 			{#if pathTarget !== null}
 				<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(pathTarget.path, pathTarget.root)} onmouseleave={() => fileLinkPreview?.path === pathTarget.path && (fileLinkPreview = null)}>
 					<button type="button" class="code-path" title={pathTarget.line ? `Open in file browser at line ${pathTarget.line}` : 'Open in file browser'} onclick={() => openFileInBrowser(pathTarget.path, pathTarget.line, pathTarget.root)}><code>{token.text}</code></button>
