@@ -72,6 +72,7 @@ import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$l
 import { archiveProviderLabel, archiveDeletionSupported, loadArchiveCatalog } from '$lib/archive';
 import { claudeBackendHost, sessionTarget } from '$lib/session-target';
 import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity } from '$lib/model-display';
+import { createMessageTimestampStore } from '$lib/message-timestamps';
 
 	let { children } = $props();
 
@@ -338,6 +339,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	const DISMISSED_ATTENTION_KEY = 'yacwu-dismissed-attention';
 	const RESOLVED_QUESTIONS_KEY = 'yacwu-resolved-questions';
 	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
+	let messageTimestampStore: ReturnType<typeof createMessageTimestampStore> | null = null;
 	const RESTART_CONTINUATION_PROMPT =
 		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
 	const STOPPED_CONTINUATION_PROMPT =
@@ -795,10 +797,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (next._out === undefined && prev._out) next._out = prev._out;
 			if (next._at === undefined && prev._at) next._at = prev._at;
 			if (next._turnDurationMs === undefined && prev._turnDurationMs !== undefined) next._turnDurationMs = prev._turnDurationMs;
-		} else if (stampTime) {
-			// The protocol has no per-item timestamps; live items are stamped
-			// with arrival time. Restored history stays unstamped.
-			next._at = Date.now();
+		}
+		if (next.type === 'agentMessage' && next._at === undefined) {
+			next._at = messageTimestampStore?.get(id, item.id);
+			// The protocol has no per-item timestamps; stamp new live messages and
+			// keep their first-seen time in browser storage for restored history.
+			if (next._at === undefined && stampTime) next._at = Date.now();
+		}
+		if (stampTime && next.type === 'agentMessage' && typeof next._at === 'number') {
+			next._at = messageTimestampStore?.save(id, item.id, next._at) ?? next._at;
 		}
 		if (completed) next._completed = true;
 		if (next.type === 'agentMessage' && typeof next.text === 'string') next.text = visibleAgentMessageText(next.text);
@@ -4739,6 +4746,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	onMount(() => {
+		try { messageTimestampStore = createMessageTimestampStore(localStorage); } catch { /* Keep live timestamps for this page if storage is unavailable. */ }
 		void loadHostChoices();
 		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
 		const transferTitle = (element: Element) => {
