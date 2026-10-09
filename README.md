@@ -43,8 +43,9 @@ rules locally, and records usage/diagnostic journals on the server.
   (see [rating methodology](docs/model-ratings.md))
 - 💸 Learned allowance cost per model and thinking level, projected task cost
   while work runs, and a task usage history with manual benchmarks
-- 💬 Interactive answers: questions and action requests open a prompt dialog
-  and queue per session, including requests from agents
+- 💬 Interactive answers: questions and action requests dock below the
+  transcript, without blocking it, and queue per session, including requests
+  from agents
 - 📁 Workspace browser with a Monaco editor, file previews, and clickable file
   links in responses
 - ± Git changes inspector with All / Staged / Unstaged scopes and lazy diffs

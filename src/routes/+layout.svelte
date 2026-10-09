@@ -266,7 +266,6 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	let archivedSessionsError = $state<string | null>(null);
 	let restoringArchivedSessionId = $state<string | null>(null);
 	let deletingArchivedSessionId = $state<string | null>(null);
-	let interactiveChoiceDialog = $state<HTMLDialogElement | null>(null);
 	let resolvedInteractiveQuestionIds = $state<Record<string, boolean>>({});
 	let retainedInteractiveQuestions = $state<Array<{ id: string; threadId: string; question: string; options: string[] }>>([]);
 	let choiceCustomAnswer = $state('');
@@ -428,11 +427,6 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 			choicePromptId = pendingKey;
 			choiceCustomAnswer = '';
 		}
-		if (!pending) {
-			if (interactiveChoiceDialog?.open) interactiveChoiceDialog.close();
-			return;
-		}
-		if (interactiveChoiceDialog && !interactiveChoiceDialog.open) interactiveChoiceDialog.showModal();
 	});
 	const activeConfig = $derived(activeId ? sessionConfigs[activeId] : null);
 	const activeTurnModel = $derived(activeId ? turnModels[activeId] : null);
@@ -2665,7 +2659,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			retainPendingInteractiveQuestions();
 			resolveInteractiveQuestion(pendingInteractiveChoice);
 		}
-		interactiveChoiceDialog?.close();
 	}
 
 	function retainPendingInteractiveQuestions() {
@@ -5813,58 +5806,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 
 
-			<dialog
-				class="interactive-choice-dialog"
-				bind:this={interactiveChoiceDialog}
-				aria-labelledby="interactive-choice-title"
-				aria-describedby="interactive-choice-question"
-				oncancel={dismissInteractiveChoice}
-			>
-				{#if pendingInteractiveChoice}
-					<div class="interactive-choice-panel">
-						<div class="session-info-heading">
-							<h2 id="interactive-choice-title">Codex has a question</h2>
-							{#if pendingInteractiveQuestions.length > 1}<span class="meta">1 of {pendingInteractiveQuestions.length}</span>{/if}
-							<button class="session-info-close" type="button" onclick={dismissInteractiveChoice} aria-label="Dismiss question" title="Dismiss">
-								<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
-							</button>
-						</div>
-						<p id="interactive-choice-question">{pendingInteractiveChoice.question}</p>
-						{#if pendingInteractiveChoice.options.length > 0}
-						<div class="interactive-choice-options" aria-label="Choose a response">
-							{#each pendingInteractiveChoice.options as option, index (option)}
-								<button
-									type="button"
-									class="interactive-choice-option"
-									disabled={sendingMessage}
-									onclick={() => answerInteractiveChoice(option)}
-								>
-									<span>{index + 1}</span>{option}
-								</button>
-							{/each}
-						</div>
-						{/if}
-						<form
-							class="interactive-choice-other"
-							onsubmit={(event) => {
-								event.preventDefault();
-								answerInteractiveChoice(choiceCustomAnswer);
-							}}
-						>
-							<label for="interactive-choice-custom">{pendingInteractiveChoice.options.length > 0 ? 'Other' : 'Your answer'}</label>
-							<textarea
-								id="interactive-choice-custom"
-								bind:value={choiceCustomAnswer}
-								rows="2"
-								placeholder="Type another answer…"
-							></textarea>
-							<button type="submit" class="mini" disabled={!choiceCustomAnswer.trim() || sendingMessage}>
-								Send answer
-							</button>
-						</form>
-					</div>
-				{/if}
-			</dialog>
+
 
 			{#if activeIsSide}
 				<div class="side-banner">
@@ -6290,6 +6232,61 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v11M4 9l4 4 4-4" /></svg>
 						</button>
 					</div>
+				{/if}
+
+				{#if pendingInteractiveChoice}
+				<!-- Docked under the transcript, not modal: the message that asks
+				     the question stays readable above it. -->
+				<div class="interactive-choice-dock">
+					<!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape from its buttons and answer field dismisses) -->
+					<section
+						class="interactive-choice-panel"
+						aria-labelledby="interactive-choice-title"
+						aria-describedby="interactive-choice-question"
+						onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); dismissInteractiveChoice(); } }}
+					>
+						<div class="session-info-heading">
+							<h2 id="interactive-choice-title">{isClaudeSession(activeId) ? 'Claude' : 'Codex'} has a question</h2>
+							{#if pendingInteractiveQuestions.length > 1}<span class="meta">1 of {pendingInteractiveQuestions.length}</span>{/if}
+							<button class="session-info-close" type="button" onclick={dismissInteractiveChoice} aria-label="Dismiss question" title="Dismiss">
+								<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
+							</button>
+						</div>
+						<p id="interactive-choice-question">{pendingInteractiveChoice.question}</p>
+						{#if pendingInteractiveChoice.options.length > 0}
+						<div class="interactive-choice-options" aria-label="Choose a response">
+							{#each pendingInteractiveChoice.options as option, index (option)}
+								<button
+									type="button"
+									class="interactive-choice-option"
+									disabled={sendingMessage}
+									onclick={() => answerInteractiveChoice(option)}
+								>
+									<span>{index + 1}</span>{option}
+								</button>
+							{/each}
+						</div>
+						{/if}
+						<form
+							class="interactive-choice-other"
+							onsubmit={(event) => {
+								event.preventDefault();
+								answerInteractiveChoice(choiceCustomAnswer);
+							}}
+						>
+							<label for="interactive-choice-custom">{pendingInteractiveChoice.options.length > 0 ? 'Other' : 'Your answer'}</label>
+							<textarea
+								id="interactive-choice-custom"
+								bind:value={choiceCustomAnswer}
+								rows="2"
+								placeholder="Type another answer…"
+							></textarea>
+							<button type="submit" class="mini" disabled={!choiceCustomAnswer.trim() || sendingMessage}>
+								Send answer
+							</button>
+						</form>
+					</section>
+				</div>
 				{/if}
 
 				{#if viewedAgentId}
@@ -8097,25 +8094,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.archive-browser-empty.error { color: var(--color-error); }
 
-	.interactive-choice-dialog {
-		position: fixed;
-		inset: 0;
-		width: min(calc(100% - var(--space-lg)), 34rem);
-		max-width: none;
-		max-height: calc(100dvh - var(--space-xl));
-		margin: auto;
-		padding: 0;
+	.interactive-choice-dock {
+		padding: var(--space-xs) var(--space-2xs) 0;
+		background: var(--color-paper);
+	}
+
+	.interactive-choice-panel {
+		/* Leave most of the screen to the transcript above. */
+		max-height: 45dvh;
 		overflow: auto;
+		padding: var(--space-sm);
 		border: var(--rule-hair) solid var(--color-rule-2);
 		border-radius: var(--radius-card);
 		background: var(--color-paper);
 		box-shadow: var(--shadow-card);
 		color: var(--color-ink);
 	}
-
-	.interactive-choice-dialog::backdrop { background: var(--color-overlay); }
-
-	.interactive-choice-panel { padding: var(--space-sm); }
 
 	.interactive-choice-panel > p {
 		margin: var(--space-sm) 0;
@@ -10162,7 +10156,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			padding-inline: var(--space-lg);
 		}
 
-		.composer-shell {
+		.composer-shell,
+		.interactive-choice-dock {
 			padding-inline: var(--space-lg);
 		}
 
