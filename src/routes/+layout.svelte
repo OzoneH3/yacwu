@@ -9683,6 +9683,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		border: 0;
 	}
 
+	.interactive-choice-panel,
 	.composer,
 	.composer-anchor,
 	.attachments {
