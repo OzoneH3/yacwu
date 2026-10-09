@@ -131,6 +131,9 @@ export function learnTokenCosts(observations: UsageObservation[]) {
 		const vector = fit.features.map((f) => f.group === group ? amount(tokens, f.category) / 100_000 : 0);
 		const value = vector.reduce((sum, feature, i) => sum + feature * fit.beta[i], 0);
 		const uncertainty = Math.sqrt(Math.max(0, fit.variance * vector.reduce((sum, feature, i) => sum + feature * vector.reduce((s, other, j) => s + other * fit!.covariance[i][j], 0), 0)));
+		// A range reaching zero without any single-setting window means mixed
+		// windows assigned this setting's share arbitrarily: unknown, not free.
+		if (value - 1.96 * uncertainty <= 0 && !pure.get(group)?.length) return null;
 		return { value, low: Math.max(0, value - 1.96 * uncertainty), high: value + 1.96 * uncertainty,
 			samples: fit === weighted || fit === fallback ? samples(group) : pure.get(group)?.length ?? 0,
 			weighted: fit.features.some((feature) => feature.group === group && feature.category !== 'total') };
@@ -140,7 +143,9 @@ export function learnTokenCosts(observations: UsageObservation[]) {
 		const fit = weighted?.features.some((feature) => feature.group === group) ? weighted : independent.get(group)?.weighted;
 		if (fit) for (const category of categories) {
 			const index = fit.features.findIndex((f) => f.group === group && f.category === category);
-			if (index >= 0) result[category as keyof typeof result] = fit.beta[index];
+			// Similar token mixes cannot separate the categories; report a weight
+			// only when its own 95% range excludes zero.
+			if (index >= 0 && fit.beta[index] > 1.96 * Math.sqrt(fit.variance * fit.covariance[index][index])) result[category as keyof typeof result] = fit.beta[index];
 		}
 		return result;
 	}

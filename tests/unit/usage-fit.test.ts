@@ -76,3 +76,22 @@ test('independent clean calibration survives an unrelated rank-deficient mixture
 	expect(learned.estimate('a', totals(100_000, 0, 0))).toBeNull();
 	expect(learned.calibrated).toBe(true);
 });
+
+test('a setting seen only in mixed windows stays unknown when its range reaches zero', () => {
+	const clean = [sample(100_000, 0, 0), sample(200_000, 0, 0), sample(300_000, 0, 0)];
+	const mixed = [[100_000, 100_000, 2.1], [200_000, 100_000, 4], [100_000, 200_000, 2]].map(([a, b, percent]) => ({ percent, tokens: { model: totals(a, 0, 0), other: totals(b, 0, 0) } }));
+	const learned = learnTokenCosts([...clean, ...mixed]);
+	expect(learned.estimate('model', totals(100_000, 0, 0))!.value).toBeCloseTo(2, 1);
+	expect(learned.estimate('other', totals(100_000, 0, 0))).toBeNull();
+});
+
+test('token weights are withheld when similar mixes cannot separate them', () => {
+	const mixes = [[2, .025, .004], [3, .02, .003], [4, .03, .005], [5, .022, .004], [6, .028, .003], [7, .024, .005]];
+	const observations = mixes.map(([millions, uncachedShare, outputShare]) => {
+		const total = millions * 1_000_000, uncached = total * uncachedShare, output = total * outputShare, cached = total - uncached - output;
+		return { percent: Math.round((uncached * .05 + cached * .005 + output) / 100_000), tokens: { model: totals(uncached, cached, output) } };
+	});
+	const learned = learnTokenCosts(observations);
+	expect(learned.weights('model')).toEqual({ uncached: null, cached: null, output: null });
+	expect(learned.estimate('model', totals(2_500, 97_000, 500))?.value).toBeGreaterThan(0);
+});

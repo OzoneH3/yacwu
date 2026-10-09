@@ -247,7 +247,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 	const settings = new Map<string, { model: string; effort: string; parent: string | null }>();
 	const totals = new Map<string, TokenTotals>();
 	const quotas: UsageEvent[] = [];
-	const observations: UsageObservation[] = [];
+	const observations: Array<UsageObservation & { startedAt: number; endedAt: number; pool: UsagePool | null }> = [];
 	const pools: UsagePool[] = [];
 	const benchmarks = new Set<string>();
 	let calibrationScope: string | null = null;
@@ -261,15 +261,17 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 	let intervalIncomplete = false;
 	let excludedIntervals = 0;
 	let benchmarkInterval: string | null = null;
-	function recordPool(end: UsageEvent, status: UsagePool['status']) {
-		if (!baseline || !intervalTasks.size || !Number.isFinite(end.usedPercent)) return;
+	function recordPool(end: UsageEvent, status: UsagePool['status']): UsagePool | null {
+		if (!baseline || !intervalTasks.size || !Number.isFinite(end.usedPercent)) return null;
 		const groups = Object.entries(intervalTokens).map(([key, tokens]) => {
 			const [model, effort] = JSON.parse(key);
 			const contributors = [...intervalTasks.values()].filter(({ task }) => groupKey(task.model, task.effort) === key);
 			return { model, effort, tokens: { ...tokens }, contributors, ...poolConcurrency(contributors, baseline!.at, end.at) };
 		});
-		pools.push({ startedAt: baseline.at, endedAt: end.at, weeklyLeftBefore: 100 - baseline.usedPercent!,
-			weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups });
+		const pool: UsagePool = { startedAt: baseline.at, endedAt: end.at, weeklyLeftBefore: 100 - baseline.usedPercent!,
+			weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups };
+		pools.push(pool);
+		return pool;
 	}
 	// Stored file order disambiguates notifications in the same millisecond.
 	for (const event of events) {
@@ -287,8 +289,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		if (event.host === host && event.event === 'benchmarkBoundaryEnd' && benchmarkInterval === id && baseline) {
 			const delta = (event.usedPercent ?? 0) - (baseline.usedPercent ?? 0);
 			if (!intervalIncomplete && event.accountKey === baseline.accountKey && sameResetWindow(event.resetsAt, baseline.resetsAt) && delta >= 1 && Object.values(intervalTokens).some((tokens) => tokens.totalTokens > 0)) {
-				observations.push({ percent: delta, tokens: intervalTokens });
-				recordPool(event, 'settled');
+				observations.push({ percent: delta, tokens: intervalTokens, startedAt: baseline.at, endedAt: event.at, pool: recordPool(event, 'settled') });
 			} else { excludedIntervals++; recordPool(event, 'excluded'); }
 			baseline = { ...baseline, at: event.at, usedPercent: event.usedPercent };
 			intervalTokens = {}; intervalTasks = new Map(); intervalIncomplete = false; benchmarkInterval = null;
@@ -405,8 +406,7 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			} else if (baseline && event.usedPercent - (baseline.usedPercent ?? 0) >= 2 && event.at - lastTokenAt >= settleMs && event.at - quotaStableSince >= settleMs && event.usedPercent >= quotaPeak) {
 				// Pool across whole-percent rounding steps; unchanged readings don't imply free work.
 				if (!intervalIncomplete && Object.values(intervalTokens).some((tokens) => tokens.totalTokens > 0)) {
-					observations.push({ percent: event.usedPercent - (baseline.usedPercent ?? 0), tokens: intervalTokens });
-					recordPool(event, 'settled');
+					observations.push({ percent: event.usedPercent - (baseline.usedPercent ?? 0), tokens: intervalTokens, startedAt: baseline.at, endedAt: event.at, pool: recordPool(event, 'settled') });
 				} else { excludedIntervals++; recordPool(event, 'excluded'); }
 				baseline = event; intervalTokens = {}; intervalTasks = new Map(); intervalIncomplete = false;
 			}
@@ -416,6 +416,23 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 	if (baseline && latestQuota && latestQuota.at >= baseline.at && latestQuota.accountKey === baseline.accountKey && sameResetWindow(latestQuota.resetsAt, baseline.resetsAt)) {
 		recordPool({ ...latestQuota, at: Math.max(latestQuota.at, lastTokenAt) }, intervalIncomplete ? 'excluded' : 'accumulating');
 	}
+	// A turn whose thread never reports tokens (e.g. a Claude subagent) still
+	// draws on the allowance; any window it overlaps would charge that usage to
+	// the reporting sessions, so exclude those windows.
+	const reporting = new Set(events.filter((event) => event.event === 'tokens' && event.threadId).map((event) => `${event.host}:${event.threadId}`));
+	// Its usage is certainly included from the first reading after it settled.
+	const silent = tasks.filter((task) => !reporting.has(`${task.host}:${task.threadId}`)).map((task) => ({ startedAt: task.startedAt,
+		reflectedAt: task.endedAt === null ? Infinity : quotas.find((quota) => quota.at >= task.endedAt! + settleMs)?.at ?? Infinity }));
+	const clean = observations.filter((sample) => {
+		const hidden = silent.some((task) => task.startedAt < sample.endedAt && task.reflectedAt > sample.startedAt);
+		if (hidden) {
+			excludedIntervals++;
+			if (sample.pool) sample.pool.status = 'excluded';
+		}
+		return !hidden;
+	});
+	observations.length = 0;
+	observations.push(...clean);
 	const learned = learnTokenCosts(observations);
 	const groups = [...new Set(tasks.map((task) => groupKey(task.model, task.effort)))];
 	const rates: UsageRate[] = groups.map((key) => {

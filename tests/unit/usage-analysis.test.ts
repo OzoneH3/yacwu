@@ -347,3 +347,14 @@ test('other account hosts are excluded and a host restart does not stop another 
 	]);
 	expect(shared.tasks[0].status).toBe('running');
 });
+
+test('an agent that never reports tokens excludes the windows its usage may fall in', () => {
+	const silentAgent = (start: number, end: number) => [event(start, 'turn/started', { threadId: 'sub', turnId: 'sub-1' }), event(end, 'turn/completed', { threadId: 'sub', turnId: 'sub-1' })];
+	const overlapping = analyzeUsage([...setup('a', 'model'), quota(2, 10), ...silentAgent(3, 4), tokens(3, 'a', 1000), quota(5, 12)]);
+	expect(overlapping.observations).toBe(0);
+	expect(overlapping.excludedIntervals).toBe(1);
+	expect(overlapping.pools[0].status).toBe('excluded');
+	// Already reflected in the window's starting reading.
+	const before = analyzeUsage([...setup('a', 'model'), ...silentAgent(1, 1.5), quota(2, 10), tokens(3, 'a', 1000), quota(5, 12)]);
+	expect(before.observations).toBe(1);
+});

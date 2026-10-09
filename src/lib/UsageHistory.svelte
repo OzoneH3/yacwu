@@ -78,13 +78,13 @@
 		{#if windowDurationMins === 300}<p class="meta">Manual benchmarks target weekly allowance. Their 5-hour readings are analyzed independently here. Earlier recordings contain weekly readings only.</p>{/if}
 		<h3>Model and thinking level</h3>
 		<p class="meta">A clean single-setting window supplies a provisional rate immediately, including rounding uncertainty. It applies only to a similar token mix and upgrades to a fitted estimate with sufficient independent evidence. Mixed windows alone cannot identify a model's individual cost.</p>
-		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded. Ordinary intervals close after at least 2% used, stable readings, and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
+		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded, including windows where an agent ran without reporting tokens. Ordinary intervals close after at least 2% used, stable readings, and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
 		<div class="table-wrap">
 			<table>
 				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>{windowLabel} cost / 100k (observed mix)</th><th>Uncached / cached / output per 100k</th></tr></thead>
 				<tbody>
 					{#each analysis.rates as rate}
-						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}<small>{rate.singleSettingSamples} single-setting</small></td><td>{tokens(rate.tokens)}</td><td>{range(rate.estimate)}{#if rate.estimate}<small>{rate.estimate.provisional ? `Provisional · ${rate.estimate.samples} single-setting samples` : rate.estimate.weighted ? 'Separate token weights' : 'Total-token fallback'}</small>{/if}</td><td>{percent(rate.weights.uncached)} / {percent(rate.weights.cached)} / {percent(rate.weights.output)}</td></tr>
+						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}<small>{rate.singleSettingSamples} single-setting</small></td><td>{tokens(rate.tokens)}</td><td>{range(rate.estimate)}{#if rate.estimate}<small>{rate.estimate.provisional ? `Provisional · ${rate.estimate.samples} single-setting samples` : rate.estimate.weighted ? 'Fitted on token categories' : 'Total-token fallback'}</small>{:else if rate.samples && !rate.singleSettingSamples}<small>Only mixed windows so far</small>{/if}</td><td>{#if Object.values(rate.weights).some((weight) => weight !== null)}{percent(rate.weights.uncached)} / {percent(rate.weights.cached)} / {percent(rate.weights.output)}{:else}—<small>Not separable yet: windows had similar token mixes</small>{/if}</td></tr>
 					{:else}<tr><td colspan="6">No tasks recorded yet. Recording begins after the updated backend starts.</td></tr>{/each}
 				</tbody>
 			</table>
