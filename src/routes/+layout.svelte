@@ -211,6 +211,11 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	let sessionOpening = $state<Record<string, boolean>>({});
 	let interruptedSessions = $state<Record<string, boolean>>({});
 	let finishedSessions = $state<Record<string, boolean>>({});
+	// A checked new folder per session, applied by the next message's turn.
+	let pendingFolders = $state<Record<string, string>>({});
+	let folderDraft = $state<string | null>(null);
+	let folderError = $state('');
+	let folderChecking = $state(false);
 	// How far Claude's stated minutes overshot on recently finished turns.
 	let claudeTurnBiases = $state<number[]>([]);
 	const claudeBias = $derived(estimateBias(claudeTurnBiases));
@@ -884,7 +889,45 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	/** The session's working folder as last reported by its backend. */
 	function sessionFolder(id: string): string {
-		return cwds[id] ?? sessions.find((session) => session.id === id)?.cwd ?? '';
+		return pendingFolders[id] ?? cwds[id] ?? sessions.find((session) => session.id === id)?.cwd ?? '';
+	}
+
+	/** Check a new folder for a session; it applies with the next message. */
+	async function chooseSessionFolder(id: string, path: string) {
+		folderChecking = true;
+		folderError = '';
+		try {
+			const res = await fetch(threadApi(id, '/cwd'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ cwd: path })
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok || typeof data.cwd !== 'string') {
+				folderError = data.error ?? `Could not check that folder (${res.status})`;
+				return;
+			}
+			const current = cwds[id] ?? sessions.find((session) => session.id === id)?.cwd;
+			if (data.cwd === current) delete pendingFolders[id];
+			else pendingFolders[id] = data.cwd;
+			folderDraft = null;
+		} catch {
+			folderError = 'Could not reach the server';
+		} finally {
+			folderChecking = false;
+		}
+	}
+
+	$effect(() => {
+		void activeId;
+		untrack(() => { folderDraft = null; folderError = ''; });
+	});
+
+	/** The backend moved the session with this message's turn. */
+	function applySessionFolder(id: string, cwd: string) {
+		cwds[id] = cwd;
+		sessions = sessions.map((session) => session.id === id ? { ...session, cwd } : session);
+		if (pendingFolders[id] === cwd) delete pendingFolders[id];
 	}
 
 	function sharedChannelPathForSession(id: string): string | null {
@@ -2516,21 +2559,27 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const progressText = rules.progress ? withTaskProgressInstructions(ruleText, reminders) : ruleText;
 		// Yacwu's Claude backend enforces the allowance lockout; it strips this line.
 		const messageText = isClaudeSession(id) ? withAllowanceReserve(progressText, settings.claudeAllowanceReserve) : progressText;
+		// A pending folder change starts with the next turn, not a steer.
+		const cwd = turnId ? undefined : pendingFolders[id];
+		let response: Response;
 		if (attachments.length > 0) {
 			const body = new FormData();
 			body.set('text', messageText);
 			if (turnId) body.set('turnId', turnId);
+			if (cwd) body.set('cwd', cwd);
 			for (const attachment of attachments) {
 				body.append(attachment.kind === 'image' ? 'images' : 'files', attachment.file, attachment.name);
 			}
-			return fetch(threadApi(id, '/message'), { method: 'POST', body });
+			response = await fetch(threadApi(id, '/message'), { method: 'POST', body });
+		} else {
+			response = await fetch(threadApi(id, '/message'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ text: messageText, ...(turnId ? { turnId } : {}), ...(cwd ? { cwd } : {}) })
+			});
 		}
-
-		return fetch(threadApi(id, '/message'), {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ text: messageText, ...(turnId ? { turnId } : {}) })
-		});
+		if (response.ok && cwd) applySessionFolder(id, cwd);
+		return response;
 	}
 
 	async function sendMessageWithRetries(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null = null): Promise<Response> {
@@ -5444,6 +5493,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{#if cwds[activeId] ?? activeSummary?.cwd}
 							<span class="meta-sep" aria-hidden="true">·</span>
 							<span class="meta cwd" title={cwds[activeId] ?? activeSummary?.cwd}>{cwds[activeId] ?? activeSummary?.cwd}</span>
+							{#if pendingFolders[activeId]}<span class="meta cwd" title="Applies with your next message">→ {pendingFolders[activeId]}</span>{/if}
 						{/if}
 		{#if activeAgents.length > 0}
 			<nav class="agent-row" aria-label="Agent transcripts">
@@ -5695,7 +5745,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</div>
 						<div>
 							<dt>Directory</dt>
-							<dd>{cwds[activeId] ?? activeSummary?.cwd ?? '—'}</dd>
+							<dd class="session-folder">
+								<span>{cwds[activeId] ?? activeSummary?.cwd ?? '—'}</span>
+								{#if pendingFolders[activeId]}
+									<span class="folder-pending" role="status">Moves to <code>{pendingFolders[activeId]}</code> with your next message. <button class="mini ghost" type="button" onclick={() => delete pendingFolders[activeId!]}>Keep current folder</button></span>
+								{/if}
+								{#if isClaudeSession(activeId)}
+									<span class="folder-note">Claude sessions keep their folder: Claude finds the conversation by folder, so a moved session would start without its history.</span>
+								{:else if folderDraft !== null}
+									<form class="folder-form" onsubmit={(event) => { event.preventDefault(); if (folderDraft?.trim()) void chooseSessionFolder(activeId!, folderDraft.trim()); }}>
+										<input aria-label="New session folder" bind:value={folderDraft} spellcheck="false" autocomplete="off" />
+										<button class="mini" type="submit" disabled={folderChecking || !folderDraft.trim()}>{folderChecking ? 'Checking…' : 'Use folder'}</button>
+										<button class="mini ghost" type="button" onclick={() => { folderDraft = null; folderError = ''; }}>Cancel</button>
+										{#if folderError}<span class="folder-error" role="alert">{folderError}</span>{/if}
+									</form>
+								{:else}
+									<button class="mini ghost" type="button" title="Move this session to another folder, starting with your next message" onclick={() => { folderDraft = pendingFolders[activeId!] ?? cwds[activeId!] ?? activeSummary?.cwd ?? ''; folderError = ''; }}>Change folder…</button>
+								{/if}
+							</dd>
 						</div>
 						<div>
 							<dt>Last modified</dt>
@@ -8179,6 +8246,45 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.session-info-list > div:last-child {
 		border-block-end: 0;
+	}
+
+	.session-folder {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--space-2xs);
+		overflow-wrap: anywhere;
+	}
+
+	.folder-pending,
+	.folder-note,
+	.folder-error {
+		font-size: var(--text-xs);
+		color: var(--color-muted);
+	}
+
+	.folder-error {
+		color: var(--color-error);
+	}
+
+	.folder-form {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2xs);
+		inline-size: 100%;
+	}
+
+	.folder-form input {
+		flex: 1 1 14rem;
+		min-inline-size: 0;
+		padding: var(--space-3xs) var(--space-2xs);
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-sm);
+		background: var(--color-paper);
+		color: var(--color-ink);
+		font: inherit;
+		font-family: var(--font-outlier);
+		font-size: var(--text-sm);
 	}
 
 	.session-info-list dt,

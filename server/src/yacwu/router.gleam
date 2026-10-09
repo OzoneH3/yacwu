@@ -447,6 +447,10 @@ fn dispatch(
       use host, cx <- with_codex(ctx, req, Some(id))
       post_profile(ctx, host, cx, req, id)
     }
+    ["api", "threads", id, "cwd"], Post -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      check_session_cwd(host, cx, req)
+    }
     ["api", "threads", id, "name"], Post -> {
       use _, cx <- with_codex(ctx, req, Some(id))
       set_thread_name(cx, req, id)
@@ -1776,30 +1780,17 @@ fn create_thread_on(
   cx: Codex,
   body: Dynamic,
 ) -> Response(ResponseData) {
-  let local = hosts.is_local(host)
   let params = defaults.thread_defaults()
   let params = case jsonx.field_string(body, ["model"]) {
     Ok(model) if model != "" -> [#("model", json.string(model)), ..params]
     _ -> params
   }
 
-  let cwd_params = case jsonx.field_string(body, ["cwd"]), local {
-    Ok(cwd), True if cwd != "" -> {
-      let cwd = resolve_cwd(cwd)
-      case directory_status(cwd) {
-        DirectoryOk -> Ok([#("cwd", json.string(cwd)), ..params])
-        NotADirectory -> Error("Not a directory: " <> cwd)
-        DoesNotExist -> Error("Directory does not exist: " <> cwd)
-      }
-    }
-    Ok(cwd), False if cwd != "" ->
-      // Remote paths resolve against the remote home; existence is codex's
-      // call — it errors on a bad cwd and that error flows back as-is.
-      Ok([
-        #("cwd", json.string(resolve_cwd_against(cwd, codex.info(cx).home))),
-        ..params
-      ])
-    _, _ -> Ok(params)
+  let cwd_params = case jsonx.field_string(body, ["cwd"]) {
+    Ok(cwd) if cwd != "" ->
+      checked_cwd(host, cx, cwd)
+      |> result.map(fn(cwd) { [#("cwd", json.string(cwd)), ..params] })
+    _ -> Ok(params)
   }
 
   let profile = case jsonx.field_string(body, ["profile"]) {
@@ -1881,6 +1872,56 @@ fn create_thread_on(
         }
       }
     }
+  }
+}
+
+/// A session folder as the backend should receive it. Local paths must be an
+/// existing directory. Remote paths resolve against the remote home;
+/// existence is codex's call — it errors on a bad cwd and that error flows
+/// back as-is.
+fn checked_cwd(host: String, cx: Codex, raw: String) -> Result(String, String) {
+  case hosts.is_local(host) {
+    True -> {
+      let cwd = resolve_cwd(raw)
+      case directory_status(cwd) {
+        DirectoryOk -> Ok(cwd)
+        NotADirectory -> Error("Not a directory: " <> cwd)
+        DoesNotExist -> Error("Directory does not exist: " <> cwd)
+      }
+    }
+    False -> Ok(resolve_cwd_against(raw, codex.info(cx).home))
+  }
+}
+
+/// The folder a message moves its session to. A change applies from the next
+/// turn on, so a steer stays in the running turn's folder; blank means none.
+pub fn turn_cwd(
+  turn_id: Option(String),
+  cwd: Option(String),
+  check: fn(String) -> Result(String, String),
+) -> Result(Option(String), String) {
+  case turn_id, option.map(cwd, string.trim) {
+    None, Some(raw) if raw != "" -> check(raw) |> result.map(Some)
+    _, _ -> Ok(None)
+  }
+}
+
+/// Validate a new folder for an existing session. The change itself rides on
+/// the next turn/start, which moves this and later turns to it.
+fn check_session_cwd(
+  host: String,
+  cx: Codex,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  case
+    jsonx.field_string(read_json_body(req), ["cwd"]) |> result.map(string.trim)
+  {
+    Ok(raw) if raw != "" ->
+      case checked_cwd(host, cx, raw) {
+        Ok(cwd) -> json_response(200, json.object([#("cwd", json.string(cwd))]))
+        Error(message) -> json_response(400, error_body(message))
+      }
+    _ -> json_response(400, error_body("missing cwd"))
   }
 }
 
@@ -2357,6 +2398,12 @@ fn message(
         })
         |> result.map(Some)
         |> result.unwrap(None)
+      let cwd =
+        list.find(parts, fn(part) { part.name == "cwd" })
+        |> result.try(fn(part) {
+          bit_array.to_string(part.data) |> result.replace_error(Nil)
+        })
+        |> option.from_result
       list.try_fold(images, [], fn(acc, part) {
         stage_image(host, cx, part)
         |> result.map(fn(path) {
@@ -2370,7 +2417,7 @@ fn message(
         })
       })
       |> result.map(fn(image_inputs) {
-        #(list.append(text_input, list.reverse(image_inputs)), turn_id)
+        #(list.append(text_input, list.reverse(image_inputs)), turn_id, cwd)
       })
     }
     False -> {
@@ -2380,8 +2427,9 @@ fn message(
         jsonx.field_string(body, ["turnId"])
         |> result.map(Some)
         |> result.unwrap(None)
+      let cwd = jsonx.field_string(body, ["cwd"]) |> option.from_result
       case string.trim(text) {
-        "" -> Ok(#([], turn_id))
+        "" -> Ok(#([], turn_id, cwd))
         _ ->
           Ok(#(
             [
@@ -2391,15 +2439,22 @@ fn message(
               ]),
             ],
             turn_id,
+            cwd,
           ))
       }
     }
   }
+  let input =
+    result.try(input, fn(parsed) {
+      let #(parts, turn_id, cwd) = parsed
+      turn_cwd(turn_id, cwd, checked_cwd(host, cx, _))
+      |> result.map(fn(cwd) { #(parts, turn_id, cwd) })
+    })
 
   case input {
     Error(message) -> json_response(400, error_body(message))
-    Ok(#([], _)) -> json_response(400, error_body("empty message"))
-    Ok(#(input, turn_id)) -> {
+    Ok(#([], _, _)) -> json_response(400, error_body("empty message"))
+    Ok(#(input, turn_id, cwd)) -> {
       // Messages queued for this session ride along with the user's own
       // prompt, as a separate input part after it. Never with a steer: the
       // relay steers running turns itself.
@@ -2439,6 +2494,10 @@ fn message(
         None -> #(params, "turn/start")
       }
       let #(params, method) = method
+      let params = case cwd {
+        Some(cwd) -> list.append(params, [#("cwd", json.string(cwd))])
+        None -> params
+      }
       // An explicit /model override wins; otherwise the session's selected
       // profile supplies model/effort. (turn/start has no `config` param, so
       // only these two profile keys can apply at turn level — the full
