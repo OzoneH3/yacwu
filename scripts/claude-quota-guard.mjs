@@ -50,10 +50,13 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
   function persist() { saveWaiting([...resumes.values()].map(({ checking, starting, ...entry }) => entry)); }
   /** @param {any} usage @param {number} reserve */
   function checkAfter(usage, reserve) {
+    if (usage?.usageError?.retryAt > now()) return usage.usageError.retryAt;
     const resets = [usage?.rateLimits?.primary, usage?.rateLimits?.secondary]
       .filter(window => typeof window?.usedPercent === 'number' && window.usedPercent >= 100 - reserve)
       .map(window => window.resetsAt * 1000).filter(at => Number.isFinite(at) && at > now());
-    return Math.min(now() + 900_000, resets.length ? Math.max(...resets) : Infinity);
+    // After reset, or while usage is unavailable, retry promptly rather than
+    // applying the fifteen-minute pre-reset cooldown again.
+    return resets.length ? Math.min(now() + 900_000, Math.max(...resets)) : now() + 120_000;
   }
   let serial = 0;
   let closed = false;
@@ -135,14 +138,22 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
           else {
             entry.starting = true;
             const id = `yacwu-quota-resume-${++serial}`;
-            resumeRequests.set(id, { kind: 'start', threadId: entry.threadId });
+            resumeRequests.set(id, { kind: 'start', threadId: entry.threadId, sentAt: now() });
             const progress = entry.progress ? '\n\n<!-- YACWU_TASK_PROGRESS -->\nReport estimated completion and time remaining early, about once a minute and at milestones, using a standalone [[YACWU_PROGRESS percent=35 remaining_minutes=6]] line with your actual estimates. Finish at 100 percent and 0 minutes before the final answer.\n[/YACWU_TASK_PROGRESS]' : '';
             send({ id, method: 'turn/start', params: { threadId: entry.threadId, input: [{ type: 'text', text: `The previous task was stopped. Continue from the current state: first inspect what is already complete, then finish only the remaining work.${progress}` }] } });
           }
         } else if (message.error) {
           entry.starting = false;
           entry.checkAt = now() + 300_000;
+        } else if (message.result?.turn?.id) {
+          // A successful start response is authoritative even if its lifecycle
+          // notification was missed. Do not leave the resume pending forever.
+          active.set(entry.threadId, message.result.turn.id);
+          resumedTurns.add(message.result.turn.id);
+          resumes.delete(entry.threadId);
+          reply({ method: 'item/completed', params: { threadId: entry.threadId, turnId: message.result.turn.id, item: { type: 'localNote', id: `quota-resumed:${message.result.turn.id}`, text: 'Task resumed automatically after the allowance reset.', tone: 'info' } } });
         }
+        persist();
         return true;
       }
       if (typeof message.id === 'string' && message.id.startsWith('yacwu-quota-stop-')) {
@@ -184,6 +195,12 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
       return false;
     },
     async poll() {
+      for (const [id, request] of resumeRequests) {
+        if (request.kind !== 'read' || now() - request.sentAt < 30_000) continue;
+        resumeRequests.delete(id);
+        const entry = resumes.get(request.threadId);
+        if (entry) { entry.checking = false; entry.checkAt = now(); }
+      }
       const ready = [...resumes.values()].filter(entry => !entry.checking && !entry.starting && (entry.checkAt ?? 0) <= now() && !active.has(entry.threadId));
       if (closed || polling || (!active.size && !ready.length)) return;
       polling = true;
@@ -196,7 +213,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
           if (!known || reason(usage, entry.reserve)) { entry.checkAt = checkAfter(usage, entry.reserve); continue; }
           entry.checking = true;
           const id = `yacwu-quota-resume-${++serial}`;
-          resumeRequests.set(id, { kind: 'read', threadId: entry.threadId });
+          resumeRequests.set(id, { kind: 'read', threadId: entry.threadId, sentAt: now() });
           send({ id, method: 'thread/read', params: { threadId: entry.threadId, includeTurns: true } });
         }
         persist();

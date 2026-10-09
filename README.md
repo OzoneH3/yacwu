@@ -522,6 +522,8 @@ Allowance-stopped Claude tasks automatically continue after fresh readings show
 both windows above their reserve. Pending resumes survive restarts in
 `.workspace`; manual stops, archived sessions, and tasks superseded by another
 turn are not resumed. The transcript records the automatic resumption.
+After reset, unavailable usage retries after two minutes (or the endpoint's
+retry delay); unanswered history checks retry after thirty seconds.
 Sessions waiting for Claude's reserve or a depleted Codex allowance show a clock
 with the reset time when available. If both readings are unavailable, new
 tasks remain blocked until the allowance can be verified. Claude usage is
