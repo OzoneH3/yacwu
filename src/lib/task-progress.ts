@@ -73,28 +73,63 @@ export function separateTaskProgressEntries<T extends { type: string; id: string
 	return result;
 }
 
-/** Estimate remaining minutes from observed elapsed time when the agent omits it. */
 /**
  * Minutes left for display. A stated estimate is shown as given, unless
- * `calibrate` is set: then, once the task has real progress (10% and a
- * minute in), a stated figure that disagrees with the elapsed-time pace by
- * more than about 2× is replaced by that pace. Claude cannot see elapsed
- * time and tends to anchor its minutes on an upfront guess, while its
- * percentage tracks the work done.
+ * `calibrate` is set: then it is first divided by `bias`, how many times
+ * too long this agent's stated minutes have turned out to be, and once the
+ * task has real progress (10% and a minute in), a figure that disagrees
+ * with the elapsed-time pace by more than about 2× is replaced by that
+ * pace. Claude cannot see elapsed time and tends to anchor its minutes on
+ * an upfront guess, while its percentage tracks the work done.
  */
 export function estimateRemainingMinutes(
 	percent: number,
 	explicitMinutes: number | null,
 	elapsedMs: number,
-	calibrate = false
+	calibrate = false,
+	bias = 1
 ): number | null {
 	const paced = percent > 0 && percent < 100 && elapsedMs >= 30_000
 		? Math.max(1, Math.ceil((elapsedMs * (100 - percent)) / percent / 60_000))
 		: null;
 	if (explicitMinutes === null) return percent >= 100 ? 0 : paced;
+	if (calibrate && explicitMinutes > 0) explicitMinutes = Math.max(1, Math.round(explicitMinutes / bias));
 	if (!calibrate || paced === null || percent < 10 || elapsedMs < 60_000) return explicitMinutes;
 	const inconsistent = explicitMinutes > paced * 2 + 2 || explicitMinutes * 2 + 2 < paced;
 	return inconsistent ? paced : explicitMinutes;
+}
+
+/** Measured on recent Claude turns: stated minutes ran a median 7.5× too long, rarely under 4×. */
+export const DEFAULT_ESTIMATE_BIAS = 4;
+const MIN_TURN_SAMPLES = 3;
+
+const median = (values: number[]) => {
+	const sorted = [...values].sort((a, b) => a - b);
+	return sorted[Math.floor(sorted.length / 2)];
+};
+
+/**
+ * How many times too long one finished turn's stated minutes were: the
+ * median over its estimates made with at least a minute actually left.
+ * Null for turns too short to say.
+ */
+export function turnEstimateBias(
+	estimates: Array<{ at: number; percent: number; remainingMinutes: number | null }>,
+	startedAt: number,
+	endedAt: number
+): number | null {
+	if (endedAt - startedAt < 2 * 60_000) return null;
+	const ratios = estimates.flatMap(({ at, percent, remainingMinutes }) => {
+		const actual = (endedAt - at) / 60_000;
+		return remainingMinutes && percent < 100 && actual >= 1 ? [remainingMinutes / actual] : [];
+	});
+	return ratios.length ? median(ratios) : null;
+}
+
+/** The correction to apply: learned from recent turns, or the measured default. */
+export function estimateBias(turnBiases: number[]): number {
+	if (turnBiases.length < MIN_TURN_SAMPLES) return DEFAULT_ESTIMATE_BIAS;
+	return Math.max(0.5, Math.min(20, median(turnBiases)));
 }
 
 /** Keep protocol markers out of the visible assistant transcript. */

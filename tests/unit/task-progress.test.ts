@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	DEFAULT_ESTIMATE_BIAS,
+	estimateBias,
 	estimateRemainingMinutes,
+	turnEstimateBias,
 	parseTaskProgress,
 	separateTaskProgressEntries,
 	stripTaskProgressMarkers,
@@ -82,4 +85,31 @@ describe('task progress reporting', () => {
 		expect(twice.match(/YACWU_PROGRESS_REMINDERS/g)).toHaveLength(1);
 		expect(twice).toContain('off');
 	});
+});
+
+test('a learned bias scales stated minutes before the pace check', () => {
+	const min = 60_000;
+	// Early on, with no pace yet, the corrected figure is shown.
+	expect(estimateRemainingMinutes(2, 240, 5_000, true, 8)).toBe(30);
+	expect(estimateRemainingMinutes(2, 240, 5_000, false, 8)).toBe(240);
+	expect(estimateRemainingMinutes(5, 1, 5_000, true, 8)).toBe(1);
+	expect(estimateRemainingMinutes(100, 0, 5_000, true, 8)).toBe(0);
+	// Later, the corrected figure still yields to an inconsistent pace.
+	expect(estimateRemainingMinutes(50, 80, 10 * min, true, 4)).toBe(20);
+	expect(estimateRemainingMinutes(50, 120, 10 * min, true, 4)).toBe(10);
+});
+
+test('turn bias compares each stated estimate with the time that was actually left', () => {
+	const min = 60_000;
+	const estimates = [
+		{ at: 0, percent: 2, remainingMinutes: 240 },
+		{ at: 10 * min, percent: 40, remainingMinutes: 60 },
+		{ at: 19.5 * min, percent: 95, remainingMinutes: 5 },
+		{ at: 20 * min, percent: 100, remainingMinutes: 0 }
+	];
+	expect(turnEstimateBias(estimates, 0, 20 * min)).toBe(12);
+	expect(turnEstimateBias(estimates, 0, 90_000)).toBeNull();
+	expect(estimateBias([])).toBe(DEFAULT_ESTIMATE_BIAS);
+	expect(estimateBias([6, 8, 30])).toBe(8);
+	expect(estimateBias([50, 60, 70])).toBe(20);
 });

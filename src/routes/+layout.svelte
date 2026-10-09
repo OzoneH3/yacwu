@@ -67,7 +67,7 @@
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
-import { estimateRemainingMinutes, parseTaskProgress, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
+import { estimateBias, estimateRemainingMinutes, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, archiveDeletionSupported, loadArchiveCatalog } from '$lib/archive';
 import { claudeBackendHost, sessionTarget } from '$lib/session-target';
@@ -211,6 +211,9 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	let sessionOpening = $state<Record<string, boolean>>({});
 	let interruptedSessions = $state<Record<string, boolean>>({});
 	let finishedSessions = $state<Record<string, boolean>>({});
+	// How far Claude's stated minutes overshot on recently finished turns.
+	let claudeTurnBiases = $state<number[]>([]);
+	const claudeBias = $derived(estimateBias(claudeTurnBiases));
 	let dismissedAttentionByThread = $state<Record<string, boolean>>({});
 	let recoveringSessions = $state<Record<string, boolean>>({});
 	let startupRecoveryComplete = $state(false);
@@ -326,6 +329,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
 	const FINISHED_SESSIONS_KEY = 'yacwu-finished-sessions';
+	const CLAUDE_ESTIMATE_BIAS_KEY = 'yacwu-claude-estimate-bias';
 	const DISMISSED_ATTENTION_KEY = 'yacwu-dismissed-attention';
 	const RESOLVED_QUESTIONS_KEY = 'yacwu-resolved-questions';
 	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
@@ -545,14 +549,14 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 		const startedAt = threads[id]?.turnStartedAt;
 		const elapsed = threads[id]?.status === 'running' && startedAt !== null && startedAt !== undefined
 			? activityClock - startedAt : 0;
-		return formatEstimatedRemaining(estimateRemainingMinutes(progress.percent, progress.remainingMinutes, elapsed, isClaudeSession(id) && settings.claudeTimeCalibration));
+		return formatEstimatedRemaining(estimateRemainingMinutes(progress.percent, progress.remainingMinutes, elapsed, isClaudeSession(id) && settings.claudeTimeCalibration, claudeBias));
 	}
 	const activeTaskProgress = $derived.by(() => {
 		if (!activeId || !active || active.status !== 'running' || viewedAgentId) return null;
 		const progress = taskProgressForSession(activeId);
 		const startedAt = threads[activeId]?.turnStartedAt;
 		return progress && startedAt !== null && startedAt !== undefined
-			? { ...progress, remainingMinutes: estimateRemainingMinutes(progress.percent, progress.remainingMinutes, activityClock - startedAt, isClaudeSession(activeId) && settings.claudeTimeCalibration) }
+			? { ...progress, remainingMinutes: estimateRemainingMinutes(progress.percent, progress.remainingMinutes, activityClock - startedAt, isClaudeSession(activeId) && settings.claudeTimeCalibration, claudeBias) }
 			: progress;
 	});
 	const activeUsageAnalysis = $derived(usageAnalysisByHost[activeHost] ?? null);
@@ -1063,6 +1067,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 		dismissedAttentionByThread = next;
 		localStorage.setItem(DISMISSED_ATTENTION_KEY, JSON.stringify(next));
+	}
+
+	/** Learn how far this turn's stated minutes overshot the time it really took. */
+	function recordClaudeEstimateBias(t: ThreadState, turnId: string | null, startedAt: number) {
+		const estimates = t.order.flatMap((itemId) => {
+			const item = t.byId[itemId] as any;
+			if (item?.type !== 'agentMessage' || typeof item._at !== 'number' || (turnId && item._turnId !== turnId)) return [];
+			const estimate = parseTaskProgress(String(item.text ?? ''));
+			return estimate ? [{ ...estimate, at: item._at as number }] : [];
+		});
+		const bias = turnEstimateBias(estimates, startedAt, Date.now());
+		if (bias === null) return;
+		claudeTurnBiases = [...claudeTurnBiases, bias].slice(-30);
+		localStorage.setItem(CLAUDE_ESTIMATE_BIAS_KEY, JSON.stringify(claudeTurnBiases));
 	}
 
 	function markSessionFinished(id: string) {
@@ -1584,6 +1602,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					markTaskCompleted(tid);
 					const t = ensureThread(tid);
 					t.status = 'idle';
+					if (p.turn?.status === 'completed' && t.turnStartedAt !== null && isClaudeSession(tid)) recordClaudeEstimateBias(t, completedTurnId ?? currentTurnId ?? null, t.turnStartedAt);
 					const duration = t.turnStartedAt === null ? null : Math.max(0, Date.now() - t.turnStartedAt);
 					t.turnStartedAt = null;
 					t.turnId = null;
@@ -3884,7 +3903,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				}
 			}
 		}
-		return estimateRemainingMinutes(item.percent, item.remainingMinutes, elapsed, isClaudeSession(activeId) && settings.claudeTimeCalibration);
+		return estimateRemainingMinutes(item.percent, item.remainingMinutes, elapsed, isClaudeSession(activeId) && settings.claudeTimeCalibration, claudeBias);
 	}
 
 	function chooseAttachments() {
@@ -4715,6 +4734,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		} catch {
 			todoQueues = {};
+		}
+		try {
+			const savedBiases = JSON.parse(localStorage.getItem(CLAUDE_ESTIMATE_BIAS_KEY) ?? '[]');
+			if (Array.isArray(savedBiases)) claudeTurnBiases = savedBiases.filter((bias) => typeof bias === 'number' && bias > 0).slice(-30);
+		} catch {
+			claudeTurnBiases = [];
 		}
 		try {
 			const savedFinished = JSON.parse(localStorage.getItem(FINISHED_SESSIONS_KEY) ?? '{}');

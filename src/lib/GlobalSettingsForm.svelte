@@ -75,7 +75,7 @@
 	<section aria-labelledby="settings-claude">
 		<h3 id="settings-claude">Claude progress</h3>
 		<label class="check"><input type="checkbox" checked={settings.claudeTimeCalibration} onchange={(e) => set('claudeTimeCalibration', e.currentTarget.checked)} /> Correct time-left estimates from elapsed progress</label>
-		<p class="description">Replaces Claude’s stated time left when it is more than about twice off the pace of the work so far.</p>
+		<p class="description">Scales Claude’s stated time left by how far it overshot on recent finished tasks in this browser (by 4× until three have finished), then replaces it when it is more than about twice off the pace of the work so far.</p>
 		<label class="check"><input type="checkbox" checked={settings.claudeProgressReminders} onchange={(e) => set('claudeProgressReminders', e.currentTarget.checked)} /> Remind quiet turns to report progress</label>
 		<label class="row" class:disabled={!settings.claudeProgressReminders}>
 			<span>Remind after</span>
