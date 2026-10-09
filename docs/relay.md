@@ -51,6 +51,10 @@ same acknowledged turn, same id, sender, and text. After a server restart
 those records are gone and blocks are shown as plain text. Sender identity
 is always self-reported by the sending agent.
 
+Each message ends with the exact `yacwu-relay send` command for replying to
+its sender. Agents must reply that way: built-in agent messaging, such as
+Claude's SendMessage tool, only reaches that agent's own subagents.
+
 ## Settings and security
 
 - **Accept direct messages** (Session details) is stored on the server and

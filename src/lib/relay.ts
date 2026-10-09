@@ -85,6 +85,8 @@ export interface RelayFrame {
 
 const HEADER = /^\[Yacwu relay: [^\n]*\]$/;
 const OPEN = /^\[Yacwu relay message ([A-Za-z0-9_-]{6,80}) from session (\S+) on (\S+)\]$/;
+/** The reply command the server adds after each frame (absent in older blocks). */
+const REPLY = /^To reply: node "\$YACWU_RELAY_CLI" send --from \S+ --to \S+ "short message"$/;
 
 /**
  * Parse an input part that consists entirely of a relay block, as the
@@ -104,6 +106,7 @@ export function parseRelayBlock(text: string): RelayFrame[] | null {
 		if (end < 0) return null;
 		frames.push({ id, fromThread, fromHost, body: lines.slice(index + 1, end).join('\n') });
 		index = end + 1;
+		if (REPLY.test(lines[index] ?? '')) index += 1;
 	}
 	return frames.length ? frames : null;
 }

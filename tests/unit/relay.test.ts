@@ -42,6 +42,14 @@ describe('relay block parsing', () => {
 		expect(parseRelayBlock(text)).toEqual([{ id: 'msg-0001', fromThread: 'thr-a', fromHost: 'local', body: 'line 1\n\nline 3' }]);
 	});
 
+	test('skips the reply command after each frame, as the server writes it', () => {
+		const reply = (from: string) => `To reply: node "$YACWU_RELAY_CLI" send --from thr-bob --to ${from} "short message"`;
+		const text = `[Yacwu relay: 2 messages.]\n[Yacwu relay message msg-0001 from session thr-a on local]\nfirst\n[/Yacwu relay message msg-0001]\n${reply('thr-a')}\n[Yacwu relay message msg-0002 from session thr-c on claude]\nsecond\n[/Yacwu relay message msg-0002]\n${reply('thr-c')}`;
+		expect(parseRelayBlock(text)?.map((frame) => frame.body)).toEqual(['first', 'second']);
+		// Anything else after a frame still makes the block plain text.
+		expect(parseRelayBlock(`[Yacwu relay: 1 message.]\n[Yacwu relay message msg-0001 from session thr-a on local]\nx\n[/Yacwu relay message msg-0001]\nTo reply: do something else`)).toBeNull();
+	});
+
 	test('rejects malformed or partial blocks', () => {
 		expect(parseRelayBlock('hello')).toBeNull();
 		expect(parseRelayBlock('[Yacwu relay: x]')).toBeNull();
