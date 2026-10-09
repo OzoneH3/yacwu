@@ -295,6 +295,7 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	let modelEfforts = $state<Record<string, string[]>>({});
 	let modelPending = $state(false);
 	let switchingPromptModel = $state(false);
+	let restartingSessionId: string | null = null;
 	let turnModels = $state<Record<string, string>>({});
 	let turnEfforts = $state<Record<string, string>>({});
 	let effortPending = $state(false);
@@ -1250,6 +1251,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function advanceTodoQueue(id: string) {
+		if (restartingSessionId === id) return;
 		const existing = todoQueues[id];
 		if (!existing) return;
 		if (existing.startedCount >= existing.tasks.length) {
@@ -2235,10 +2237,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function captureTurnModelBeforeConfigChange(id: string) {
-		if ((threads[id]?.turnId || activeTurnBySession[id]) && !turnModels[id] && sessionConfigs[id]?.model) {
+		if ((threads[id]?.status === 'running' || threads[id]?.turnId || activeTurnBySession[id]) && !turnModels[id] && sessionConfigs[id]?.model) {
 			turnModels = { ...turnModels, [id]: sessionConfigs[id].model };
 		}
-		if ((threads[id]?.turnId || activeTurnBySession[id]) && !turnEfforts[id] && sessionConfigs[id]?.effort) {
+		if ((threads[id]?.status === 'running' || threads[id]?.turnId || activeTurnBySession[id]) && !turnEfforts[id] && sessionConfigs[id]?.effort) {
 			turnEfforts = { ...turnEfforts, [id]: sessionConfigs[id].effort };
 		}
 	}
@@ -3304,16 +3306,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function restartPromptWithSelectedSettings() {
 		const id = activeId;
-		if (!id || !activeSettingsChangedDuringTurn || activeTodoQueue || switchingPromptModel || sendingMessage) return;
+		if (!id || !activeSettingsChangedDuringTurn || switchingPromptModel || sendingMessage) return;
 		const latestUserMessage = [...itemsOf(threads[id])].reverse().find((item) => item.type === 'userMessage') as any;
 		const promptText = (latestUserMessage?.content ?? [])
 			.map((part: any) => typeof part?.text === 'string' ? visibleUserText(part.text) : '')
 			.join('')
 			.trim();
-		const prompt = promptText || 'Please repeat the request from my immediately preceding message.';
+		const queuedPrompt = activeTodoQueue?.currentTask || (activeTodoQueue?.startedCount === 0 ? activeTodoQueue.initialTask : null);
+		const prompt = queuedPrompt || promptText || 'Please repeat the request from my immediately preceding message.';
 		const modelName = activeModelChoice?.displayName ?? activeConfig?.model ?? 'the selected model';
 		const selectedEffort = activeConfig?.effort ?? '';
 		switchingPromptModel = true;
+		restartingSessionId = id;
 		sendingMessage = true;
 		try {
 			await interrupt();
@@ -3346,6 +3350,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			addLocalNote(id, error instanceof Error ? error.message : 'Could not switch the running prompt', 'err');
 		} finally {
 			switchingPromptModel = false;
+			restartingSessionId = null;
 			sendingMessage = false;
 		}
 	}
@@ -6443,7 +6448,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</select>
 									</div>
 								{/if}
-								{#if activeSettingsChangedDuringTurn && !activeTodoQueue}
+								{#if activeSettingsChangedDuringTurn}
 									<button
 										class="switch-prompt-model"
 										type="button"
