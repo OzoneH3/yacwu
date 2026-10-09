@@ -8,7 +8,7 @@ export function compactActivityLabel(item: ThreadItem): string {
 }
 
 function backgroundActivity(item: ThreadItem): boolean {
-	return ['commandExecution', 'fileChange', 'collabAgentToolCall', 'subAgentActivity', 'mcpToolCall'].includes(item.type);
+	return ['commandExecution', 'fileChange', 'collabAgentToolCall', 'subAgentActivity', 'mcpToolCall', 'sleep'].includes(item.type);
 }
 
 function failed(item: ThreadItem): boolean {

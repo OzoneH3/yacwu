@@ -35,3 +35,11 @@ test('background labels omit completed while retaining running status', () => {
 	const running = compactActivity([command('one', 'inProgress'), command('two')], () => false)[0];
 	expect(compactActivityLabel(running)).toBe('Background work · 1 command · running');
 });
+
+test('sleeps fold into background work like other activity', () => {
+	const sleep = (id: string): ThreadItem => ({ id, type: 'sleep', durationMs: 45_000 } as ThreadItem);
+	const items = [command('one'), sleep('wait-1'), sleep('wait-2'), { id: 'answer', type: 'agentMessage', text: 'Done' } as ThreadItem];
+	const compacted = compactActivity(items, () => false, false);
+	expect(compacted.map((item) => item.id)).toEqual(['activity-group:one', 'answer']);
+	expect(compactActivityLabel(compacted[0])).toBe('Background work · 3 activities');
+});

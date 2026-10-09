@@ -6137,6 +6137,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<span class="gutter">⚑</span>
 									<div class="body">{(item as any).review}</div>
 								</div>
+							{:else if item.type === 'sleep'}
+								<div class="item note">
+									<span class="gutter">◷</span>
+									<div class="body">Waited{#if typeof (item as any).durationMs === 'number'} {formatDuration((item as any).durationMs)}{/if}</div>
+								</div>
 							{:else if item.type === 'contextCompaction'}
 								<div class="item note">
 									<span class="gutter">⤳</span>
