@@ -114,7 +114,7 @@ export interface PlanItem {
 export interface SubAgentActivityItem {
 	type: 'subAgentActivity';
 	id: string;
-	kind: 'started' | 'interacted' | 'interrupted';
+	kind: 'started' | 'interacted' | 'interrupted' | 'completed';
 	agentThreadId: string;
 	agentPath: string;
 }

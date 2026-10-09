@@ -82,6 +82,8 @@ export function trackAgentItem(
 		if (typeof it.agentPath === 'string' && it.agentPath) agent.path = it.agentPath;
 		if (it.kind === 'started') applyCollabState(agent, 'running');
 		else if (it.kind === 'interrupted') agent.state = 'interrupted';
+		// The agent finished its task; it stays open for follow-ups.
+		else if (it.kind === 'completed') agent.state = 'completed';
 		return true;
 	}
 

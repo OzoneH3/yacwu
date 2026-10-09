@@ -126,6 +126,17 @@ test('subAgentActivity registers the agent thread with its path', () => {
 	expect(agentLabel(registry[AGENT_A])).toBe('worker 1');
 });
 
+test('a completed subAgentActivity stops the agent counting as running', () => {
+	const registry: AgentRegistry = {};
+	const activity = (kind: string, id: string) =>
+		trackAgentItem(registry, SESSION, { type: 'subAgentActivity', id, kind, agentThreadId: AGENT_A, agentPath: '/root/review' });
+	activity('started', 'item-6');
+	activity('completed', 'item-7');
+	expect(registry[AGENT_A].state).toBe('completed');
+	expect(registry[AGENT_A].closed).toBe(false);
+	expect(isAgentRunning(registry[AGENT_A])).toBe(false);
+});
+
 test('the agent tab prefers its canonical path over a different nickname', () => {
 	const registry: AgentRegistry = {};
 	trackAgentItem(registry, SESSION, {

@@ -4477,6 +4477,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				return { prefix: 'Interacted with', path };
 			case 'interrupted':
 				return { prefix: 'Interrupted', path };
+			case 'completed':
+				return { prefix: 'Finished', path };
 			default:
 				return { prefix: 'Sub-agent activity:', path };
 		}
