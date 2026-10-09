@@ -30,13 +30,31 @@ export function takeAllowanceReserve(request) {
  * @param {(options?: {force?: boolean, reserve?: number}) => Promise<any>} readUsage
  * @param {(message: RpcMessage) => void} send
  * @param {(message: RpcMessage) => void} reply
+ * @param {{now?: () => number, waiting?: any[], saveWaiting?: (waiting: any[]) => void}} options
  */
-export function createClaudeQuotaGuard(readUsage, send, reply) {
+export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now, waiting = [], saveWaiting = () => {} } = {}) {
   const active = new Map();
   const interrupted = new Map();
   const pending = new Map();
   /** threadId -> reserve (%) last requested for that session. */
   const reserves = new Map();
+  const progressPreferences = new Map();
+  const resumes = new Map(waiting.filter(entry => typeof entry?.threadId === 'string' && typeof entry?.turnId === 'string').map(entry => [entry.threadId, { ...entry, checking: false, starting: false }]));
+  const resumeRequests = new Map();
+  const resumedTurns = new Set();
+  for (const entry of resumes.values()) {
+    reserves.set(entry.threadId, entry.reserve ?? DEFAULT_RESERVE);
+    progressPreferences.set(entry.threadId, entry.progress === true);
+    if (typeof entry.reason === 'string') interrupted.set(entry.turnId, entry.reason);
+  }
+  function persist() { saveWaiting([...resumes.values()].map(({ checking, starting, ...entry }) => entry)); }
+  /** @param {any} usage @param {number} reserve */
+  function checkAfter(usage, reserve) {
+    const resets = [usage?.rateLimits?.primary, usage?.rateLimits?.secondary]
+      .filter(window => typeof window?.usedPercent === 'number' && window.usedPercent >= 100 - reserve)
+      .map(window => window.resetsAt * 1000).filter(at => Number.isFinite(at) && at > now());
+    return Math.min(now() + 900_000, resets.length ? Math.max(...resets) : Infinity);
+  }
   let serial = 0;
   let closed = false;
   let polling = false;
@@ -81,8 +99,10 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
   return {
     /** @param {RpcMessage | undefined} request @param {number | null} [requestedReserve] */
     async allow(request, requestedReserve = null) {
+      if (['turn/interrupt', 'thread/archive', 'thread/delete'].includes(request?.method ?? '') && resumes.delete(request?.params?.threadId)) persist();
       if (!['turn/start', 'review/start', 'thread/compact/start'].includes(request?.method ?? '')) return true;
       const threadId = request?.params?.threadId;
+      if (typeof threadId === 'string' && request?.method === 'turn/start') progressPreferences.set(threadId, request.params?.input?.some(/** @param {any} part */ part => typeof part.text === 'string' && part.text.includes('<!-- YACWU_TASK_PROGRESS -->')) ?? false);
       if (typeof threadId === 'string' && requestedReserve !== null) reserves.set(threadId, requestedReserve);
       const reserve = reserveFor(threadId);
       // Lockout turned off for this session: nothing to verify.
@@ -102,6 +122,29 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
     },
     /** @param {RpcMessage} message */
     observe(message) {
+      if (typeof message.id === 'string' && message.id.startsWith('yacwu-quota-resume-')) {
+        const request = resumeRequests.get(message.id);
+        resumeRequests.delete(message.id);
+        const entry = request && resumes.get(request.threadId);
+        if (!entry) return true;
+        if (request.kind === 'read') {
+          entry.checking = false;
+          const latest = message.result?.thread?.turns?.at(-1);
+          if (message.error || !latest) entry.checkAt = now() + 300_000;
+          else if (latest.id !== entry.turnId || latest.status !== 'interrupted') { resumes.delete(entry.threadId); persist(); }
+          else {
+            entry.starting = true;
+            const id = `yacwu-quota-resume-${++serial}`;
+            resumeRequests.set(id, { kind: 'start', threadId: entry.threadId });
+            const progress = entry.progress ? '\n\n<!-- YACWU_TASK_PROGRESS -->\nReport estimated completion and time remaining early, about once a minute and at milestones, using a standalone [[YACWU_PROGRESS percent=35 remaining_minutes=6]] line with your actual estimates. Finish at 100 percent and 0 minutes before the final answer.\n[/YACWU_TASK_PROGRESS]' : '';
+            send({ id, method: 'turn/start', params: { threadId: entry.threadId, input: [{ type: 'text', text: `The previous task was stopped. Continue from the current state: first inspect what is already complete, then finish only the remaining work.${progress}` }] } });
+          }
+        } else if (message.error) {
+          entry.starting = false;
+          entry.checkAt = now() + 300_000;
+        }
+        return true;
+      }
       if (typeof message.id === 'string' && message.id.startsWith('yacwu-quota-stop-')) {
         const turnId = pending.get(message.id);
         pending.delete(message.id);
@@ -111,25 +154,54 @@ export function createClaudeQuotaGuard(readUsage, send, reply) {
       }
       const p = message.params ?? {};
       if (message.method === 'turn/started' && p.threadId && p.turn?.id) {
+        const entry = resumes.get(p.threadId);
+        if (entry?.starting) {
+          resumedTurns.add(p.turn.id);
+          reply({ method: 'item/completed', params: { threadId: p.threadId, turnId: p.turn.id, item: { type: 'localNote', id: `quota-resumed:${p.turn.id}`, text: 'Task resumed automatically after the allowance reset.', tone: 'info' } } });
+        }
+        if (entry) { resumes.delete(p.threadId); persist(); }
         active.set(p.threadId, p.turn.id);
         void this.poll();
       }
       if (message.method === 'turn/completed') {
         annotateStop(p.turn);
+        if (p.turn?.error?.yacwuQuotaStopped && p.threadId) {
+          resumes.set(p.threadId, { threadId: p.threadId, turnId: p.turn.id, reason: p.turn.error.message, progress: progressPreferences.get(p.threadId) ?? false, reserve: reserveFor(p.threadId), checkAt: now(), checking: false, starting: false });
+          persist();
+        }
         if (active.get(p.threadId) === p.turn?.id) active.delete(p.threadId);
       }
       // Restore active turns when reconnecting to an already-loaded adapter.
       for (const turn of message.result?.thread?.turns ?? []) {
         annotateStop(turn);
+        if (resumedTurns.has(turn.id)) {
+          const id = `quota-resumed:${turn.id}`;
+          turn.items ??= [];
+          if (!turn.items.some(/** @param {any} item */ item => item.id === id)) turn.items.unshift({ type: 'localNote', id, text: 'Task resumed automatically after the allowance reset.', tone: 'info' });
+        }
         if (turn.status === 'inProgress' && message.result.thread.id) active.set(message.result.thread.id, turn.id);
       }
       return false;
     },
     async poll() {
-      if (closed || polling || !active.size) return;
+      const ready = [...resumes.values()].filter(entry => !entry.checking && !entry.starting && (entry.checkAt ?? 0) <= now() && !active.has(entry.threadId));
+      if (closed || polling || (!active.size && !ready.length)) return;
       polling = true;
-      try { stop(await readUsage({ force: true })); } finally { polling = false; }
+      try {
+        const usage = await readUsage({ force: true });
+        stop(usage);
+        for (const entry of ready) {
+          if (!resumes.has(entry.threadId) || closed) continue;
+          const known = [usage?.rateLimits?.primary, usage?.rateLimits?.secondary].every(window => typeof window?.usedPercent === 'number' && Number.isFinite(window.usedPercent));
+          if (!known || reason(usage, entry.reserve)) { entry.checkAt = checkAfter(usage, entry.reserve); continue; }
+          entry.checking = true;
+          const id = `yacwu-quota-resume-${++serial}`;
+          resumeRequests.set(id, { kind: 'read', threadId: entry.threadId });
+          send({ id, method: 'thread/read', params: { threadId: entry.threadId, includeTurns: true } });
+        }
+        persist();
+      } finally { polling = false; }
     },
-    close() { closed = true; active.clear(); pending.clear(); interrupted.clear(); }
+    close() { closed = true; active.clear(); pending.clear(); interrupted.clear(); resumeRequests.clear(); }
   };
 }

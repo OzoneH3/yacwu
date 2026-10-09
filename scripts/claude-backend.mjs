@@ -9,6 +9,8 @@ import { createClaudeUsageReader, normalizeClaudeTokenUsage, readClaudeCredentia
 import { createClaudeTurnRouter } from './claude-routing.mjs';
 import { createClaudeProgressReminders } from './claude-progress.mjs';
 import { createClaudeQuotaGuard, takeAllowanceReserve } from './claude-quota-guard.mjs';
+import { quotaResumeStore } from './claude-quota-state.mjs';
+import { createHash } from 'node:crypto';
 import { adapterThreadLookup, carryClaudeConversation } from './claude-folder-move.mjs';
 
 /**
@@ -114,11 +116,14 @@ async function main() {
   const entryPath = new URL('./claude-adapter-entry.mjs', import.meta.url);
   const child = spawn(process.execPath, [fileURLToPath(entryPath), adapterPath, ...(args.length ? args : ['app-server', '--listen', 'stdio://'])], { stdio: ['pipe', 'pipe', 'inherit'], env });
   const readUsage = createClaudeUsageReader();
-  const quota = createClaudeQuotaGuard(readUsage,
-    (message) => child.stdin.write(`${JSON.stringify(message)}\n`),
-    (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`));
-  const quotaTimer = setInterval(() => void quota.poll(), 30000);
   const { adapterHome } = await import(pathToFileURL(join(dirname(adapterPath), 'util.mjs')).href);
+  const resumeKey = createHash('sha256').update(adapterHome()).digest('hex').slice(0, 16);
+  const resumeStore = quotaResumeStore(fileURLToPath(new URL(`../.workspace/claude-quota-resumes-${resumeKey}.json`, import.meta.url)));
+  const quota = createClaudeQuotaGuard(readUsage,
+    (message) => { progress.request(message); child.stdin.write(`${JSON.stringify(message)}\n`); },
+    (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`),
+    { waiting: resumeStore.load(), saveWaiting: (entries) => resumeStore.save(entries) });
+  const quotaTimer = setInterval(() => void quota.poll(), 30000);
   const lookupThread = adapterThreadLookup(join(adapterHome(), 'state.sqlite'));
   /** @param {import('./claude-routing.mjs').RpcMessage | undefined} message @param {string} line */
   async function forward(message, line) {

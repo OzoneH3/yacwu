@@ -517,6 +517,10 @@ the transcript, including after reload.
 Claude work is stopped and new tasks are blocked when either the five-hour or
 seven-day allowance reaches 90% used. Automatic stops appear in the transcript
 with the allowance reason and a Resume action, and queued todos stay paused.
+Allowance-stopped Claude tasks automatically continue after fresh readings show
+both windows above their reserve. Pending resumes survive restarts in
+`.workspace`; manual stops, archived sessions, and tasks superseded by another
+turn are not resumed. The transcript records the automatic resumption.
 Sessions waiting for Claude's reserve or a depleted Codex allowance show a clock
 with the reset time when available. If both readings are unavailable, new
 tasks remain blocked until the allowance can be verified. Claude usage is
