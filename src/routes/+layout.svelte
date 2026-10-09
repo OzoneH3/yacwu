@@ -5730,14 +5730,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{#if pendingFolders[activeId]}
 									<span class="folder-pending" role="status">Moves to <code>{pendingFolders[activeId]}</code> with your next message. <button class="mini ghost" type="button" onclick={() => delete pendingFolders[activeId!]}>Keep current folder</button></span>
 								{/if}
-								{#if isClaudeSession(activeId)}
-									<span class="folder-note">Claude sessions keep their folder: Claude finds the conversation by folder, so a moved session would start without its history.</span>
-								{:else if folderDraft !== null}
+								{#if folderDraft !== null}
 									<form class="folder-form" onsubmit={(event) => { event.preventDefault(); if (folderDraft?.trim()) void chooseSessionFolder(activeId!, folderDraft.trim()); }}>
 										<input aria-label="New session folder" bind:value={folderDraft} spellcheck="false" autocomplete="off" />
 										<button class="mini" type="submit" disabled={folderChecking || !folderDraft.trim()}>{folderChecking ? 'Checking…' : 'Use folder'}</button>
 										<button class="mini ghost" type="button" onclick={() => { folderDraft = null; folderError = ''; }}>Cancel</button>
 										{#if folderError}<span class="folder-error" role="alert">{folderError}</span>{/if}
+										{#if isClaudeSession(activeId)}<span class="folder-note">Claude's conversation is copied to the new folder, so it keeps its history.</span>{/if}
 									</form>
 								{:else}
 									<button class="mini ghost" type="button" title="Move this session to another folder, starting with your next message" onclick={() => { folderDraft = pendingFolders[activeId!] ?? cwds[activeId!] ?? activeSummary?.cwd ?? ''; folderError = ''; }}>Change folder…</button>

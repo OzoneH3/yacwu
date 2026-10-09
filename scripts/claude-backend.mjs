@@ -1,7 +1,7 @@
 // Discover Claude's versioned catalog without sending a prompt, then run the
 // existing adapter. No adapter checkout modifications or model calls required.
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -9,6 +9,7 @@ import { createClaudeUsageReader, normalizeClaudeTokenUsage, readClaudeCredentia
 import { createClaudeTurnRouter } from './claude-routing.mjs';
 import { createClaudeProgressReminders } from './claude-progress.mjs';
 import { createClaudeQuotaGuard, takeAllowanceReserve } from './claude-quota-guard.mjs';
+import { adapterThreadLookup, carryClaudeConversation } from './claude-folder-move.mjs';
 
 /**
  * Supplement CLI aliases with concrete IDs available to the signed-in account.
@@ -117,11 +118,24 @@ async function main() {
     (message) => child.stdin.write(`${JSON.stringify(message)}\n`),
     (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`));
   const quotaTimer = setInterval(() => void quota.poll(), 30000);
+  const { adapterHome } = await import(pathToFileURL(join(dirname(adapterPath), 'util.mjs')).href);
+  const lookupThread = adapterThreadLookup(join(adapterHome(), 'state.sqlite'));
   /** @param {import('./claude-routing.mjs').RpcMessage | undefined} message @param {string} line */
   async function forward(message, line) {
     // The browser's lockout preference is for Yacwu, not for Claude.
     const { reserve, changed } = takeAllowanceReserve(message);
     if (!await quota.allow(message, reserve)) return;
+    // A turn that moves the thread to another folder must find its Claude
+    // conversation there, or Claude would resume without its history.
+    if (message?.method === 'turn/start' && message.params?.cwd) {
+      try {
+        await carryClaudeConversation(message, { lookup: lookupThread });
+      } catch (error) {
+        process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: -32000,
+          message: `Could not carry the Claude conversation to ${message.params.cwd}: ${error instanceof Error ? error.message : String(error)}. The prompt was not started.` } })}\n`);
+        return;
+      }
+    }
     progress.request(message);
     child.stdin.write(`${changed ? JSON.stringify(message) : line}\n`);
   }

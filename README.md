@@ -24,8 +24,8 @@ rules locally, and records usage/diagnostic journals on the server.
   folder per session
 - 🧵 Multi-session workspace: create, rename, reorder, clear, archive, restore,
   and delete sessions, and resume interrupted work
-- 🗂️ Move a Codex session to another folder from Session details; it applies
-  with your next message
+- 🗂️ Move a session to another folder from Session details; it applies with
+  your next message (Claude sessions bring their conversation along)
 - ✅ Completion badges mark finished sessions until you open them
 - 🔒 In-use detection warns before opening a session another Codex process
   has loaded

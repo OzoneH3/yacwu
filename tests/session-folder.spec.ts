@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 // Moving a session to another folder: the new folder is checked first, then
-// rides on the next message's turn/start; Claude sessions keep their folder.
+// rides on the next message's turn/start, for Codex and Claude sessions alike.
 
 const ID = 'folder-session';
 
@@ -55,9 +55,17 @@ test('a checked folder applies with the next message', async ({ page }) => {
 	await expect(page.locator('.meta.cwd').first()).toHaveText('/home/u/new');
 });
 
-test('Claude sessions explain why they keep their folder', async ({ page }) => {
-	await mock(page, 'claude');
+test('Claude sessions can move too, carrying their conversation', async ({ page }) => {
+	const sent = await mock(page, 'claude');
 	await details(page).click();
-	await expect(page.locator('.folder-note')).toContainText('Claude sessions keep their folder');
-	await expect(page.getByRole('button', { name: 'Change folder…' })).toHaveCount(0);
+	await page.getByRole('button', { name: 'Change folder…' }).click();
+	await expect(page.locator('.folder-note')).toContainText('copied to the new folder');
+	await page.getByLabel('New session folder').fill('/home/u/elsewhere');
+	await page.getByRole('button', { name: 'Use folder' }).click();
+	await expect(page.locator('.folder-pending')).toContainText('Moves to /home/u/elsewhere');
+	await page.keyboard.press('Escape');
+	await page.getByLabel(/^Message /).fill('continue there');
+	await page.getByLabel(/^Message /).press('Enter');
+	await expect.poll(() => sent.length).toBe(1);
+	expect(sent[0].cwd).toBe('/home/u/elsewhere');
 });
