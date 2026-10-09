@@ -67,7 +67,7 @@
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
-import { estimateBias, estimateRemainingMinutes, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
+import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, archiveDeletionSupported, loadArchiveCatalog } from '$lib/archive';
 import { claudeBackendHost, sessionTarget } from '$lib/session-target';
@@ -533,21 +533,8 @@ import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, c
 	const viewed = $derived(viewedId ? (threads[viewedId] ?? null) : null);
 	const viewedAgent = $derived(viewedAgentId ? (agents[viewedAgentId] ?? null) : null);
 	function taskProgressForSession(id: string) {
-		const items = itemsOf(threads[id] ?? null);
-		let latestUserIndex = -1;
-		for (let index = items.length - 1; index >= 0; index -= 1) {
-			if (items[index].type === 'userMessage') {
-				latestUserIndex = index;
-				break;
-			}
-		}
-		for (let index = items.length - 1; index > latestUserIndex; index -= 1) {
-			const item = items[index] as any;
-			if (item.type !== 'agentMessage') continue;
-			const estimate = parseTaskProgress(String(item.text ?? ''));
-			if (estimate) return estimate;
-		}
-		return null;
+		const thread = threads[id] ?? null;
+		return latestTaskProgress(itemsOf(thread) as any[], thread?.status === 'running' ? thread.turnId : null);
 	}
 	function estimatedSessionTimeLeft(id: string, progress: ReturnType<typeof taskProgressForSession>): string | null {
 		if (!progress) return null;

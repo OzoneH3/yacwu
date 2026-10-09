@@ -3,6 +3,7 @@ import {
 	DEFAULT_ESTIMATE_BIAS,
 	estimateBias,
 	estimateRemainingMinutes,
+	latestTaskProgress,
 	turnEstimateBias,
 	parseTaskProgress,
 	separateTaskProgressEntries,
@@ -112,4 +113,16 @@ test('turn bias compares each stated estimate with the time that was actually le
 	expect(estimateBias([])).toBe(DEFAULT_ESTIMATE_BIAS);
 	expect(estimateBias([6, 8, 30])).toBe(8);
 	expect(estimateBias([50, 60, 70])).toBe(20);
+});
+
+test('a follow-up sent into a running task keeps its reported progress', () => {
+	const progress = (id: string, turn: string, percent: number) => ({ type: 'agentMessage', id, _turnId: turn, text: `[[YACWU_PROGRESS percent=${percent} remaining_minutes=5]]` });
+	const user = (id: string, turn: string | null) => ({ type: 'userMessage', id, _turnId: turn });
+	const items = [user('u0', 't0'), progress('p0', 't0', 100), user('u1', 't1'), progress('p1', 't1', 20), progress('p2', 't1', 45), user('steer', 't1')];
+	expect(latestTaskProgress(items, 't1')?.percent).toBe(45);
+	// The previous task's progress never leaks into a new turn.
+	expect(latestTaskProgress([...items.slice(0, 2), user('u1', 't1')], 't1')).toBeNull();
+	// Idle: a new message starts over.
+	expect(latestTaskProgress(items, null)).toBeNull();
+	expect(latestTaskProgress(items.slice(0, 5), null)?.percent).toBe(45);
 });

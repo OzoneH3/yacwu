@@ -74,6 +74,33 @@ export function separateTaskProgressEntries<T extends { type: string; id: string
 }
 
 /**
+ * The latest progress the agent reported for the current task. While a turn
+ * runs, that is anywhere in the turn: a follow-up sent into it (a steer)
+ * belongs to the same task and must not reset progress. Otherwise it is
+ * whatever followed the latest user message.
+ */
+export function latestTaskProgress(
+	items: Array<{ type: string; text?: unknown; _turnId?: string | null }>,
+	runningTurnId: string | null = null
+): TaskProgressEstimate | null {
+	let start = -1;
+	for (let index = items.length - 1; index >= 0; index -= 1) {
+		const item = items[index];
+		if (runningTurnId && item._turnId && item._turnId !== runningTurnId) break;
+		if (item.type !== 'userMessage') continue;
+		start = index;
+		if (!runningTurnId || item._turnId !== runningTurnId) break;
+	}
+	for (let index = items.length - 1; index > start; index -= 1) {
+		const item = items[index];
+		if (item.type !== 'agentMessage') continue;
+		const estimate = parseTaskProgress(String(item.text ?? ''));
+		if (estimate) return estimate;
+	}
+	return null;
+}
+
+/**
  * Minutes left for display. A stated estimate is shown as given, unless
  * `calibrate` is set: then it is first divided by `bias`, how many times
  * too long this agent's stated minutes have turned out to be, and once the
