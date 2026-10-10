@@ -25,6 +25,8 @@ export interface GlobalSettings {
 	usageRefreshSeconds: number;
 	/** Stop and block Claude tasks when an allowance has this % or less left (0: off). */
 	claudeAllowanceReserve: number;
+	/** Play a short sound when a session finishes, asks a question, or hits an error. */
+	sounds: boolean;
 }
 
 export const GLOBAL_SETTINGS_KEY = 'yacwu-settings';
@@ -40,7 +42,8 @@ export const defaultSettings: GlobalSettings = {
 	claudeReminderMinutes: 5,
 	quietWorkerNotices: true,
 	usageRefreshSeconds: 30,
-	claudeAllowanceReserve: 10
+	claudeAllowanceReserve: 10,
+	sounds: true
 };
 
 /** Allowed ranges for numeric settings. */
@@ -79,7 +82,8 @@ export function readSettings(raw: string | null): GlobalSettings {
 		claudeReminderMinutes: key(parsed, 'claudeReminderMinutes'),
 		quietWorkerNotices: flag('quietWorkerNotices'),
 		usageRefreshSeconds: key(parsed, 'usageRefreshSeconds'),
-		claudeAllowanceReserve: key(parsed, 'claudeAllowanceReserve')
+		claudeAllowanceReserve: key(parsed, 'claudeAllowanceReserve'),
+		sounds: flag('sounds')
 	};
 }
 

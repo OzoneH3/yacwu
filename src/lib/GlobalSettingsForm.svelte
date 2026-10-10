@@ -45,6 +45,8 @@
 				<option value="dark">Dark</option>
 			</select>
 		</label>
+		<label class="check"><input type="checkbox" checked={settings.sounds} onchange={(e) => set('sounds', e.currentTarget.checked)} /> Sounds</label>
+		<p class="description">A soft chime when a session finishes, asks a question, or hits an error. The speaker button at the top right mutes them.</p>
 	</section>
 
 	<section aria-labelledby="settings-composer">

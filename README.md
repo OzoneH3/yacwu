@@ -28,6 +28,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🗂️ Move a session to another folder from Session details; it applies with
   your next message (Claude sessions bring their conversation along)
 - ✅ Completion badges mark finished sessions until you open them
+- 🔔 Soft sounds when a session finishes, asks a question, or hits an error;
+  mute them with the speaker button at the top right
 - 🔒 In-use detection warns before opening a session another Codex process
   has loaded
 - ⚡ Live streaming of messages, reasoning, commands, plans, and file changes;

@@ -65,6 +65,7 @@
 	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { createPathKindQueue, pathKindKey, type PathKind } from '$lib/path-kinds';
+	import { createSoundPlayer, signalSounds, type SoundKind } from '$lib/sounds';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
@@ -524,6 +525,31 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		}
 		return result;
 	});
+	// Notification sounds. Only live activity makes a sound: a question or
+	// error that appears because history loaded stays silent.
+	const soundPlayer = createSoundPlayer();
+	const lastLiveAt = new Map<string, number>();
+	let previousSignals: Record<string, Exclude<SoundKind, 'finish'> | null> = {};
+	function noteLiveActivity(threadId: string) {
+		lastLiveAt.set(agents[threadId] ? agentRootId(agents, agents[threadId]) : threadId, Date.now());
+	}
+	$effect(() => {
+		const next: typeof previousSignals = {};
+		for (const session of sessions) {
+			const ids = [session.id, ...agentsForSession(agents, session.id).map((agent) => agent.id)];
+			next[session.id] = ids.some((id) => threads[id]?.error) ? 'error' : sessionAttentionById[session.id] ? 'question' : null;
+		}
+		untrack(() => {
+			const due = signalSounds(previousSignals, next, (id) => Date.now() - (lastLiveAt.get(id) ?? -Infinity) < 10_000);
+			previousSignals = next;
+			if (settings.sounds) for (const [id, kind] of due) soundPlayer.play(kind, id);
+		});
+	});
+	function toggleSounds() {
+		saveSettings({ ...settings, sounds: !settings.sounds });
+		if (settings.sounds) soundPlayer.unlock();
+	}
+
 	const activeWorkOrderId = $derived(activeId ? latestWorkOrderBySession[activeId] ?? null : null);
 	const currentAgents = $derived(
 		activeAgents.filter(
@@ -1626,6 +1652,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 			case 'turn/completed': {
 				if (tid) scheduleTaskUsageRefresh(tid);
+				if (tid) noteLiveActivity(tid);
+				// A session (not an agent) finished. A question or error sound
+				// for the same moment wins: the player keeps one per session.
+				if (tid && !agents[tid] && p.turn?.status === 'completed' && settings.sounds) {
+					setTimeout(() => { if (settings.sounds) soundPlayer.play('finish', tid); }, 300);
+				}
 				const completedTurnId = typeof p.turn?.id === 'string' ? p.turn.id : null;
 				const currentTurnId = tid ? threads[tid]?.turnId : null;
 				if (tid && !(completedTurnId && currentTurnId && completedTurnId !== currentTurnId)) {
@@ -1677,6 +1709,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 			case 'item/started':
 			case 'item/completed': {
+				if (tid) noteLiveActivity(tid);
 				if (tid && p.item?.id) {
 					if (p.item.type === 'userMessage' && suppressRestartPromptEcho(tid, p.item, msg.method === 'item/completed')) break;
 					if (msg.method === 'item/completed' && p.item.type === 'agentMessage' && dismissedAttentionByThread[tid]) {
@@ -4787,6 +4820,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		try { messageTimestampStore = createMessageTimestampStore(localStorage); } catch { /* Keep live timestamps for this page if storage is unavailable. */ }
 		void loadHostChoices();
 		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
+		// Browsers allow audio only after the user has interacted with the page.
+		const unlockSounds = () => { if (settings.sounds) soundPlayer.unlock(); };
+		window.addEventListener('pointerdown', unlockSounds);
+		window.addEventListener('keydown', unlockSounds);
 		const transferTitle = (element: Element) => {
 			const title = element.getAttribute('title');
 			if (title !== null) {
@@ -4953,6 +4990,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		};
 		return () => {
 			es.close();
+			window.removeEventListener('pointerdown', unlockSounds);
+			window.removeEventListener('keydown', unlockSounds);
 			tooltipObserver.disconnect();
 			window.removeEventListener('pointerover', onTooltipPointerOver);
 			window.removeEventListener('pointerout', onTooltipPointerOut);
@@ -4989,6 +5028,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{/if}
 	</div>
 </dialog>
+
+{#snippet soundToggle()}
+	<button
+		class="theme-toggle sound-toggle"
+		type="button"
+		onclick={toggleSounds}
+		aria-pressed={!settings.sounds}
+		aria-label={settings.sounds ? 'Mute sounds' : 'Unmute sounds'}
+		title={settings.sounds ? 'Mute sounds' : 'Unmute sounds'}
+	>
+		<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+			<path d="M11 5 6 9H3v6h3l5 4V5Z" />
+			{#if settings.sounds}
+				<path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+			{:else}
+				<path d="m16 9 5 6M21 9l-5 6" />
+			{/if}
+		</svg>
+	</button>
+{/snippet}
 
 {#snippet themeToggle(className = '')}
 	<button
@@ -5629,6 +5688,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{/if}
 				</div>
 				<div class="session-state">
+					{@render soundToggle()}
 					{@render themeToggle()}
 					<button
 						class="files-trigger"
