@@ -2218,6 +2218,25 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			setFastSession(id, data.serviceTier === 'priority');
 			goto(`/s/${id}${hostQuery(data.host ?? host)}`);
 			mobileSidebarOpen = false;
+			void nameAfterFolder(id, data.thread?.cwd ?? cwd);
+		}
+	}
+
+	/** New sessions are named after their folder until renamed. */
+	async function nameAfterFolder(id: string, cwd: string | undefined) {
+		const name = cwd ? workspaceLabel(cwd) : '';
+		if (!name || name === 'Conversation' || sessions.find((entry) => entry.id === id)?.name) return;
+		sessions = sessions.map((entry) => entry.id === id ? { ...entry, name } : entry);
+		try {
+			const response = await fetch(threadApi(id, '/name'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ name })
+			});
+			if (!response.ok) throw new Error();
+		} catch {
+			// Shown locally either way; the backend keeps it unnamed and the
+			// list falls back to the folder name too.
 		}
 	}
 
@@ -4132,7 +4151,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function shortLabel(s: ThreadSummary): string {
 		if (s.name) return s.name;
 		if (s.preview) return s.preview.slice(0, 48);
-		return s.id.slice(0, 8);
+		const folder = cwds[s.id] ?? s.cwd;
+		return folder ? workspaceLabel(folder) : s.id.slice(0, 8);
 	}
 
 	function workspaceLabel(path: string | null | undefined): string {
