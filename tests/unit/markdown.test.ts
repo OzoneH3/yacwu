@@ -71,3 +71,12 @@ describe('Git refs in code spans are not file links', () => {
 		expect(code('Edit `src/lib/markdown.ts` next')[0]).not.toHaveProperty('gitRef');
 	});
 });
+
+test('file references can include code-span paths, but never Git refs', () => {
+	const text = 'Edited `web/app.js` on branch `ux/page-audit-072`, see [notes](docs/notes.md).';
+	expect(markdownFileReferences(text)).toEqual([{ text: 'docs/notes.md', requireSeparator: false }]);
+	expect(markdownFileReferences(text, true)).toEqual([
+		{ text: 'web/app.js', requireSeparator: true, code: true },
+		{ text: 'docs/notes.md', requireSeparator: false }
+	]);
+});

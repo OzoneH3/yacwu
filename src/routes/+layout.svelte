@@ -66,6 +66,7 @@
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { createPathKindQueue, pathKindKey, type PathKind } from '$lib/path-kinds';
 	import { createSoundPlayer, signalSounds, type SoundKind } from '$lib/sounds';
+	import { coordinatorHandoff, type HandoffFile } from '$lib/coordinator-handoff';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
@@ -4475,15 +4476,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}, 1800);
 	}
 
-	function responseFileTargets(item: any) {
+	function responseFileTargets(item: any, includeCode = false) {
 		const seen = new Set<string>();
-		return markdownFileReferences(stripTaskProgressMarkers(String(item.text ?? ''))).flatMap((reference) => {
+		return markdownFileReferences(stripTaskProgressMarkers(String(item.text ?? '')), includeCode).flatMap((reference) => {
 			const target = agentPathTarget(reference.text, reference.requireSeparator);
 			if (!target) return [];
 			const key = JSON.stringify([target.root, target.path]);
 			if (seen.has(key)) return [];
 			seen.add(key);
-			return [target];
+			return [{ ...target, code: Boolean(reference.code) }];
 		});
 	}
 
@@ -4515,6 +4516,70 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not copy linked files' }, 6000);
 		}
 		setTimeout(() => { delete agentFileCopyStatus[key]; }, 2000);
+	}
+
+	let handoffCopyStatus = $state<Record<string, 'copying' | 'copied' | 'failed'>>({});
+
+	/** The result of this response's task as one Markdown handoff for a coordinating chat. */
+	async function copyCoordinatorHandoff(item: any) {
+		const id = activeId;
+		const key = agentRawKey(item);
+		if (!id || handoffCopyStatus[key] === 'copying') return;
+		handoffCopyStatus[key] = 'copying';
+		try {
+			const items = itemsOf(threads[viewedId ?? id] ?? null) as any[];
+			const index = items.indexOf(item);
+			const turnItems = items.filter((entry) => item._turnId && entry._turnId === item._turnId);
+			const requestItem = turnItems.find((entry) => entry.type === 'userMessage')
+				?? items.slice(0, Math.max(0, index)).findLast((entry) => entry.type === 'userMessage');
+			const request = requestItem
+				? visibleUserText((requestItem.content ?? []).map((part: any) => typeof part?.text === 'string' ? part.text : '').join('\n'))
+				: null;
+			const changedFiles = [...new Set(turnItems.filter((entry) => entry.type === 'fileChange')
+				.flatMap((entry) => (entry.changes ?? []).map((change: any) => displayFileChangePath(change))).filter(Boolean))];
+			const host = sessionHost(id);
+			const files: HandoffFile[] = [];
+			const skipped: string[] = [];
+			for (const target of responseFileTargets(item, true)) {
+				const name = target.root ? `${target.root.replace(/\/$/, '')}/${target.path}` : target.path;
+				try {
+					const data = await readWorkspaceLink(id, target.path, host, fetch, target.root ?? undefined);
+					if (data.directory) continue;
+					if (data.copyable) files.push({ name, content: data.content });
+					else skipped.push(`${name} (binary or too large)`);
+				} catch (error) {
+					// Code spans also hold things that only look like paths; only
+					// report explicit links that could not be read.
+					if (!target.code) skipped.push(`${name} (${error instanceof Error ? error.message : 'could not read'})`);
+				}
+			}
+			let branch: string | null = null;
+			try {
+				const res = await fetch(threadApi(id, '/git/changes?scope=all'));
+				const data = await res.json();
+				if (res.ok && data.available && typeof data.branch === 'string') branch = data.branch;
+			} catch { /* No branch line. */ }
+			const config = sessionConfigs[id];
+			const agent = [isClaudeSession(id) ? 'Claude' : 'Codex', config?.model ? `${config.model}${config.effort ? `, ${config.effort}` : ''}` : '']
+				.filter(Boolean).join(' · ');
+			await navigator.clipboard.writeText(coordinatorHandoff({
+				session: activeSummary ? shortLabel(activeSummary) : id,
+				folder: sessionFolder(id),
+				agent,
+				branch,
+				durationMs: typeof item._turnDurationMs === 'number' ? item._turnDurationMs : null,
+				request,
+				result: stripTaskProgressMarkers(String(item.text ?? '')),
+				changedFiles,
+				files,
+				skipped
+			}));
+			handoffCopyStatus[key] = 'copied';
+		} catch (error) {
+			handoffCopyStatus[key] = 'failed';
+			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not copy the handoff' }, 6000);
+		}
+		setTimeout(() => { delete handoffCopyStatus[key]; }, 2000);
 	}
 
 	function agentTime(item: any): { label: string; iso: string; full: string } | null {
@@ -6100,6 +6165,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										>
 											<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2" /></svg>
 											{agentCopyStatus[agentRawKey(item)] === 'copied' ? 'Copied' : agentCopyStatus[agentRawKey(item)] === 'failed' ? 'Copy failed' : 'Copy'}
+										</button>
+										<button type="button" class="copy-agent" disabled={handoffCopyStatus[agentRawKey(item)] === 'copying'} title="Copy the request, this response, changed files and linked file contents as one Markdown handoff for a coordinating chat" onclick={() => copyCoordinatorHandoff(item)}>
+											{handoffCopyStatus[agentRawKey(item)] === 'copying' ? 'Preparing…' : handoffCopyStatus[agentRawKey(item)] === 'copied' ? 'Handoff copied' : handoffCopyStatus[agentRawKey(item)] === 'failed' ? 'Handoff failed' : 'Copy for coordinator'}
 										</button>
 										{#if responseFileTargets(item).length}
 											<button type="button" class="copy-agent" disabled={agentFileCopyStatus[agentRawKey(item)] === 'copying'} title="Copy all linked file contents with filename headings" onclick={() => copyResponseFiles(item)}>

@@ -201,11 +201,13 @@ export function parseCodexMarkdown(markdown: string): MarkdownBlock[] {
 }
 
 /** Explicit local Markdown links in display order; ignore images and code paths. */
-export function markdownFileReferences(markdown: string): Array<{ text: string; requireSeparator: boolean }> {
-	const references: Array<{ text: string; requireSeparator: boolean }> = [];
+export function markdownFileReferences(markdown: string, includeCode = false): Array<{ text: string; requireSeparator: boolean; code?: boolean }> {
+	const references: Array<{ text: string; requireSeparator: boolean; code?: boolean }> = [];
 	function inlines(tokens: MarkdownInline[]) {
 		for (const token of tokens) {
 			if (token.type === 'link' && !token.external && token.href) references.push({ text: token.href, requireSeparator: false });
+			// Paths in code spans render as file links too (Git refs excepted).
+			if (includeCode && token.type === 'code' && !token.gitRef) references.push({ text: token.text, requireSeparator: true, code: true });
 			if ('children' in token && token.type !== 'link') inlines(token.children);
 		}
 	}

@@ -56,7 +56,9 @@ rules locally, and records usage/diagnostic journals on the server.
 - ± Git changes inspector with All / Staged / Unstaged scopes and lazy diffs
 - 🖼️ Attach images, PDFs, and text files by picker or clipboard paste
 - 🧭 Transcript position rail and scroll-to-bottom control
-- 📋 **Copy files** collects the contents of every file a response links to
+- 📋 **Copy files** collects the contents of every file a response links to;
+  **Copy for coordinator** copies a Markdown handoff (session, folder, branch,
+  request, response, changed files and linked file contents) for another chat
 - ⌨️ Slash commands (see below), message copy buttons, and prompt history
 - 📝 Per-session rules: progress reporting, shared coordination, and custom
   instructions. Shared coordination gives agents the session name and lets
