@@ -529,6 +529,10 @@ fn dispatch(
       use host, cx <- with_codex(ctx, req, Some(id))
       list_files(host, cx, req, id)
     }
+    ["api", "threads", id, "path-kinds"], Post -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      path_kinds(host, cx, req, id)
+    }
     ["api", "threads", id, "file"], Get -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       read_file(host, cx, req, id)
@@ -1112,6 +1116,105 @@ fn list_files(
                 ]),
               )
           }
+      }
+  }
+}
+
+/// Whether each linked path is a file, a directory, or missing, so the
+/// transcript links files only. Paths are relative to the session root (or
+/// the `root` query parameter); unsafe paths count as missing.
+fn path_kinds(
+  host: String,
+  cx: Codex,
+  req: Request(Connection),
+  thread_id: String,
+) -> Response(ResponseData) {
+  let paths =
+    decode.run(
+      read_json_body(req),
+      decode.at(["paths"], decode.list(decode.string)),
+    )
+    |> result.unwrap([])
+    |> list.unique
+    |> list.take(200)
+  case workspace_root(host, cx, req, thread_id) {
+    Error(message) -> json_response(500, error_body(message))
+    Ok(root) -> {
+      let safe =
+        list.filter_map(paths, fn(path) {
+          files.sanitize(path) |> result.map(fn(rel) { #(path, rel) })
+        })
+      let kinds = case hosts.is_local(host) {
+        True ->
+          list.map(safe, fn(entry) {
+            #(entry.0, local_path_kind(files.resolve(root, entry.1)))
+          })
+        False -> remote_path_kinds(cx, root, safe)
+      }
+      json_response(
+        200,
+        json.object([
+          #(
+            "kinds",
+            json.object(
+              list.map(paths, fn(path) {
+                #(
+                  path,
+                  json.string(
+                    list.key_find(kinds, path) |> result.unwrap("missing"),
+                  ),
+                )
+              }),
+            ),
+          ),
+        ]),
+      )
+    }
+  }
+}
+
+pub fn local_path_kind(path: String) -> String {
+  case simplifile.file_info(path) {
+    Ok(info) ->
+      case simplifile.file_info_type(info) {
+        simplifile.Directory -> "dir"
+        _ -> "file"
+      }
+    Error(_) -> "missing"
+  }
+}
+
+/// One remote command answers the whole batch, in argument order.
+fn remote_path_kinds(
+  cx: Codex,
+  root: String,
+  entries: List(#(String, String)),
+) -> List(#(String, String)) {
+  let script =
+    "for p; do if [ -d \"$p\" ]; then echo dir; elif [ -e \"$p\" ]; then echo file; else echo missing; fi; done"
+  case entries {
+    [] -> []
+    _ ->
+      case
+        workspace.exec(
+          cx,
+          root,
+          [
+            "sh",
+            "-c",
+            script,
+            "sh",
+            ..list.map(entries, fn(entry) { files.resolve(root, entry.1) })
+          ],
+          10_000,
+        )
+      {
+        Ok(#(0, stdout, _)) ->
+          list.zip(
+            list.map(entries, fn(entry) { entry.0 }),
+            string.split(string.trim(stdout), "\n"),
+          )
+        _ -> []
       }
   }
 }

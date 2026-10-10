@@ -64,6 +64,7 @@
 	import { summarizeTaskAllowances, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
 	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
 	import { readWorkspaceLink } from '$lib/workspace-links';
+	import { createPathKindQueue, pathKindKey, type PathKind } from '$lib/path-kinds';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
@@ -4230,6 +4231,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	 * to reveal; absolute paths must sit inside the session's working
 	 * directory.
 	 */
+	// Linked paths that turn out to be folders are shown as plain text.
+	let pathKinds = $state<Record<string, PathKind>>({});
+	const pathKindQueue = createPathKindQueue(fetch, (key, kind) => { pathKinds[key] = kind; });
+
+	/** Whether a linked path names a folder: written with a trailing slash, the session folder, or known from the server. */
+	function isDirectoryTarget(text: string, target: { path: string; root: string | null }): boolean {
+		if (!activeId) return false;
+		if (target.path === '' || /\/(?::\d+(?::\d+)?)?$/.test(text.trim())) return true;
+		const host = sessionHost(activeId);
+		const kind = pathKinds[pathKindKey(activeId, host, target.root, target.path)];
+		if (kind === undefined) pathKindQueue.request(activeId, host, target.root, target.path);
+		return kind === 'dir';
+	}
+
 	function agentPathTarget(
 		text: string,
 		requireSeparator = true
@@ -5032,7 +5047,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{:else if token.type === 'del'}
 			<del>{@render markdownInlines(token.children)}</del>
 		{:else if token.type === 'code'}
-			{@const pathTarget = token.gitRef ? null : agentPathTarget(token.text)}
+			{@const codeTarget = token.gitRef ? null : agentPathTarget(token.text)}
+			{@const pathTarget = codeTarget && !isDirectoryTarget(token.text, codeTarget) ? codeTarget : null}
 			{#if pathTarget !== null}
 				<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(pathTarget.path, pathTarget.root)} onmouseleave={() => fileLinkPreview?.path === pathTarget.path && (fileLinkPreview = null)}>
 					<button type="button" class="code-path" title={pathTarget.line ? `Open in file browser at line ${pathTarget.line}` : 'Open in file browser'} onclick={() => openFileInBrowser(pathTarget.path, pathTarget.line, pathTarget.root)}><code>{token.text}</code></button>
@@ -5046,13 +5062,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			<br />
 		{:else if token.type === 'link'}
 			{#if token.href}
-				{@const fileTarget = token.external ? null : agentPathTarget(token.href, false)}
+				{@const linkTarget = token.external ? null : agentPathTarget(token.href, false)}
+				{@const linksDirectory = linkTarget !== null && isDirectoryTarget(token.href, linkTarget)}
+				{@const fileTarget = linksDirectory ? null : linkTarget}
 				{#if fileTarget !== null}
 					<span class="file-link-actions" role="group" onmouseenter={() => void loadFileLinkPreview(fileTarget.path, fileTarget.root)} onmouseleave={() => fileLinkPreview?.path === fileTarget.path && (fileLinkPreview = null)}>
 						<button type="button" class="link-path" title={fileTarget.line ? `Open ${fileTarget.path} at line ${fileTarget.line}` : `Open ${fileTarget.path} in file browser`} onclick={() => openFileInBrowser(fileTarget.path, fileTarget.line, fileTarget.root)}>{@render markdownInlines(token.children)}</button>
 						<button type="button" class="file-link-copy" aria-label={`Copy ${fileTarget.path}`} title={copiedFileLink === fileTarget.path ? 'Copied' : 'Copy file contents or folder listing'} onclick={() => void copyFileLinkContents(fileTarget.path, fileTarget.root)}>{copiedFileLink === fileTarget.path ? '✓' : '⧉'}</button>
 						{#if fileLinkPreview?.path === fileTarget.path}<span class="file-link-preview"><strong>{fileTarget.path}</strong><pre>{fileLinkPreview.content}</pre></span>{/if}
 					</span>
+				{:else if linksDirectory}
+					{@render markdownInlines(token.children)}
 				{:else}
 					<a
 						href={token.href}
