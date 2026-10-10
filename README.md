@@ -23,7 +23,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🔀 Codex and Claude sessions side by side; pick the provider and project
   folder per session
 - 🧵 Multi-session workspace: create, rename, reorder, clear, archive, restore,
-  and delete sessions, and resume interrupted work
+  and delete sessions, and resume interrupted work; **Clear first** in the
+  message box starts that message in a fresh conversation
 - 🗂️ Move a session to another folder from Session details; it applies with
   your next message (Claude sessions bring their conversation along)
 - ✅ Completion badges mark finished sessions until you open them

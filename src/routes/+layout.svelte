@@ -217,6 +217,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let folderDraft = $state<string | null>(null);
 	let folderError = $state('');
 	let folderChecking = $state(false);
+	// Composer option: clear the session (new empty conversation) before sending.
+	let resetBeforeSend = $state(false);
 	// How far Claude's stated minutes overshot on recently finished turns.
 	let claudeTurnBiases = $state<number[]>([]);
 	const claudeBias = $derived(estimateBias(claudeTurnBiases));
@@ -490,6 +492,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	// ?agent= query param) shows its transcript read-only; the session itself
 	// stays the URL's identity, so the rail selection never moves.
 	const activeAgents = $derived(activeId ? agentsForSession(agents, activeId) : []);
+	// The same conditions as Session details → Clear session.
+	const canResetActive = $derived(Boolean(activeId && activeSummary && !isSideChat(activeSummary) && activeConfig
+		&& active?.status !== 'running' && !activeAgents.some(agentIsRunning) && !clearingSessionId));
 	function threadAttention(threadId: string): 'choice' | 'alert' | null {
 		if (threads[threadId]?.error) return 'alert';
 		const items = itemsOf(threads[threadId] ?? null);
@@ -910,7 +915,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	$effect(() => {
 		void activeId;
-		untrack(() => { folderDraft = null; folderError = ''; });
+		untrack(() => { folderDraft = null; folderError = ''; resetBeforeSend = false; });
 	});
 
 	/** The backend moved the session with this message's turn. */
@@ -2607,7 +2612,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const draftAttachments = selectedAttachments;
 		const text = draftInput.trim();
 		if ((!text && selectedAttachments.length === 0) || !activeId) return;
-		const id = activeId;
+		let id = activeId;
 
 		// Slash commands are handled client-side and dispatched to dedicated RPCs,
 		// mirroring the Codex TUI. Everything else is a normal model turn.
@@ -2617,6 +2622,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			composerHistoryOf(id).record(text);
 			await handleSlash(id, text);
 			return;
+		}
+
+		// "Clear first": start this message in a fresh, empty conversation.
+		// If clearing fails, nothing is sent and the draft stays.
+		if (resetBeforeSend && !interactiveQuestion) {
+			const freshId = await clearSession(id);
+			if (!freshId) return;
+			resetBeforeSend = false;
+			id = freshId;
 		}
 
 		const t = ensureThread(id);
@@ -2649,6 +2663,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			t.status = 'idle';
 			removeLocalItem(id, echoId);
 			addLocalNote(id, err instanceof Error ? err.message : 'failed to send message', 'err');
+			// Keep the unsent text, also when clearing moved us to a new session.
+			if (activeId === id && !input) input = draftInput;
 		} finally {
 			sendingMessage = false;
 		}
@@ -3454,12 +3470,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
-	async function clearSession(id: string) {
+	/** Replace a session with an empty conversation; the new session's ID, or null. */
+	async function clearSession(id: string): Promise<string | null> {
 		const session = sessions.find((entry) => entry.id === id);
-		if (!session || isSideChat(session) || clearingSessionId || sendingMessage) return;
+		if (!session || isSideChat(session) || clearingSessionId || sendingMessage) return null;
 		const host = sessionHost(id);
 		const config = sessionConfigs[id] ? { ...sessionConfigs[id] } : null;
-		const cwd = cwds[id] ?? session.cwd;
+		// A pending folder change starts the fresh conversation there.
+		const cwd = pendingFolders[id] ?? cwds[id] ?? session.cwd;
 		const name = session.name;
 		const fast = Boolean(fastSessions[id]);
 		const originalOrder = topSessions.map((entry) => entry.id);
@@ -3517,10 +3535,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
 			clearReplacementId = null;
 			sessionInfoDialog?.close();
+			delete pendingFolders[id];
 			await goto(`/s/${newId}${hostQuery(host)}`);
 			showArchiveNotice({ tone: 'info', message: 'Session cleared to 0 conversation tokens. Previous history is in Archived sessions.' });
+			return newId;
 		} catch (error) {
 			showArchiveNotice({ tone: 'error', message: `${error instanceof Error ? error.message : 'Could not clear session.'}${createdId ? ' The original history was kept; the new session is available in the list.' : ''}` });
+			return null;
 		} finally {
 			clearCreationSnapshot = null;
 			clearReplacementId = null;
@@ -6427,6 +6448,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<path d="M12 5v14M5 12h14" />
 								</svg>
 							</button>
+							{#if activeSummary && !isSideChat(activeSummary)}
+								<label class="reset-before-send" title={canResetActive
+									? 'Start this message in an empty conversation with the same name, folder and settings. The previous history is archived.'
+									: 'Available when the session and its agents are idle.'}>
+									<input type="checkbox" bind:checked={resetBeforeSend} disabled={!canResetActive || sendingMessage} />
+									Clear first
+								</label>
+							{/if}
 							<div class="composer-actions-end">
 								{#key activeId}
 									<ModelSuggestion prompt={input} models={activeModels} attachments={selectedAttachments.length} disabled={modelPending || effortPending || switchingPromptModel} running={active?.status === 'running'} onapply={applySuggestedSettings} />
@@ -9831,6 +9860,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		background: transparent;
 		color: var(--color-neutral);
 		font-size: var(--text-sm);
+	}
+
+	.reset-before-send {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-3xs);
+		margin-inline-end: auto;
+		color: var(--color-neutral);
+		font-size: var(--text-xs);
+		white-space: nowrap;
+		cursor: pointer;
+	}
+
+	.reset-before-send:has(input:disabled) {
+		opacity: 0.55;
+		cursor: default;
 	}
 
 	.switch-prompt-model {
