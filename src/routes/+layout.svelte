@@ -929,13 +929,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (host !== LOCAL_HOST && !hostChoices.some((entry) => entry.name === host)) await loadHostChoices();
 		const visibleText = visibleUserText(text);
 		const path = sharedChannelPathForSession(id);
+		const summary = sessions.find((session) => session.id === id);
+		const sessionName = summary ? shortLabel(summary) : id.slice(0, 8);
 		const alreadyJoined = itemsOf(threads[id] ?? null).some((item) => {
 			if (item.type !== 'userMessage') return false;
 			return ((item as any).content ?? []).some(
-				(part: any) => typeof part?.text === 'string' && hasSharedChannelContext(part.text, path ?? undefined)
+				(part: any) => typeof part?.text === 'string' && hasSharedChannelContext(part.text, path ?? undefined, sessionName)
 			);
 		});
-		return !path || alreadyJoined ? visibleText : withSharedChannelContext(visibleText, path, id);
+		return !path || alreadyJoined ? visibleText : withSharedChannelContext(visibleText, path, id, sessionName);
 	}
 
 	async function loadHostChoices() {

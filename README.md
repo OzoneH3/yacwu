@@ -55,10 +55,9 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🧭 Transcript position rail and scroll-to-bottom control
 - 📋 **Copy files** collects the contents of every file a response links to
 - ⌨️ Slash commands (see below), message copy buttons, and prompt history
-- 📝 Per-session rules: toggle progress reporting and shared coordination
-  notes, or add custom instructions. Shared coordination lets Codex and Claude
-  sessions in the same project folder leave notes for each other in
-  `.workspace/coordination`
+- 📝 Per-session rules: progress reporting, shared coordination, and custom
+  instructions. Shared coordination gives agents the session name and lets
+  same-folder Codex and Claude sessions leave notes in `.workspace/coordination`
 - 📂 Agents are told to write only inside the session folder, keeping scratch
   and temporary files in its self-ignoring `.workspace/`
 - 📨 Session messages: agents in Codex and Claude sessions on this machine can

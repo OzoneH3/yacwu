@@ -37,11 +37,12 @@ Write files only inside the session folder ${folder}. Put scratch files, notes, 
 const RELAY_GUIDANCE_MARKER = 'node "$YACWU_RELAY_CLI"';
 
 /** Joined with the current guidance: same folder, and the direct-message instructions present. */
-export function hasSharedChannelContext(text: string, path?: string): boolean {
+export function hasSharedChannelContext(text: string, path?: string, sessionName?: string): boolean {
 	return (
 		text.includes(SHARED_CHANNEL_MARKER) &&
 		text.includes(RELAY_GUIDANCE_MARKER) &&
-		(!path || text.includes(`Shared folder: ${path}\n`))
+		(!path || text.includes(`Shared folder: ${path}\n`)) &&
+		(!sessionName || text.includes(`Your session name: ${sessionName}\n`))
 	);
 }
 
@@ -67,11 +68,13 @@ export function visibleUserText(text: string): string {
 export function withSharedChannelContext(
 	text: string,
 	path: string,
-	sessionId: string
+	sessionId: string,
+	sessionName = sessionId
 ): string {
 	const visibleText = visibleUserText(text);
 	return `${visibleText}${SHARED_CHANNEL_MARKER}Yacwu shared background-work channel
 Shared folder: ${path}
+Your session name: ${sessionName}
 Your session ID: ${sessionId}
 
 Other Yacwu sessions using this same project folder on this machine, including Codex and Claude sessions, use this folder too. Create it if needed, inside the project's .workspace folder. Use it only for coordination notes, not project source files. Before substantial work, check for shared notes; publish a concise status and important decisions, and check again at meaningful checkpoints. Use uniquely named files so concurrent sessions do not overwrite each other. Address a note to a session ID when known, or mark it “all” for everyone. Do not wait or poll continuously; continue your assigned work and check opportunistically.

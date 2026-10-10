@@ -52,6 +52,7 @@ describe('shared background channel', () => {
 		const withContext = withSharedChannelContext(prompt, '/tmp/shared', 'thread-a');
 		expect(hasSharedChannelContext(withContext)).toBe(true);
 		expect(withContext).toContain('Your session ID: thread-a');
+		expect(withContext).toContain('Your session name: thread-a');
 		expect(visibleUserText(withContext)).toBe(prompt);
 		expect(visibleUserText(withContext.replace('\n\n<!--', '<!--'))).toBe(prompt);
 		expect(visibleUserText(prompt)).toBe(prompt);
@@ -72,4 +73,13 @@ describe('direct-message guidance', () => {
 		expect(hasSharedChannelContext(legacy, '/tmp/shared')).toBe(false);
 		expect(hasSharedChannelContext(withSharedChannelContext(legacy, '/tmp/shared', 'thread-a'), '/tmp/shared')).toBe(true);
 	});
+});
+
+test('shared context includes the display name and refreshes after a rename', () => {
+	const old = withSharedChannelContext('Work', '/project/.workspace/coordination', 'thread-a', 'Research');
+	expect(hasSharedChannelContext(old, '/project/.workspace/coordination', 'Research')).toBe(true);
+	expect(hasSharedChannelContext(old, '/project/.workspace/coordination', 'Research 2')).toBe(false);
+	const renamed = withSharedChannelContext(old, '/project/.workspace/coordination', 'thread-a', 'Research 2');
+	expect(renamed).toContain('Your session name: Research 2');
+	expect(visibleUserText(renamed)).toBe('Work');
 });
