@@ -28,7 +28,7 @@ const USAGE = `usage:
 
 /** Keep retrying an unreachable relay this long: it outlasts a Yacwu restart. */
 export const RETRY_WINDOW_MS = 15_000;
-/** Wait before retry number `attempt` (0-based). */
+/** Wait before retry number `attempt` (0-based). @param {number} attempt */
 export const retryDelay = (attempt) => Math.min(2000, 250 * (attempt + 1));
 
 /** @param {string[]} argv */
