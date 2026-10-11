@@ -528,7 +528,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 				if (!item._completed) continue;
 				const kind = detectPromptKind(String(item.text ?? ''));
 				if (kind === 'unknown' && dismissedAttentionByThread[threadId]) return null;
-				return kind === 'unknown' ? 'alert' : null;
+				return kind === 'unknown' ? 'choice' : null;
 			}
 		}
 		return null;
@@ -5814,8 +5814,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									class="needs-input-indicator"
 									class:choice={sessionAttentionById[s.id] === 'choice'}
 									role="img"
-									aria-label={sessionAttentionById[s.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
-									title={sessionAttentionById[s.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
+									aria-label={sessionAttentionById[s.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
+									title={sessionAttentionById[s.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
 								>{sessionAttentionById[s.id] === 'choice' ? '?' : '!'}</span>
 							{/if}
 							{#if finishedSessions[s.id] && s.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
@@ -5852,8 +5852,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										class="needs-input-indicator"
 										class:choice={sessionAttentionById[side.id] === 'choice'}
 										role="img"
-										aria-label={sessionAttentionById[side.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
-										title={sessionAttentionById[side.id] === 'choice' ? 'Codex is waiting for your choice' : 'Session needs your attention'}
+										aria-label={sessionAttentionById[side.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
+										title={sessionAttentionById[side.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
 									>{sessionAttentionById[side.id] === 'choice' ? '?' : '!'}</span>
 								{/if}
 								{#if finishedSessions[side.id] && side.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
