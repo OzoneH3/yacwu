@@ -569,6 +569,10 @@ the transcript, including after reload.
 Claude work is stopped and new tasks are blocked when either the five-hour or
 seven-day allowance reaches 90% used. Automatic stops appear in the transcript
 with the allowance reason and a Resume action, and queued todos stay paused.
+
+- Claude session-limit refusals automatically continue after reset; recover existing
+  stopped sessions with `node scripts/claude-quota-recovery.mjs .workspace/QUEUE.json`.
+
 Allowance-stopped Claude tasks automatically continue after fresh readings show
 both windows above their reserve. Pending resumes survive restarts in
 `.workspace`; manual stops, archived sessions, and tasks superseded by another

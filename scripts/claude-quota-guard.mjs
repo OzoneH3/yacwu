@@ -1,5 +1,12 @@
 /** @typedef {{id?: string | number, method?: string, params?: Record<string, any>, result?: any, error?: any}} RpcMessage */
 
+/** Recognize a provider refusal, never a quote in user input. @param {any} turn */
+export function claudeSessionLimitReason(turn) {
+  if (!['failed', 'completed'].includes(turn?.status)) return null;
+  const texts = [turn.error?.message, ...(turn.items ?? []).filter(/** @param {any} item */ item => item.type === 'agentMessage').map(/** @param {any} item */ item => item.text)];
+  return texts.find(text => typeof text === 'string' && /^you['’]ve hit your (?:session|usage) limit\b/i.test(text.trim())) ?? null;
+}
+
 /** Remaining allowance (%) below which Claude work stops, unless a prompt says otherwise. */
 export const DEFAULT_RESERVE = 10;
 const RESERVE_MARKER = /\s*<!-- YACWU_ALLOWANCE_RESERVE percent=(\d{1,3}) -->/g;
@@ -67,7 +74,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
   /** @param {any} turn */
   function annotateStop(turn) {
     const why = interrupted.get(turn?.id);
-    if (!why || turn?.status !== 'interrupted') return;
+    if (!why || (turn?.status !== 'interrupted' && !claudeSessionLimitReason(turn))) return;
     turn.error = { ...turn.error, message: why, yacwuQuotaStopped: true };
     const id = `quota-stop:${turn.id}`;
     turn.items ??= [];
@@ -140,7 +147,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
           entry.checking = false;
           const latest = message.result?.thread?.turns?.at(-1);
           if (message.error || !latest) entry.checkAt = now() + 300_000;
-          else if (latest.id !== entry.turnId || latest.status !== 'interrupted') { resumes.delete(entry.threadId); persist(); }
+          else if (latest.id !== entry.turnId || (entry.providerLimit ? !claudeSessionLimitReason(latest) : latest.status !== 'interrupted')) { resumes.delete(entry.threadId); persist(); }
           else {
             entry.starting = true;
             const id = `yacwu-quota-resume-${++serial}`;
@@ -181,9 +188,11 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
         void this.poll();
       }
       if (message.method === 'turn/completed') {
+        const providerReason = claudeSessionLimitReason(p.turn);
+        if (providerReason) interrupted.set(p.turn.id, providerReason);
         annotateStop(p.turn);
-        if (p.turn?.error?.yacwuQuotaStopped && p.threadId) {
-          resumes.set(p.threadId, { threadId: p.threadId, turnId: p.turn.id, reason: p.turn.error.message, progress: progressPreferences.get(p.threadId) ?? false, reserve: reserveFor(p.threadId), checkAt: now(), checking: false, starting: false });
+        if ((p.turn?.error?.yacwuQuotaStopped || providerReason) && p.threadId) {
+          resumes.set(p.threadId, { threadId: p.threadId, turnId: p.turn.id, reason: providerReason ?? p.turn.error.message, providerLimit: !!providerReason, progress: progressPreferences.get(p.threadId) ?? false, reserve: providerReason ? Math.max(1, reserveFor(p.threadId)) : reserveFor(p.threadId), checkAt: now() + (providerReason ? 120_000 : 0), checking: false, starting: false });
           persist();
         }
         if (active.get(p.threadId) === p.turn?.id) active.delete(p.threadId);

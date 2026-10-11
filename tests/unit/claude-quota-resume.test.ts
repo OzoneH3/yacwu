@@ -105,3 +105,36 @@ test('a rate-limited new task gets a quiet usage recheck at Retry-After without 
 	expect(reads).toBe(3);
 	guard.close();
 });
+
+const sessionLimit = "You've hit your session limit · resets 2:40am (Europe/Berlin)";
+
+test('Claude provider session limits are queued and resumed from failed turns', async () => {
+ const sent: any[] = [], saved: any[][] = [];
+ const guard = createClaudeQuotaGuard(async () => ({ rateLimits: { primary: { usedPercent: 0 }, secondary: { usedPercent: 0 } } }), m => sent.push(m), () => {}, { now: () => 1000, saveWaiting: entries => saved.push(structuredClone(entries)) });
+ const failed = { id: 'limited', status: 'failed', error: { message: sessionLimit }, items: [] };
+ guard.observe({ method: 'turn/completed', params: { threadId: 'research', turn: failed } });
+ expect(saved.at(-1)?.[0]).toMatchObject({ threadId: 'research', turnId: 'limited', providerLimit: true });
+ expect(sent).toHaveLength(0);
+ const restored = createClaudeQuotaGuard(async () => ({ rateLimits: { primary: { usedPercent: 0 }, secondary: { usedPercent: 0 } } }), m => sent.push(m), () => {}, { now: () => 200000, waiting: saved.at(-1) });
+ await restored.poll();
+ restored.observe({ id: sent[0].id, result: { thread: { turns: [failed] } } });
+ expect(sent[1]).toMatchObject({ method: 'turn/start', params: { threadId: 'research' } });
+});
+
+test('limit responses in assistant output are queued; user quotes and unrelated failures are not', () => {
+ for (const [type, text, expected] of [['agentMessage', sessionLimit, 1], ['userMessage', sessionLimit, 0], ['agentMessage', 'I reviewed the session limit handling.', 0]] as const) {
+  const saved: any[][] = [];
+  const guard = createClaudeQuotaGuard(async () => ({}), () => {}, () => {}, { saveWaiting: entries => saved.push(structuredClone(entries)) });
+  guard.observe({ method: 'turn/completed', params: { threadId: 't', turn: { id: 'a', status: 'completed', items: [{ type, text }] } } });
+  expect(saved.at(-1)?.length ?? 0).toBe(expected);
+ }
+});
+
+test('a provider-limited resume is discarded when its error is no longer a limit', async () => {
+ const sent: any[] = [], saved: any[][] = [];
+ const guard = createClaudeQuotaGuard(async () => ({ rateLimits: { primary: { usedPercent: 0 }, secondary: { usedPercent: 0 } } }), m => sent.push(m), () => {}, { waiting: [{ ...paused, providerLimit: true }], saveWaiting: entries => saved.push(structuredClone(entries)) });
+ await guard.poll();
+ guard.observe({ id: sent[0].id, result: { thread: { turns: [{ id: paused.turnId, status: 'failed', error: { message: 'Permission denied' } }] } } });
+ expect(sent).toHaveLength(1);
+ expect(saved.at(-1)).toEqual([]);
+});
