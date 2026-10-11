@@ -28,8 +28,10 @@
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
 	import { settleTranscriptBottom } from '$lib/transcript-scroll';
 	import { runtimeOutcome, interruptionReason } from '$lib/runtime-reconciliation';
-	import { page } from '$app/state';
+	import { page, updated } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { version as appVersion } from '$app/environment';
+	import { parseAppVersion, appVersionTitle } from '$lib/app-version';
 	import {
 		currentContextTokens,
 		reportedTokenStatistics,
@@ -4997,6 +4999,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (event.target === event.currentTarget) settingsDialog?.close();
 	}
 
+	const buildVersion = parseAppVersion(appVersion);
+
+	function checkForNewBuild() {
+		void updated.check().catch(() => { /* offline or dev server: try again later */ });
+	}
+
 	onMount(() => {
 		try { messageTimestampStore = createMessageTimestampStore(localStorage); } catch { /* Keep live timestamps for this page if storage is unavailable. */ }
 		void loadHostChoices();
@@ -5005,6 +5013,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const unlockSounds = () => { if (settings.sounds) soundPlayer.unlock(); };
 		window.addEventListener('pointerdown', unlockSounds);
 		window.addEventListener('keydown', unlockSounds);
+		// Besides SvelteKit's own polling, look for a new build when the tab comes back.
+		const checkOnVisible = () => { if (document.visibilityState === 'visible') checkForNewBuild(); };
+		document.addEventListener('visibilitychange', checkOnVisible);
 		const transferTitle = (element: Element) => {
 			const title = element.getAttribute('title');
 			if (title !== null) {
@@ -5160,6 +5171,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const msg = JSON.parse(e.data) as JsonRpcNotification;
 				if (msg.method === 'yacwu/connected') {
 					connected = true;
+					checkForNewBuild();
 					void reconcileInterruptedSessions();
 					if (activeId) void loadRelayLog(activeId);
 					return;
@@ -5173,6 +5185,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			es.close();
 			window.removeEventListener('pointerdown', unlockSounds);
 			window.removeEventListener('keydown', unlockSounds);
+			document.removeEventListener('visibilitychange', checkOnVisible);
 			tooltipObserver.disconnect();
 			window.removeEventListener('pointerover', onTooltipPointerOver);
 			window.removeEventListener('pointerout', onTooltipPointerOut);
@@ -5740,6 +5753,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		</nav>
 		<div class="hint">
 			<span>{topSessions.length} session{topSessions.length === 1 ? '' : 's'}</span>
+			{#if updated.current}
+				<button class="build-update" type="button" title="A new Yacwu build is available. Reload the page to use it; running sessions keep going." onclick={() => location.reload()}>New version · Reload</button>
+			{:else}
+				<span class="build-version" title={appVersionTitle(appVersion)}>{buildVersion.commit}</span>
+			{/if}
 		</div>
 	</aside>
 
@@ -7792,6 +7810,30 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		border-block-start: var(--rule-hair) solid var(--color-rule);
 		color: var(--color-muted);
 		font-size: var(--text-xs);
+	}
+
+	.hint .build-version,
+	.hint .build-update {
+		margin-inline-start: auto;
+	}
+
+	.hint .build-version {
+		font-family: var(--font-outlier);
+	}
+
+	.hint .build-update {
+		padding: 0 var(--space-xs);
+		border: var(--rule-hair) solid var(--color-accent);
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--color-accent);
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.hint .build-update:hover {
+		background: var(--color-accent);
+		color: var(--color-accent-ink);
 	}
 
 	.chat {

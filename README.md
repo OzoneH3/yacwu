@@ -81,6 +81,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🧾 `/todo <task>` queues follow-up work to run after the current turn
 - ♻️ Optional persistent backends (`YACWU_PERSISTENT_BACKENDS=1`): restarting
   Yacwu leaves running agents alone
+- 🏷️ The session list footer shows the build's commit and offers a reload when
+  a newer build is deployed
 - 🔁 Alternative backends via `YACWU_BACKENDS`, such as
   [claude-codex](https://github.com/fuergaosi233/claude-codex)
 - 🌐 Remote machines over SSH with a persistent app-server and full feature
