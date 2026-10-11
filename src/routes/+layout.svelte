@@ -557,7 +557,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		untrack(() => {
 			const due = signalSounds(previousSignals, next, (id) => Date.now() - (lastLiveAt.get(id) ?? -Infinity) < 10_000);
 			previousSignals = next;
-			if (settings.sounds) for (const [id, kind] of due) soundPlayer.play(kind, id);
+			if (settings.sounds) for (const [id, kind] of due) soundPlayer.play(kind, id, Date.now(), settings.soundVolume);
 		});
 	});
 	function toggleSounds() {
@@ -1671,7 +1671,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				// A session (not an agent) finished. A question or error sound
 				// for the same moment wins: the player keeps one per session.
 				if (tid && !agents[tid] && p.turn?.status === 'completed' && settings.sounds) {
-					setTimeout(() => { if (settings.sounds) soundPlayer.play('finish', tid); }, 300);
+					setTimeout(() => { if (settings.sounds) soundPlayer.play('finish', tid, Date.now(), settings.soundVolume); }, 300);
 				}
 				const completedTurnId = typeof p.turn?.id === 'string' ? p.turn.id : null;
 				const currentTurnId = tid ? threads[tid]?.turnId : null;
@@ -5161,7 +5161,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			</button>
 		</div>
 		{#if settingsOpen}
-			<GlobalSettingsForm {settings} {theme} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} relayDefault={relayAcceptByDefault} onrelaydefaultchange={setRelayAcceptByDefault} />
+			<GlobalSettingsForm {settings} {theme} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} relayDefault={relayAcceptByDefault} onrelaydefaultchange={setRelayAcceptByDefault} onsoundpreview={(volume) => { soundPlayer.unlock(); soundPlayer.preview(volume); }} />
 		{/if}
 	</div>
 </dialog>

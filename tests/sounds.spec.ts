@@ -78,3 +78,13 @@ test('the speaker button mutes sounds', async ({ page }) => {
 	await page.waitForTimeout(600);
 	expect(await played(page)).toEqual([]);
 });
+
+test('the volume slider in Settings plays a preview', async ({ page }) => {
+	await mock(page);
+	await page.locator('button.settings-open').click();
+	const volume = page.getByRole('slider', { name: 'Volume' });
+	await expect(volume).toHaveValue('50');
+	await volume.fill('80');
+	await expect.poll(() => played(page)).toEqual(FINISH);
+	await expect(page.locator('.global-settings')).toContainText('80');
+});

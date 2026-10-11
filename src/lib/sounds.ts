@@ -12,6 +12,11 @@ export const SOUND_NOTES: Record<SoundKind, { wave: OscillatorType; volume: numb
 	error: { wave: 'sine', volume: 0.1, notes: [{ frequency: 440, at: 0, length: 0.24 }, { frequency: 349.23, at: 0.2, length: 0.38 }] }
 };
 
+/** Volume setting (0–100) as a gain multiplier; 25 is the original level. */
+export function volumeGain(volume: number): number {
+	return Math.max(0, Math.min(100, volume)) / 25;
+}
+
 /** One sound per session at a time: a question or error just played covers its "finished". */
 export const SESSION_COOLDOWN_MS = 2500;
 
@@ -36,6 +41,25 @@ export function createSoundPlayer(createContext: () => AudioContext | null = () 
 	let context: AudioContext | null = null;
 	const lastBySession = new Map<string, number>();
 	const audio = () => (context ??= createContext());
+	function render(kind: SoundKind, gain: number) {
+		const ctx = audio();
+		if (!ctx || ctx.state !== 'running' || gain <= 0) return;
+		const { wave, volume, notes } = SOUND_NOTES[kind];
+		for (const note of notes) {
+			const start = ctx.currentTime + note.at;
+			const oscillator = ctx.createOscillator();
+			const envelope = ctx.createGain();
+			oscillator.type = wave;
+			oscillator.frequency.value = note.frequency;
+			// Soft attack and a smooth exponential fade: no clicks.
+			envelope.gain.setValueAtTime(0.0001, start);
+			envelope.gain.exponentialRampToValueAtTime(volume * gain, start + 0.015);
+			envelope.gain.exponentialRampToValueAtTime(0.0001, start + note.length);
+			oscillator.connect(envelope).connect(ctx.destination);
+			oscillator.start(start);
+			oscillator.stop(start + note.length + 0.02);
+		}
+	}
 	return {
 		/** Browsers start audio suspended until the user interacts with the page. */
 		unlock() {
@@ -43,28 +67,16 @@ export function createSoundPlayer(createContext: () => AudioContext | null = () 
 			if (ctx?.state === 'suspended') void ctx.resume().catch(() => {});
 		},
 		/** Play unless this session made a sound moments ago; returns whether it played. */
-		play(kind: SoundKind, sessionId: string, now = Date.now()): boolean {
+		play(kind: SoundKind, sessionId: string, now = Date.now(), volume = 25): boolean {
 			const last = lastBySession.get(sessionId);
 			if (last !== undefined && now - last < SESSION_COOLDOWN_MS) return false;
 			lastBySession.set(sessionId, now);
-			const ctx = audio();
-			if (!ctx || ctx.state !== 'running') return true;
-			const { wave, volume, notes } = SOUND_NOTES[kind];
-			for (const note of notes) {
-				const start = ctx.currentTime + note.at;
-				const oscillator = ctx.createOscillator();
-				const gain = ctx.createGain();
-				oscillator.type = wave;
-				oscillator.frequency.value = note.frequency;
-				// Soft attack and a smooth exponential fade: no clicks.
-				gain.gain.setValueAtTime(0.0001, start);
-				gain.gain.exponentialRampToValueAtTime(volume, start + 0.015);
-				gain.gain.exponentialRampToValueAtTime(0.0001, start + note.length);
-				oscillator.connect(gain).connect(ctx.destination);
-				oscillator.start(start);
-				oscillator.stop(start + note.length + 0.02);
-			}
+			render(kind, volumeGain(volume));
 			return true;
+		},
+		/** Try a volume from Settings, outside any session's cooldown. */
+		preview(volume: number, kind: SoundKind = 'finish') {
+			render(kind, volumeGain(volume));
 		}
 	};
 }

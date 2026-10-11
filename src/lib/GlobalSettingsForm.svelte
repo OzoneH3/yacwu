@@ -7,7 +7,8 @@
 		onchange,
 		onthemechange,
 		relayDefault = null,
-		onrelaydefaultchange
+		onrelaydefaultchange,
+		onsoundpreview
 	}: {
 		settings: GlobalSettings;
 		theme: 'light' | 'dark';
@@ -16,6 +17,8 @@
 		/** Server-side default for direct messages; null until loaded. */
 		relayDefault?: boolean | null;
 		onrelaydefaultchange?: (accept: boolean) => Promise<boolean>;
+		/** Play a sample at this volume. */
+		onsoundpreview?: (volume: number) => void;
 	} = $props();
 	let relayStatus = $state('');
 	async function changeRelayDefault(event: Event) {
@@ -46,7 +49,12 @@
 			</select>
 		</label>
 		<label class="check"><input type="checkbox" checked={settings.sounds} onchange={(e) => set('sounds', e.currentTarget.checked)} /> Sounds</label>
-		<p class="description">A soft chime when a session finishes, asks a question, or hits an error. The speaker button at the top right mutes them.</p>
+		<label class="row" class:disabled={!settings.sounds}>
+			<span>Volume</span>
+			<span class="number"><input type="range" disabled={!settings.sounds} min={settingRanges.soundVolume.min} max={settingRanges.soundVolume.max} step="5" value={settings.soundVolume}
+				onchange={(e) => { setNumber('soundVolume', e); onsoundpreview?.(clampSetting('soundVolume', e.currentTarget.value)); }} /> {settings.soundVolume}</span>
+		</label>
+		<p class="description">A soft chime when a session finishes, asks a question, or hits an error. The speaker button at the top right mutes them; the volume plays a sample when changed.</p>
 	</section>
 
 	<section aria-labelledby="settings-composer">

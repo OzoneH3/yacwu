@@ -27,6 +27,8 @@ export interface GlobalSettings {
 	claudeAllowanceReserve: number;
 	/** Play a short sound when a session finishes, asks a question, or hits an error. */
 	sounds: boolean;
+	/** Sound volume, 0–100 (25 is the original level). */
+	soundVolume: number;
 }
 
 export const GLOBAL_SETTINGS_KEY = 'yacwu-settings';
@@ -43,7 +45,8 @@ export const defaultSettings: GlobalSettings = {
 	quietWorkerNotices: true,
 	usageRefreshSeconds: 30,
 	claudeAllowanceReserve: 10,
-	sounds: true
+	sounds: true,
+	soundVolume: 50
 };
 
 /** Allowed ranges for numeric settings. */
@@ -51,7 +54,8 @@ export const settingRanges = {
 	collapseOutputLines: { min: 3, max: 200 },
 	claudeReminderMinutes: { min: 1, max: 60 },
 	usageRefreshSeconds: { min: 10, max: 600 },
-	claudeAllowanceReserve: { min: 0, max: 50 }
+	claudeAllowanceReserve: { min: 0, max: 50 },
+	soundVolume: { min: 0, max: 100 }
 } as const;
 
 export function clampSetting(key: keyof typeof settingRanges, value: unknown): number {
@@ -83,7 +87,8 @@ export function readSettings(raw: string | null): GlobalSettings {
 		quietWorkerNotices: flag('quietWorkerNotices'),
 		usageRefreshSeconds: key(parsed, 'usageRefreshSeconds'),
 		claudeAllowanceReserve: key(parsed, 'claudeAllowanceReserve'),
-		sounds: flag('sounds')
+		sounds: flag('sounds'),
+		soundVolume: key(parsed, 'soundVolume')
 	};
 }
 

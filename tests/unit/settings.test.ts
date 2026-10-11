@@ -38,3 +38,10 @@ describe('global settings', () => {
 		expect(visibleUserText(text)).toBe('Do the task');
 	});
 });
+
+test('sound volume defaults to 50 and stays within 0–100', () => {
+	expect(readSettings(null).soundVolume).toBe(50);
+	expect(readSettings('{"soundVolume":80}').soundVolume).toBe(80);
+	expect(readSettings('{"soundVolume":400}').soundVolume).toBe(100);
+	expect(readSettings('{"soundVolume":"loud"}').soundVolume).toBe(50);
+});
