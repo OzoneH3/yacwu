@@ -155,10 +155,13 @@ bun run build                              # build the web UI into ./build
 YACWU_INSECURE_SKIP_AUTH=1 bun run start   # serve UI + API on http://127.0.0.1:3000
 ```
 
-`./start.sh` installs dependencies, builds the UI, and starts the server from
-the project directory. It defaults to authentication disabled for local use,
-the Claude backend below, and [persistent backends](#restarting-without-stopping-agents). Environment overrides are respected; use
-`YACWU_BACKENDS= ./start.sh` for Codex only.
+`./start.sh` installs dependencies and builds the UI and the server. With the
+[`yacwu` user service](#restarting-without-stopping-agents) installed it then
+restarts the service on that build, leaving running agents alone; otherwise
+(or with `./start.sh --foreground`) it runs the server in the foreground. The
+foreground run defaults to authentication disabled for local use, the Claude
+backend below, and persistent backends. Environment overrides are respected;
+use `YACWU_BACKENDS= ./start.sh --foreground` for Codex only.
 
 `bun run start` runs the Gleam server (`server/`), which serves the static UI
 build, the REST/SSE API, and spawns/manages one `codex app-server` process
