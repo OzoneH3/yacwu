@@ -1698,7 +1698,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 			case 'thread/closed': {
-				if (tid) removeSession(tid);
+				if (!tid) break;
+				// Codex sends this when it unloads a thread from memory (no
+				// subscriber for a while), not when it is deleted: only an
+				// ephemeral side chat is gone for good. Any other session keeps
+				// its place and is resumed when opened again.
+				if (isSideChat(sessions.find((s) => s.id === tid))) {
+					removeSession(tid);
+					break;
+				}
+				sessionHistoryLoaded[tid] = false;
+				if (tid === activeId) void openSession(tid, false);
 				break;
 			}
 			case 'thread/unarchived': {
