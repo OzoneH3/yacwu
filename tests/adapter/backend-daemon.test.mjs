@@ -4,7 +4,7 @@ import { createConnection } from 'node:net';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acceptKey, createDecoder, encodeFrame, parseArgs, runDaemon } from '../../scripts/backend-daemon.mjs';
+import { acceptKey, createDecoder, createHeldMessages, encodeFrame, messageKind, parseArgs, runDaemon } from '../../scripts/backend-daemon.mjs';
 
 test('arguments name the socket and the backend command', () => {
   assert.deepEqual(parseArgs(['app-server', '--listen', 'unix:///tmp/x.sock', '--', 'node', 'b.mjs', 'a']), { socketPath: '/tmp/x.sock', command: ['node', 'b.mjs', 'a'] });
@@ -73,6 +73,98 @@ test('the daemon relays JSON lines to its backend and keeps it across reconnects
   // The same backend process answered both connections.
   assert.equal(first.result.pid, second.result.pid);
   assert.equal(first.result.pid, child.pid);
+});
+
+/** A minimal WebSocket client for the daemon's socket. */
+function connectClient(socketPath) {
+  const socket = createConnection(socketPath);
+  let buffered = Buffer.alloc(0);
+  let upgraded = false;
+  const received = [];
+  const waiters = [];
+  const deliver = () => { while (received.length && waiters.length) waiters.shift()(received.shift()); };
+  const opened = new Promise((resolve, reject) => {
+    socket.on('connect', () => socket.write('GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'));
+    socket.on('error', reject);
+    socket.on('data', (chunk) => {
+      buffered = Buffer.concat([buffered, chunk]);
+      if (!upgraded) {
+        const end = buffered.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        upgraded = true;
+        buffered = buffered.subarray(end + 4);
+        resolve();
+      }
+      // Test messages stay under 126 bytes: a one-byte length.
+      while (buffered.length >= 2 && buffered.length >= 2 + buffered[1]) {
+        received.push(JSON.parse(buffered.subarray(2, 2 + buffered[1]).toString()));
+        buffered = buffered.subarray(2 + buffered[1]);
+      }
+      deliver();
+    });
+  });
+  return {
+    opened,
+    send(message) {
+      const payload = Buffer.from(JSON.stringify(message));
+      const mask = Buffer.from([9, 8, 7, 6]);
+      socket.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, Buffer.from(payload.map((b, i) => b ^ mask[i % 4]))]));
+    },
+    next: () => new Promise((resolve) => { waiters.push(resolve); deliver(); }),
+    pending: () => received.length,
+    close: () => new Promise((resolve) => { socket.once('close', resolve); socket.destroy(); })
+  };
+}
+
+test('what the backend sends between clients waits for the next client\'s handshake', { timeout: 10000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'yacwu-backend-daemon-'));
+  const socketPath = join(dir, 'b.sock');
+  // A stand-in backend: answers every request; on "later" it sends a
+  // notification and a request of its own shortly afterwards.
+  const backend = `require('readline').createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);
+    if(m.id!==undefined&&m.method)console.log(JSON.stringify({id:m.id,result:{}}));
+    if(m.method==='later')setTimeout(()=>{console.log(JSON.stringify({method:'item/completed',params:{n:1}}));console.log(JSON.stringify({id:'q1',method:'item/tool/requestUserInput',params:{}}))},300);
+    if(m.id==='q1')console.log(JSON.stringify({method:'answered',params:{}}))})`;
+  const { child, server } = runDaemon({ socketPath, command: [process.execPath, '-e', backend] });
+  t.after(() => { child.removeAllListeners('exit'); child.kill(); server.close(); });
+  await new Promise((resolve) => server.on('listening', resolve));
+
+  const first = connectClient(socketPath);
+  await first.opened;
+  first.send({ id: 1, method: 'initialize' });
+  assert.deepEqual(await first.next(), { id: 1, result: {} });
+  first.send({ method: 'initialized' });
+  first.send({ id: 2, method: 'later' });
+  assert.deepEqual(await first.next(), { id: 2, result: {} });
+  // Gone before the backend's messages arrive, like Yacwu restarting.
+  await first.close();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
+  const second = connectClient(socketPath);
+  await second.opened;
+  second.send({ id: 1, method: 'initialize' });
+  // The handshake reply comes first; nothing held is sent before `initialized`.
+  assert.deepEqual(await second.next(), { id: 1, result: {} });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(second.pending(), 0);
+  second.send({ method: 'initialized' });
+  assert.deepEqual(await second.next(), { method: 'item/completed', params: { n: 1 } });
+  assert.deepEqual(await second.next(), { id: 'q1', method: 'item/tool/requestUserInput', params: {} });
+  // The new client can answer the request the backend has been waiting on.
+  second.send({ id: 'q1', result: {} });
+  assert.deepEqual(await second.next(), { method: 'answered', params: {} });
+  await second.close();
+});
+
+test('held messages are bounded, oldest notifications first, requests kept', () => {
+  const held = createHeldMessages(3);
+  held.hold('r1', true);
+  for (const n of [1, 2, 3, 4]) held.hold(`n${n}`, false);
+  assert.deepEqual(held.take(), ['r1', 'n3', 'n4']);
+  assert.equal(held.size, 0);
+  assert.equal(messageKind('{"id":1,"method":"x"}'), 'request');
+  assert.equal(messageKind('{"method":"x"}'), 'notification');
+  assert.equal(messageKind('{"id":1,"result":{}}'), 'response');
 });
 
 test('server frames carry their length correctly', () => {

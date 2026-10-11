@@ -8,8 +8,11 @@
 // stdio. Yacwu connects over the Unix socket with the same WebSocket framing
 // codex's own Unix-socket transport uses (one JSON-RPC message per text
 // frame). One client at a time: a reconnect replaces the previous one.
-// Messages the backend sends while no client is connected are dropped;
-// Yacwu re-resumes its threads and re-reads their history on reconnect.
+// Notifications and requests the backend sends while no client is ready
+// (between connections, e.g. while Yacwu restarts, or before the new
+// client's `initialized`) are held and delivered once it is: a dropped
+// request would leave the backend waiting for an answer forever. Responses
+// are never held; one arriving with no client was for a client that is gone.
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -88,6 +91,49 @@ export function createDecoder() {
   };
 }
 
+/** Held messages kept at most; beyond it the oldest notifications go first. */
+const MAX_HELD = 20_000;
+
+/** @param {string} line @returns {'request' | 'notification' | 'response'} */
+export function messageKind(line) {
+  try {
+    const message = JSON.parse(line);
+    if (message && typeof message.method === 'string') return message.id === undefined ? 'notification' : 'request';
+  } catch { /* not JSON: pass it on like a notification */ return 'notification'; }
+  return 'response';
+}
+
+/**
+ * What the backend sent while no client was ready, in order. Requests are
+ * kept even past the limit: each one has a backend waiting on its answer.
+ */
+export function createHeldMessages(limit = MAX_HELD) {
+  /** @type {{ line: string, request: boolean }[]} */
+  let held = [];
+  return {
+    /** @param {string} line @param {boolean} request */
+    hold(line, request) {
+      held.push({ line, request });
+      if (held.length > limit) {
+        const oldest = held.findIndex((entry) => !entry.request);
+        if (oldest >= 0) held.splice(oldest, 1);
+      }
+    },
+    /** @returns {string[]} */
+    take() {
+      const lines = held.map((entry) => entry.line);
+      held = [];
+      return lines;
+    },
+    get size() { return held.length; }
+  };
+}
+
+/** @param {Buffer} payload */
+function isInitialized(payload) {
+  try { return JSON.parse(payload.toString('utf8'))?.method === 'initialized'; } catch { return false; }
+}
+
 /**
  * Run the daemon: one backend child, one socket server.
  * @param {{ socketPath: string, command: string[] }} options
@@ -96,8 +142,18 @@ export function runDaemon({ socketPath, command }) {
   const child = spawn(command[0], command.slice(1), { stdio: ['pipe', 'pipe', 'inherit'] });
   /** @type {import('node:net').Socket | null} */
   let client = null;
-  const send = (opcode, payload) => { if (client && !client.destroyed) client.write(encodeFrame(opcode, payload)); };
-  createInterface({ input: child.stdout }).on('line', (line) => { if (line) send(0x1, Buffer.from(line, 'utf8')); });
+  /** The client has finished its handshake (sent `initialized`). */
+  let ready = false;
+  const held = createHeldMessages();
+  const connected = () => Boolean(client && !client.destroyed);
+  const send = (opcode, payload) => { if (connected()) client.write(encodeFrame(opcode, payload)); };
+  createInterface({ input: child.stdout }).on('line', (line) => {
+    if (!line) return;
+    const kind = messageKind(line);
+    if (kind === 'response') { send(0x1, Buffer.from(line, 'utf8')); return; }
+    if (connected() && ready) send(0x1, Buffer.from(line, 'utf8'));
+    else held.hold(line, kind === 'request');
+  });
   const cleanup = () => { try { rmSync(socketPath, { force: true }); } catch { /* gone */ } };
   child.on('exit', (code, signal) => { cleanup(); process.exit(code ?? (signal ? 1 : 0)); });
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => { child.kill('SIGTERM'); });
@@ -120,6 +176,7 @@ export function runDaemon({ socketPath, command }) {
         // A reconnect replaces the previous connection.
         if (client && client !== socket) client.destroy();
         client = socket;
+        ready = false;
         decoder = createDecoder();
         chunk = header.subarray(end + 4);
         header = Buffer.alloc(0);
@@ -128,12 +185,17 @@ export function runDaemon({ socketPath, command }) {
       let messages;
       try { messages = decoder.push(chunk); } catch { socket.destroy(); return; }
       for (const { opcode, payload } of messages) {
-        if (opcode === 0x1) child.stdin.write(`${payload.toString('utf8')}\n`);
-        else if (opcode === 0x9) socket.write(encodeFrame(0xa, payload));
+        if (opcode === 0x1) {
+          child.stdin.write(`${payload.toString('utf8')}\n`);
+          if (!ready && socket === client && isInitialized(payload)) {
+            ready = true;
+            for (const line of held.take()) send(0x1, Buffer.from(line, 'utf8'));
+          }
+        } else if (opcode === 0x9) socket.write(encodeFrame(0xa, payload));
         else if (opcode === 0x8) { socket.end(encodeFrame(0x8, Buffer.alloc(0))); }
       }
     });
-    socket.on('close', () => { if (client === socket) client = null; });
+    socket.on('close', () => { if (client === socket) { client = null; ready = false; } });
     socket.on('error', () => {});
   });
   cleanup();
