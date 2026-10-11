@@ -5,7 +5,7 @@ import gleam/option.{None, Some}
 import gleeunit/should
 import simplifile
 import yacwu/git
-import yacwu/project_rules.{Rules}
+import yacwu/project_rules.{Applied, Rules}
 
 pub fn project_name_test() {
   project_rules.project_name("/home/u/Apps/growpilot/.git")
@@ -73,6 +73,58 @@ pub fn worktrees_share_a_project_identity_test() {
   let assert Ok(main_dir) = git.common_dir(repo)
   git.common_dir(git.local_repo(other)) |> should.equal(Ok(main_dir))
   project_rules.project_name(main_dir) |> should.equal("main")
+  // A separate clone, even one named like the original, is its own project.
+  let clone = filepath.join(root, "elsewhere/main")
+  let assert Ok(#(0, _)) = repo.exec(["clone", "-q", main, clone])
+  let assert Ok(clone_dir) = git.common_dir(git.local_repo(clone))
+  clone_dir |> should.not_equal(main_dir)
+  project_rules.project_name(clone_dir) |> should.equal("main")
   let _ = simplifile.delete(root)
   Nil
+}
+
+fn local_backend(host: String) -> Bool {
+  host == "claude"
+}
+
+/// Codex ("local") and Claude (a local backend) sessions in one repository
+/// share its rules; remote hosts and other repositories do not.
+pub fn backends_on_this_machine_share_a_project_test() {
+  let codex = project_rules.project_key("local", "/r/growpilot/.git")
+  project_rules.machine_key(codex, local_backend) |> should.equal(codex)
+  project_rules.project_key("claude", "/r/growpilot/.git")
+  |> project_rules.machine_key(local_backend)
+  |> should.equal(codex)
+  project_rules.project_key("pi", "/r/growpilot/.git")
+  |> project_rules.machine_key(local_backend)
+  |> should.equal("pi:/r/growpilot/.git")
+  project_rules.project_key("claude", "/r/yacwu/.git")
+  |> project_rules.machine_key(local_backend)
+  |> should.not_equal(codex)
+}
+
+pub fn status_test() {
+  let project = "local:/r/growpilot/.git"
+  let applied = fn(key, version) { Some(Applied(key, version, "", 0)) }
+  project_rules.status(None, project, 1, local_backend)
+  |> should.equal("unknown")
+  project_rules.status(applied(project, 1), project, 1, local_backend)
+  |> should.equal("current")
+  project_rules.status(applied(project, 0), project, 1, local_backend)
+  |> should.equal("outdated")
+  // Claude sessions recorded before keys were shared per machine.
+  project_rules.status(
+    applied("claude:/r/growpilot/.git", 0),
+    project,
+    1,
+    local_backend,
+  )
+  |> should.equal("outdated")
+  project_rules.status(
+    applied("local:/r/yacwu/.git", 1),
+    project,
+    1,
+    local_backend,
+  )
+  |> should.equal("otherProject")
 }

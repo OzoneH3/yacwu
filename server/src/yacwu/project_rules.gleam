@@ -1,7 +1,8 @@
 //// Project steering: one editable rule set per project, shared by every
-//// worktree of a repository. Rules reach a thread once, as developer
-//// instructions when it starts, and the version each thread loaded is kept
-//// on record so Yacwu can show when a running session's rules are outdated.
+//// worktree of a repository and every backend on this machine. Rules reach
+//// a thread once, as developer instructions when it starts, and the version
+//// each thread loaded is kept on record so Yacwu can show when a running
+//// session's rules are outdated.
 //// Changing the rules never rewrites an existing thread's instructions.
 
 import envoy
@@ -47,6 +48,40 @@ pub fn path() -> String {
 /// repository resolve to the same rules. Folders outside Git use their path.
 pub fn project_key(host: String, identity: String) -> String {
   host <> ":" <> identity
+}
+
+/// Backends on this machine (Codex, Claude) share its filesystem, so a
+/// repository is one project whichever of them runs the session. Keys of
+/// such hosts read as "local:"; remote hosts keep their own name.
+pub fn machine_key(key: String, is_local: fn(String) -> Bool) -> String {
+  case string.split_once(key, ":") {
+    Ok(#(host, identity)) ->
+      case host != "local" && is_local(host) {
+        True -> project_key("local", identity)
+        False -> key
+      }
+    Error(_) -> key
+  }
+}
+
+/// How a session's loaded rules compare with its project's current rules:
+/// "current", "outdated", "otherProject", or "unknown" (started before
+/// Yacwu tracked rules).
+pub fn status(
+  applied: Option(Applied),
+  project: String,
+  current_version: Int,
+  is_local: fn(String) -> Bool,
+) -> String {
+  case applied {
+    None -> "unknown"
+    Some(applied) ->
+      case machine_key(applied.project, is_local) == project {
+        False -> "otherProject"
+        True if applied.version < current_version -> "outdated"
+        True -> "current"
+      }
+  }
 }
 
 /// The repository folder's name: the Git directory's parent, or the folder.

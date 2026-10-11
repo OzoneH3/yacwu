@@ -2086,11 +2086,13 @@ fn create_thread_on(
 
 // -- Project rules --------------------------------------------------------------
 
-/// The project a folder belongs to on this host: its repository's shared Git
-/// directory, so every worktree resolves to the same rules.
+/// The project a folder belongs to on this machine: its repository's shared
+/// Git directory, so every worktree, and Codex and Claude alike, resolve to
+/// the same rules. A separate clone has its own Git directory.
 fn project_of(host: String, cx: Codex, cwd: String) -> String {
   let identity = git.common_dir(repo_for(host, cx, cwd)) |> result.unwrap(cwd)
   project_rules.project_key(host, identity)
+  |> project_rules.machine_key(hosts.is_local)
 }
 
 fn with_developer_instructions(
@@ -2159,12 +2161,8 @@ fn thread_project_rules(
       let current =
         rules |> option.map(fn(rules) { rules.version }) |> option.unwrap(0)
       let applied = project_rules.applied(ctx.project_rules, thread_id)
-      let status = case applied {
-        None -> "unknown"
-        Some(applied) if applied.project != project -> "otherProject"
-        Some(applied) if applied.version < current -> "outdated"
-        Some(_) -> "current"
-      }
+      let status =
+        project_rules.status(applied, project, current, hosts.is_local)
       json_response(
         200,
         json.object([

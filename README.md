@@ -64,9 +64,10 @@ rules locally, and records usage/diagnostic journals on the server.
   **Copy full result** does the same for every response since the last prompt and shows a green check once
   copied, until the task changes
 - ⌨️ Slash commands (see below), message copy buttons, and prompt history
-- 📐 Project rules: one rule set per repository, shared by all its worktrees,
-  given to each new session at start; Session details shows which version a
-  session started with and flags outdated ones
+- 📐 Project rules: one rule set per repository, shared by all its worktrees
+  and by Codex and Claude sessions alike, given to each new session at start;
+  Session details shows which version a session started with and flags
+  outdated ones
 - 📝 Per-session rules: progress reporting, shared coordination, and custom
   instructions. Shared coordination gives agents the session name and lets
   same-folder Codex and Claude sessions leave notes in `.workspace/coordination`
