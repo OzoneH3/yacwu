@@ -14,7 +14,7 @@
 	import ProjectRulesEditor from '$lib/ProjectRulesEditor.svelte';
 	import type { ProjectRulesState } from '$lib/project-rules';
 	import GlobalSettingsForm from '$lib/GlobalSettingsForm.svelte';
-	import { defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings } from '$lib/settings';
+	import { clampSetting, defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings } from '$lib/settings';
 	import {
 		applyRelayEvent,
 		applyRelaySnapshot,
@@ -562,6 +562,36 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	function toggleSounds() {
 		saveSettings({ ...settings, sounds: !settings.sounds });
 		if (settings.sounds) soundPlayer.unlock();
+	}
+
+	// Resting on the speaker button opens a volume slider; every change plays
+	// the chime at the new volume for instant feedback (as KDE Plasma does).
+	let volumePopoverOpen = $state(false);
+	let volumeOpenTimer: ReturnType<typeof setTimeout> | null = null;
+	let volumeCloseTimer: ReturnType<typeof setTimeout> | null = null;
+	let volumePreviewTimer: ReturnType<typeof setTimeout> | null = null;
+	let lastVolumePreviewAt = 0;
+	function soundControlEnter() {
+		if (volumeCloseTimer) { clearTimeout(volumeCloseTimer); volumeCloseTimer = null; }
+		if (!volumePopoverOpen && !volumeOpenTimer) volumeOpenTimer = setTimeout(() => { volumePopoverOpen = true; volumeOpenTimer = null; hideInstantTooltip(); }, 900);
+	}
+	function soundControlLeave() {
+		if (volumeOpenTimer) { clearTimeout(volumeOpenTimer); volumeOpenTimer = null; }
+		if (volumePopoverOpen && !volumeCloseTimer) volumeCloseTimer = setTimeout(() => { volumePopoverOpen = false; volumeCloseTimer = null; }, 400);
+	}
+	function setVolumeLive(value: number) {
+		const volume = clampSetting('soundVolume', value);
+		// Turning the volume up while muted unmutes, like a system volume control.
+		saveSettings({ ...settings, soundVolume: volume, sounds: volume > 0 ? true : settings.sounds });
+		soundPlayer.unlock();
+		// At most a few chimes per second while dragging, always ending on the final value.
+		if (volumePreviewTimer) clearTimeout(volumePreviewTimer);
+		const wait = Math.max(0, 150 - (Date.now() - lastVolumePreviewAt));
+		volumePreviewTimer = setTimeout(() => {
+			volumePreviewTimer = null;
+			lastVolumePreviewAt = Date.now();
+			soundPlayer.preview(settings.soundVolume);
+		}, wait);
 	}
 
 	const activeWorkOrderId = $derived(activeId ? latestWorkOrderBySession[activeId] ?? null : null);
@@ -4842,6 +4872,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function showInstantTooltip(target: Element | null) {
 		if (!target) return;
+		// The open volume panel replaces the speaker's tooltip.
+		if (volumePopoverOpen && target.closest('.sound-control')) return;
 		if (instantTooltipTarget && instantTooltipTarget !== target) hideInstantTooltip();
 		const nativeTitle = target.getAttribute('title');
 		const text = target.getAttribute('data-yacwu-tooltip') ?? nativeTitle;
@@ -5165,6 +5197,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 </dialog>
 
 {#snippet soundToggle()}
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions (pointer and Escape handling for the group's own controls) -->
+	<div
+		class="sound-control"
+		role="group"
+		aria-label="Sound"
+		onpointerenter={soundControlEnter}
+		onpointerleave={soundControlLeave}
+		onfocusin={soundControlEnter}
+		onfocusout={(event) => { if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) soundControlLeave(); }}
+		onkeydown={(event) => { if (event.key === 'Escape' && volumePopoverOpen) { event.stopPropagation(); volumePopoverOpen = false; } }}
+	>
 	<button
 		class="theme-toggle sound-toggle"
 		type="button"
@@ -5182,6 +5225,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			{/if}
 		</svg>
 	</button>
+	{#if volumePopoverOpen}
+		<div class="volume-popover">
+			<input type="range" aria-label="Sound volume" min="0" max="100" step="5" value={settings.sounds ? settings.soundVolume : 0}
+				oninput={(event) => setVolumeLive(Number(event.currentTarget.value))} />
+			<output>{settings.sounds ? settings.soundVolume : 0}%</output>
+		</div>
+	{/if}
+	</div>
 {/snippet}
 
 {#snippet themeToggle(className = '')}
@@ -8162,6 +8213,40 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	/* The cwd keeps its natural width so the agent row sits right beside it. */
+
+	.sound-control {
+		position: relative;
+		display: inline-flex;
+	}
+
+	.volume-popover {
+		position: absolute;
+		top: calc(100% + var(--space-3xs));
+		right: 0;
+		z-index: 40;
+		display: flex;
+		align-items: center;
+		gap: var(--space-xs);
+		padding: var(--space-xs) var(--space-sm);
+		border: var(--rule-hair) solid var(--color-rule-2);
+		border-radius: var(--radius-card);
+		background: var(--color-paper);
+		box-shadow: var(--shadow-popover);
+		color: var(--color-ink-2);
+		font-size: var(--text-xs);
+		white-space: nowrap;
+	}
+
+	.volume-popover input {
+		width: 9rem;
+		accent-color: var(--color-accent);
+	}
+
+	.volume-popover output {
+		min-width: 2.5rem;
+		text-align: end;
+		font-variant-numeric: tabular-nums;
+	}
 
 	.session-state {
 		display: flex;

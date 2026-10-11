@@ -88,3 +88,23 @@ test('the volume slider in Settings plays a preview', async ({ page }) => {
 	await expect.poll(() => played(page)).toEqual(FINISH);
 	await expect(page.locator('.global-settings')).toContainText('80');
 });
+
+test('resting on the speaker opens a volume slider that previews each change', async ({ page }) => {
+	await mock(page);
+	const speaker = page.getByRole('button', { name: 'Mute sounds' });
+	await speaker.click(); // muted
+	await page.mouse.move(0, 0);
+	await page.getByRole('button', { name: 'Unmute sounds' }).hover();
+	const slider = page.getByRole('slider', { name: 'Sound volume' });
+	await expect(slider).toBeVisible({ timeout: 3000 });
+	await expect(slider).toHaveValue('0');
+	await page.locator('.session-state').screenshot({ path: process.env.YACWU_SHOT ?? 'test-results/volume-popover.png' });
+	await slider.fill('70');
+	await expect.poll(() => played(page)).toEqual(FINISH);
+	// Raising the volume while muted unmutes, as a system volume control does.
+	await expect(page.getByRole('button', { name: 'Mute sounds' })).toBeVisible();
+	await expect(page.locator('.volume-popover output')).toHaveText('70%');
+	await page.mouse.move(0, 400);
+	await expect(slider).toBeHidden();
+	expect(await page.evaluate(() => JSON.parse(localStorage.getItem('yacwu-settings') ?? '{}').soundVolume)).toBe(70);
+});
