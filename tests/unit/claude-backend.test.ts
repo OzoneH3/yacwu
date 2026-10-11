@@ -156,6 +156,27 @@ test('forced checks do not probe again during the two-minute failure backoff', a
 	expect(first.rateLimits.primary).toBeNull();
 });
 
+test('a safe last-known quota remains usable when a forced refresh is rate limited', async () => {
+	let time = Date.parse('2026-10-08T14:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => {
+			calls++;
+			return calls === 1
+				? Response.json({ five_hour: { utilization: 94, resets_at: '2026-10-08T15:00:00Z' }, seven_day: { utilization: 20, resets_at: '2026-10-15T15:00:00Z' } })
+				: new Response('', { status: 429, headers: { 'retry-after': '300' } });
+		}
+	});
+	await read({ force: true, reserve: 5 });
+	time += 120_001;
+	const refreshed = await read({ force: true, reserve: 5 });
+	expect(refreshed.rateLimits.primary?.usedPercent).toBe(94);
+	expect(refreshed.usageError).toMatchObject({ code: 'rate_limited' });
+	expect(calls).toBe(2);
+});
+
 test('fresh usage survives repeated starts and forced reads respect HTTP 429 backoff', async () => {
 	let time = Date.parse('2026-10-08T14:00:00Z');
 	let calls = 0;

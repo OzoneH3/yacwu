@@ -30,6 +30,15 @@ test('unknown allowance blocks starts; both windows above reserve permit them', 
 	expect(clear.replies).toHaveLength(0);
 });
 
+test('a rate-limited refresh allows a known reading that remains above the session reserve', async () => {
+	const safe = { rateLimits: { primary: { usedPercent: 94 }, secondary: { usedPercent: 20 } }, usageError: { code: 'rate_limited', retryAt: Date.now() + 300_000 } };
+	const replies: any[] = [];
+	const guard = createClaudeQuotaGuard(async () => safe, () => {}, message => replies.push(message));
+	const request = { id: 42, method: 'turn/start', params: { threadId: 't' } };
+	expect(await guard.allow(request, 5)).toBe(true);
+	expect(replies).toHaveLength(0);
+});
+
 test('crossing cutoff interrupts active turns once and records the interruption reason', async () => {
 	let five = 89;
 	const sent: any[] = [], replies: any[] = [];

@@ -79,18 +79,30 @@ export function createClaudeUsageReader({
   function unavailable() {
     return { ...claudeRateLimits(null), usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
   }
+  function lastKnownSafe(reserve) {
+    const windows = [cached.rateLimits.primary, cached.rateLimits.secondary];
+    return lastSuccess > 0 && windows.every(window =>
+      typeof window?.usedPercent === 'number' && Number.isFinite(window.usedPercent) &&
+      (reserve <= 0 || window.usedPercent < 100 - reserve)
+    );
+  }
+  function forcedFallback(reserve) {
+    return lastKnownSafe(reserve)
+      ? { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null }
+      : unavailable();
+  }
   return async ({ force = false, reserve = 10 } = {}) => {
     if (pending) {
       const reading = await pending;
-      return force && !currentReading(reserve) ? unavailable() : reading;
+      return force && !currentReading(reserve) ? forcedFallback(reserve) : reading;
     }
     // A page reload/start must not turn a fresh reading into another HTTP call.
     if (currentReading(reserve)) return cached;
     // Honor throttling even when callers need a fresh safety check.
-    if (now() < retryAt) return force ? unavailable() : { ...cached, usageError: { code: 'rate_limited', retryAt } };
-    // Forced safety checks must not authorize work with stale data, but they
-    // should still share the retry throttle after transient failures.
-    if (now() < nextRead) return force ? unavailable() : cached;
+    if (now() < retryAt) return force ? forcedFallback(reserve) : { ...cached, usageError: { code: 'rate_limited', retryAt } };
+    // Reuse a stale reading only when both windows were verified below the
+    // requested reserve; unknown or reserve-level values remain unavailable.
+    if (now() < nextRead) return force ? forcedFallback(reserve) : cached;
     pending = (async () => {
       nextRead = now() + 120_000;
       try {
@@ -112,7 +124,7 @@ export function createClaudeUsageReader({
           nextRead = retryAt;
           rateLimited = true;
         }
-        if (!response.ok) return force ? unavailable() : { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
+        if (!response.ok) return force ? forcedFallback(reserve) : { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
         cached = claudeRateLimits(await response.json(), auth?.subscriptionType ?? null);
         lastSuccess = now();
         const resets = [cached.rateLimits.primary, cached.rateLimits.secondary]
@@ -125,8 +137,9 @@ export function createClaudeUsageReader({
         retryAt = 0;
         rateLimited = false;
       } catch {
-        // Keep display data on ordinary reads; safety checks require a current reading.
-        if (force) return claudeRateLimits(null);
+        // A previously verified reading below the requested reserve remains
+        // sufficient when the endpoint is temporarily unavailable.
+        if (force) return forcedFallback(reserve);
       }
       return cached;
     })();

@@ -580,7 +580,9 @@ tasks remain blocked until the allowance can be verified. Claude usage is
 checked before each new task. Recent valid readings are reused for up to two
 minutes; unknown readings and elapsed reset windows trigger a refresh. If the
 usage endpoint is rate limited, its retry delay is respected and displayed
-when starts cannot be verified. Stale readings cannot authorize new work.
+when starts cannot be verified. When refresh fails, a last verified reading
+below the session reserve remains usable; unknown or reserve-level readings
+still block new work.
 Repeated forced checks after a failed read are throttled to one attempt every
 two minutes; endpoint rate limits take precedence.
 
