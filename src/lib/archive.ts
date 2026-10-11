@@ -6,10 +6,6 @@ export function archiveProviderLabel(session: ThreadSummary, hosts: HostInfo[]):
 	return target?.provider === 'claude' ? 'Claude' : host === LOCAL_HOST ? 'Codex' : `Codex · ${host}`;
 }
 
-export function archiveDeletionSupported(session: ThreadSummary, hosts: HostInfo[]): boolean {
-	return !hosts.some((entry) => entry.name === session.host && entry.provider === 'claude');
-}
-
 export type ArchiveFilter = 'all' | 'codex' | 'claude';
 export function filterArchives(sessions: ThreadSummary[], hosts: HostInfo[], filter: ArchiveFilter): ThreadSummary[] {
 	return sessions.filter((session) => filter === 'all' || (archiveProviderLabel(session, hosts) === 'Claude' ? 'claude' : 'codex') === filter);

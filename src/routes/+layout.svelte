@@ -74,7 +74,7 @@ import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-ch
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
-import { archiveProviderLabel, archiveDeletionSupported, loadArchiveCatalog } from '$lib/archive';
+import { archiveProviderLabel, loadArchiveCatalog } from '$lib/archive';
 import { claudeBackendHost, sessionTarget } from '$lib/session-target';
 import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity } from '$lib/model-display';
 import { createMessageTimestampStore } from '$lib/message-timestamps';
@@ -281,7 +281,6 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let archiveFilter = $state<ArchiveFilter>('all');
 	let deletingAllArchives = $state(false);
 	const visibleArchivedSessions = $derived(filterArchives(archivedSessions, hostChoices, archiveFilter));
-	const deletableArchives = $derived(visibleArchivedSessions.filter((session) => archiveDeletionSupported(session, hostChoices)));
 	let archivedSessionsLoading = $state(false);
 	let archivedSessionsError = $state<string | null>(null);
 	let restoringArchivedSessionId = $state<string | null>(null);
@@ -3754,9 +3753,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function deleteArchivedSession(session: ThreadSummary) {
 		if (restoringArchivedSessionId || deletingArchivedSessionId) return;
-		if (!archiveDeletionSupported(session, hostChoices)) return;
 		const label = shortLabel(session);
-		if (!window.confirm(`Permanently delete “${label}”? This cannot be undone.`)) return;
+		const claude = archiveProviderLabel(session, hostChoices) === 'Claude';
+		if (!window.confirm(`Permanently delete “${label}”?${claude ? ' Its Claude Code transcript files are removed too.' : ''} This cannot be undone.`)) return;
 		deletingArchivedSessionId = session.id;
 		try {
 			await performArchiveDeletion(session);
@@ -3780,10 +3779,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function deleteAllArchivedSessions() {
-		if (restoringArchivedSessionId || deletingArchivedSessionId || !deletableArchives.length) return;
-		const targets = [...deletableArchives];
-		const skipped = visibleArchivedSessions.length - targets.length;
-		if (!window.confirm(`Permanently delete ${targets.length} archived session(s) in the ${archiveFilter} filter? This cannot be undone.${skipped ? ` ${skipped} unsupported Claude session(s) will remain untouched.` : ''}`)) return;
+		if (restoringArchivedSessionId || deletingArchivedSessionId || !visibleArchivedSessions.length) return;
+		const targets = [...visibleArchivedSessions];
+		if (!window.confirm(`Permanently delete ${targets.length} archived session(s) in the ${archiveFilter} filter? This cannot be undone.`)) return;
 		deletingAllArchives = true;
 		let deleted = 0;
 		const errors: string[] = [];
@@ -3793,7 +3791,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				try { await performArchiveDeletion(session); deleted++; }
 				catch (error) { errors.push(`${shortLabel(session)}: ${error instanceof Error ? error.message : String(error)}`); }
 			}
-			showArchiveNotice({ tone: errors.length ? 'error' : 'info', message: `Deleted ${deleted} archived session(s).${skipped ? ` ${skipped} unsupported Claude session(s) were left untouched.` : ''}${errors.length ? ` ${errors.length} failed: ${errors.join(' · ')}` : ''}` }, 10000);
+			showArchiveNotice({ tone: errors.length ? 'error' : 'info', message: `Deleted ${deleted} archived session(s).${errors.length ? ` ${errors.length} failed: ${errors.join(' · ')}` : ''}` }, 10000);
 		} finally {
 			deletingArchivedSessionId = null;
 			deletingAllArchives = false;
@@ -6784,10 +6782,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					</div>
 					<div class="archive-filter-controls">
 						<label>Provider <select aria-label="Archived session provider" bind:value={archiveFilter} disabled={deletingAllArchives}><option value="all">All</option><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
-						<button class="mini archive-delete" type="button" disabled={archivedSessionsLoading || Boolean(restoringArchivedSessionId || deletingArchivedSessionId) || !deletableArchives.length} onclick={deleteAllArchivedSessions}>{deletingAllArchives ? 'Deleting…' : 'Delete all'}</button>
+						<button class="mini archive-delete" type="button" disabled={archivedSessionsLoading || Boolean(restoringArchivedSessionId || deletingArchivedSessionId) || !visibleArchivedSessions.length} onclick={deleteAllArchivedSessions}>{deletingAllArchives ? 'Deleting…' : 'Delete all'}</button>
 					</div>
 					{#if archiveNotice}<p class="archive-browser-empty" role={archiveNotice.tone === 'error' ? 'alert' : 'status'}>{archiveNotice.message}</p>{/if}
-					{#if visibleArchivedSessions.some((session) => !archiveDeletionSupported(session, hostChoices))}<p class="archive-browser-empty">Claude's current adapter supports archive and restore, but not permanent deletion. Delete all leaves those sessions untouched.</p>{/if}
 					{#if archivedSessionsLoading && archivedSessions.length === 0}
 						<p class="archive-browser-empty">Loading archived sessions…</p>
 					{:else if archivedSessionsError && archivedSessions.length === 0}
@@ -6808,7 +6805,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 										<button class="mini" type="button" disabled={Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => restoreArchivedSession(session)}>
 											{restoringArchivedSessionId === session.id ? 'Restoring…' : 'Restore'}
 										</button>
-										<button class="mini archive-delete" type="button" title={archiveDeletionSupported(session, hostChoices) ? 'Permanently delete this archived session' : 'Claude backend does not support permanent deletion'} disabled={!archiveDeletionSupported(session, hostChoices) || Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => deleteArchivedSession(session)}>
+										<button class="mini archive-delete" type="button" title="Permanently delete this archived session" disabled={Boolean(restoringArchivedSessionId || deletingArchivedSessionId)} onclick={() => deleteArchivedSession(session)}>
 											{deletingArchivedSessionId === session.id ? 'Deleting…' : 'Delete'}
 										</button>
 									</div>

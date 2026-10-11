@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { archiveDeletionSupported, archiveProviderLabel, filterArchives, loadArchiveCatalog } from '../../src/lib/archive';
+import { archiveProviderLabel, filterArchives, loadArchiveCatalog } from '../../src/lib/archive';
 
 test('archive provider filters include remote Codex sessions and leave All unchanged', () => {
 	const sessions = [thread('a', 'anthropic'), thread('b', 'local'), thread('c', 'remote')];
@@ -34,9 +34,7 @@ test('a provider failure keeps the other archives visible and reports the failed
 	expect(result.errors[0]).toContain('anthropic: Unavailable');
 });
 
-test('archive provider labels and deletion availability match the backend capabilities', () => {
+test('archive provider labels match the backend', () => {
 	expect(archiveProviderLabel(thread('a', 'anthropic'), hosts)).toBe('Claude');
-	expect(archiveDeletionSupported(thread('a', 'anthropic'), hosts)).toBe(false);
-	expect(archiveDeletionSupported(thread('a', 'local'), hosts)).toBe(true);
 	expect(archiveProviderLabel(thread('a', 'remote'), hosts)).toBe('Codex · remote');
 });

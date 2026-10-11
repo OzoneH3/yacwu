@@ -634,13 +634,7 @@ fn dispatch(
     ["api", "threads", id, "delete"], Post -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       case is_claude_backend(host) {
-        True ->
-          json_response(
-            501,
-            error_body(
-              "Claude backend does not support permanent session deletion",
-            ),
-          )
+        True -> delete_archived_claude_thread(ctx, cx, id)
         False -> delete_archived_thread(cx, id)
       }
     }
@@ -808,6 +802,47 @@ fn simple_rpc(
   thread_id: String,
 ) -> Response(ResponseData) {
   rpc(cx, method, json.object([#("threadId", json.string(thread_id))]))
+}
+
+/// Claude sessions: the adapter's thread/delete (added by Yacwu's adapter
+/// entry) removes the thread's rows and Claude files and refuses unarchived
+/// threads. A thread it ran on its Codex runtime also has a Codex session;
+/// that is deleted through the local Codex, archived first as Codex requires.
+fn delete_archived_claude_thread(
+  ctx: Context,
+  cx: Codex,
+  thread_id: String,
+) -> Response(ResponseData) {
+  case
+    codex.request(
+      cx,
+      "thread/delete",
+      json.object([#("threadId", json.string(thread_id))]),
+    )
+  {
+    Error(message) -> json_response(500, error_body(message))
+    Ok(result) -> {
+      let codex_copy = case jsonx.field_string(result, ["codexSessionId"]) {
+        Error(_) -> json.null()
+        Ok(session) ->
+          case hosts.resolve(ctx.registry, Some("local"), None) {
+            Error(message) -> json.string("kept: " <> message)
+            Ok(#(_, local)) -> {
+              let params = json.object([#("threadId", json.string(session))])
+              let _ = codex.request(local, "thread/archive", params)
+              case codex.request(local, "thread/delete", params) {
+                Ok(_) -> json.string("deleted")
+                Error(message) -> json.string("kept: " <> message)
+              }
+            }
+          }
+      }
+      json_response(
+        200,
+        jsonx.object_with(result, [#("codexCopy", codex_copy)]),
+      )
+    }
+  }
 }
 
 /// Permanent deletion is exposed only for archived threads, never active ones.
