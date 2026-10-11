@@ -4554,6 +4554,60 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	let handoffCopyStatus = $state<Record<string, 'copying' | 'copied' | 'failed'>>({});
 
+	/**
+	 * One Markdown handoff for a coordinating chat: the prompt, the given
+	 * responses, files changed among `scope`, and every text file the
+	 * responses link to.
+	 */
+	async function buildHandoff(id: string, requestItem: any | null, responses: any[], scope: any[]): Promise<string> {
+		const request = requestItem
+			? visibleUserText((requestItem.content ?? []).map((part: any) => typeof part?.text === 'string' ? part.text : '').join('\n'))
+			: null;
+		const changedFiles = [...new Set(scope.filter((entry) => entry.type === 'fileChange')
+			.flatMap((entry) => (entry.changes ?? []).map((change: any) => displayFileChangePath(change))).filter(Boolean))];
+		const host = sessionHost(id);
+		const files: HandoffFile[] = [];
+		const skipped: string[] = [];
+		const seen = new Set<string>();
+		for (const target of responses.flatMap((response) => responseFileTargets(response, true))) {
+			const name = target.root ? `${target.root.replace(/\/$/, '')}/${target.path}` : target.path;
+			if (seen.has(name)) continue;
+			seen.add(name);
+			try {
+				const data = await readWorkspaceLink(id, target.path, host, fetch, target.root ?? undefined);
+				if (data.directory) continue;
+				if (data.copyable) files.push({ name, content: data.content });
+				else skipped.push(`${name} (binary or too large)`);
+			} catch (error) {
+				// Code spans also hold things that only look like paths; only
+				// report explicit links that could not be read.
+				if (!target.code) skipped.push(`${name} (${error instanceof Error ? error.message : 'could not read'})`);
+			}
+		}
+		let branch: string | null = null;
+		try {
+			const res = await fetch(threadApi(id, '/git/changes?scope=all'));
+			const data = await res.json();
+			if (res.ok && data.available && typeof data.branch === 'string') branch = data.branch;
+		} catch { /* No branch line. */ }
+		const config = sessionConfigs[id];
+		const agent = [isClaudeSession(id) ? 'Claude' : 'Codex', config?.model ? `${config.model}${config.effort ? `, ${config.effort}` : ''}` : '']
+			.filter(Boolean).join(' · ');
+		const last = responses.at(-1);
+		return coordinatorHandoff({
+			session: activeSummary ? shortLabel(activeSummary) : id,
+			folder: sessionFolder(id),
+			agent,
+			branch,
+			durationMs: typeof last?._turnDurationMs === 'number' ? last._turnDurationMs : null,
+			request,
+			result: responses.map((response) => stripTaskProgressMarkers(String(response.text ?? '')).trim()).filter(Boolean).join('\n\n---\n\n'),
+			changedFiles,
+			files,
+			skipped
+		});
+	}
+
 	/** The result of this response's task as one Markdown handoff for a coordinating chat. */
 	async function copyCoordinatorHandoff(item: any) {
 		const id = activeId;
@@ -4566,54 +4620,38 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			const turnItems = items.filter((entry) => item._turnId && entry._turnId === item._turnId);
 			const requestItem = turnItems.find((entry) => entry.type === 'userMessage')
 				?? items.slice(0, Math.max(0, index)).findLast((entry) => entry.type === 'userMessage');
-			const request = requestItem
-				? visibleUserText((requestItem.content ?? []).map((part: any) => typeof part?.text === 'string' ? part.text : '').join('\n'))
-				: null;
-			const changedFiles = [...new Set(turnItems.filter((entry) => entry.type === 'fileChange')
-				.flatMap((entry) => (entry.changes ?? []).map((change: any) => displayFileChangePath(change))).filter(Boolean))];
-			const host = sessionHost(id);
-			const files: HandoffFile[] = [];
-			const skipped: string[] = [];
-			for (const target of responseFileTargets(item, true)) {
-				const name = target.root ? `${target.root.replace(/\/$/, '')}/${target.path}` : target.path;
-				try {
-					const data = await readWorkspaceLink(id, target.path, host, fetch, target.root ?? undefined);
-					if (data.directory) continue;
-					if (data.copyable) files.push({ name, content: data.content });
-					else skipped.push(`${name} (binary or too large)`);
-				} catch (error) {
-					// Code spans also hold things that only look like paths; only
-					// report explicit links that could not be read.
-					if (!target.code) skipped.push(`${name} (${error instanceof Error ? error.message : 'could not read'})`);
-				}
-			}
-			let branch: string | null = null;
-			try {
-				const res = await fetch(threadApi(id, '/git/changes?scope=all'));
-				const data = await res.json();
-				if (res.ok && data.available && typeof data.branch === 'string') branch = data.branch;
-			} catch { /* No branch line. */ }
-			const config = sessionConfigs[id];
-			const agent = [isClaudeSession(id) ? 'Claude' : 'Codex', config?.model ? `${config.model}${config.effort ? `, ${config.effort}` : ''}` : '']
-				.filter(Boolean).join(' · ');
-			await navigator.clipboard.writeText(coordinatorHandoff({
-				session: activeSummary ? shortLabel(activeSummary) : id,
-				folder: sessionFolder(id),
-				agent,
-				branch,
-				durationMs: typeof item._turnDurationMs === 'number' ? item._turnDurationMs : null,
-				request,
-				result: stripTaskProgressMarkers(String(item.text ?? '')),
-				changedFiles,
-				files,
-				skipped
-			}));
+			await navigator.clipboard.writeText(await buildHandoff(id, requestItem ?? null, [item], turnItems));
 			handoffCopyStatus[key] = 'copied';
 		} catch (error) {
 			handoffCopyStatus[key] = 'failed';
 			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not copy the handoff' }, 6000);
 		}
 		setTimeout(() => { delete handoffCopyStatus[key]; }, 2000);
+	}
+
+	let fullResultCopy = $state<'copying' | 'copied' | 'failed' | null>(null);
+
+	/** Everything since the last prompt — all responses and their linked files — as one handoff. */
+	async function copyFullResult() {
+		const id = activeId;
+		if (!id || fullResultCopy === 'copying') return;
+		const items = itemsOf(threads[viewedId ?? id] ?? null) as any[];
+		const promptIndex = items.findLastIndex((entry) => entry.type === 'userMessage');
+		const scope = items.slice(promptIndex + 1);
+		const responses = scope.filter((entry) => entry.type === 'agentMessage' && stripTaskProgressMarkers(String(entry.text ?? '')).trim());
+		if (!responses.length) {
+			showArchiveNotice({ tone: 'info', message: 'No responses since the last prompt yet.' }, 4000);
+			return;
+		}
+		fullResultCopy = 'copying';
+		try {
+			await navigator.clipboard.writeText(await buildHandoff(id, promptIndex >= 0 ? items[promptIndex] : null, responses, scope));
+			fullResultCopy = 'copied';
+		} catch (error) {
+			fullResultCopy = 'failed';
+			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not copy the full result' }, 6000);
+		}
+		setTimeout(() => { if (fullResultCopy !== 'copying') fullResultCopy = null; }, 2000);
 	}
 
 	function agentTime(item: any): { label: string; iso: string; full: string } | null {
@@ -6109,7 +6147,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			{:else}
 				<div class="transcript-frame" class:has-position-rail={transcriptJumpPoints.length > 1}>
-					<div class="activity-toolbar"><label><input type="checkbox" bind:checked={showAllActivity} onchange={cancelBottomJump} /> Show all activity</label></div>
+					<div class="activity-toolbar">
+						<label><input type="checkbox" bind:checked={showAllActivity} onchange={cancelBottomJump} /> Show all activity</label>
+						<button type="button" class="copy-full-result" disabled={fullResultCopy === 'copying'} title="Copy every response since your last prompt, with changed files and the contents of linked files, as one Markdown handoff" onclick={copyFullResult}>{fullResultCopy === 'copying' ? 'Preparing…' : fullResultCopy === 'copied' ? 'Full result copied' : fullResultCopy === 'failed' ? 'Copy failed' : 'Copy full result'}</button>
+					</div>
 				<div class="transcript" bind:this={transcriptEl} use:cancelJumpOnInput onscroll={onTranscriptScroll}>
 					{#if viewedAgentId ? agentHistoryLoading : sessionOpening[viewedId ?? '']}
 						<div class="sys">loading history…</div>
@@ -8851,7 +8892,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		min-height: 0;
 	}
 	.activity-toolbar { position: absolute; top: 0; right: var(--space-sm); z-index: 1; font-size: var(--text-xs); color: var(--color-muted); }
+	.activity-toolbar { display: flex; flex-direction: column; align-items: flex-end; }
 	.activity-toolbar label { display: flex; align-items: center; gap: var(--space-xs); min-height: 2rem; cursor: pointer; }
+	.copy-full-result { padding: var(--space-3xs) var(--space-xs); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper); color: var(--color-muted); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+	.copy-full-result:hover:not(:disabled) { background: var(--color-paper-3); color: var(--color-ink); }
+	.copy-full-result:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+	.copy-full-result:disabled { cursor: default; opacity: .7; }
 	.item.compact-activity { display: block; min-width: 0; padding-block: var(--space-2xs); }
 	.relay-block { display: grid; gap: var(--space-2xs); margin-block: var(--space-2xs); }
 	.relay-frame { border-left: 2px solid var(--color-rule); padding-left: var(--space-xs); }

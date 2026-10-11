@@ -50,3 +50,49 @@ test('the handoff includes text and linked files', async ({ page, context }) => 
 	expect(copied).toContain('### web/history.js\n\n```js\nexport const zoom = 2;\n```');
 	expect(copied).not.toContain('### web/static');
 });
+
+test('Copy full result takes every response since the last prompt, with their files', async ({ page, context }) => {
+	await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+	const thread = { id: ID, name: 'History zoom', cwd: '/home/u/growpilot', host: 'local', status: { type: 'idle' }, turns: [
+		{ id: 't0', status: 'completed', items: [
+			{ type: 'userMessage', id: 'u0', content: [{ type: 'text', text: 'Earlier question' }] },
+			{ type: 'agentMessage', id: 'a0', text: 'Earlier answer about `old/file.js`.' }
+		] },
+		{ id: 't1', status: 'completed', items: [
+			{ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'Finish the zoom work' }] },
+			{ type: 'agentMessage', id: 'a1', text: 'Plan written to `docs/zoom.md`.\n\n[[YACWU_PROGRESS percent=40 remaining_minutes=5]]' },
+			{ type: 'fileChange', id: 'f1', status: 'completed', changes: [{ path: '/home/u/growpilot/web/history.js', kind: { type: 'update' } }] },
+			{ type: 'agentMessage', id: 'a2', text: 'Done. Code in `web/history.js`.' }
+		] }
+	] };
+	await page.route('**/api/**', async (route) => {
+		const url = new URL(route.request().url());
+		const path = url.pathname;
+		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+		if (path === '/api/threads') return route.fulfill({ json: { data: [thread], defaultCwd: '/home/u' } });
+		if (path === '/api/threads/loaded') return route.fulfill({ json: { data: [ID] } });
+		if (path.endsWith('/model')) return route.fulfill({ json: { model: 'gpt-test', effort: 'high', models: [] } });
+		if (path.endsWith('/git/changes')) return route.fulfill({ json: { available: true, branch: 'feature/history-zoom', files: [] } });
+		if (path.endsWith('/path-kinds')) return route.fulfill({ json: { kinds: {} } });
+		if (path.endsWith('/file')) {
+			const file = url.searchParams.get('path');
+			if (file === 'docs/zoom.md') return route.fulfill({ json: { content: 'zoom plan\n' } });
+			if (file === 'web/history.js') return route.fulfill({ json: { content: 'export const zoom = 2;\n' } });
+			if (file === 'old/file.js') return route.fulfill({ json: { content: 'old\n' } });
+			return route.fulfill({ status: 404, json: { error: 'missing' } });
+		}
+		if (path.startsWith('/api/threads/')) return route.fulfill({ json: { thread } });
+		return route.fulfill({ json: {} });
+	});
+	await page.goto(`/s/${ID}`);
+	await page.getByRole('button', { name: 'Copy full result' }).click();
+	await expect(page.getByRole('button', { name: 'Full result copied' })).toBeVisible();
+	const copied = await page.evaluate(() => navigator.clipboard.readText());
+	expect(copied).toContain('## Request\n\nFinish the zoom work\n\n## Result\n\nPlan written to `docs/zoom.md`.\n\n---\n\nDone. Code in `web/history.js`.');
+	expect(copied).not.toContain('YACWU_PROGRESS');
+	expect(copied).not.toContain('Earlier');
+	expect(copied).toContain('## Files changed in this task\n\n- web/history.js');
+	expect(copied).toContain('### docs/zoom.md');
+	expect(copied).toContain('### web/history.js');
+	expect(copied).not.toContain('old/file.js');
+});
