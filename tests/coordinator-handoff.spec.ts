@@ -97,4 +97,11 @@ test('Copy full result takes every response since the last prompt, with their fi
 	expect(copied).toContain('### docs/zoom.md');
 	expect(copied).toContain('### web/history.js');
 	expect(copied).not.toContain('old/file.js');
+
+	// Once passed on, a green check stays (even after a reload) until the task changes.
+	const passedOn = page.getByRole('button', { name: '✓ Copy full result' });
+	await expect(passedOn).toBeVisible({ timeout: 5000 });
+	await expect(passedOn).toHaveClass(/passed-on/);
+	await page.reload();
+	await expect(page.getByRole('button', { name: '✓ Copy full result' })).toBeVisible();
 });

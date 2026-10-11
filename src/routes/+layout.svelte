@@ -4744,6 +4744,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	let fullResultCopy = $state<'copying' | 'copied' | 'failed' | null>(null);
+	const FULL_RESULT_KEY = 'yacwu-full-result-copied';
+	let fullResultStamps = $state<Record<string, string>>((() => {
+		try { return JSON.parse(localStorage.getItem(FULL_RESULT_KEY) ?? '{}') ?? {}; } catch { return {}; }
+	})());
+
+	/** Identifies what a full-result copy contained: the task's prompt and how many responses it had. */
+	function fullResultStamp(items: any[]): string | null {
+		const promptIndex = items.findLastIndex((entry) => entry.type === 'userMessage');
+		const responses = items.slice(promptIndex + 1).filter((entry) => entry.type === 'agentMessage' && stripTaskProgressMarkers(String(entry.text ?? '')).trim()).length;
+		if (!responses) return null;
+		const prompt = promptIndex >= 0 ? String(items[promptIndex].id ?? promptIndex) : 'none';
+		return `${prompt}:${responses}`;
+	}
+
+	const fullResultPassedOn = $derived(!!activeId && fullResultStamps[activeId] === fullResultStamp(itemsOf(threads[viewedId ?? activeId] ?? null) as any[]) && fullResultStamps[activeId] !== undefined);
 
 	/** Everything since the last prompt — all responses and their linked files — as one handoff. */
 	async function copyFullResult() {
@@ -4762,6 +4777,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			// The full result is about the responses; the prompt only gives context.
 			await navigator.clipboard.writeText(await buildHandoff(id, promptIndex >= 0 ? items[promptIndex] : null, responses, scope, true));
 			fullResultCopy = 'copied';
+			const stamp = fullResultStamp(items);
+			if (stamp) {
+				fullResultStamps[id] = stamp;
+				try { localStorage.setItem(FULL_RESULT_KEY, JSON.stringify(fullResultStamps)); } catch { /* storage full or blocked */ }
+			}
 		} catch (error) {
 			fullResultCopy = 'failed';
 			showArchiveNotice({ tone: 'error', message: error instanceof Error ? error.message : 'Could not copy the full result' }, 6000);
@@ -6329,7 +6349,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				<div class="transcript-frame" class:has-position-rail={transcriptJumpPoints.length > 1}>
 					<div class="activity-toolbar">
 						<label><input type="checkbox" bind:checked={showAllActivity} onchange={cancelBottomJump} /> Show all activity</label>
-						<button type="button" class="copy-full-result" disabled={fullResultCopy === 'copying'} title="Copy every response since your last prompt, with changed files and the contents of linked files, as one Markdown handoff" onclick={copyFullResult}>{fullResultCopy === 'copying' ? 'Preparing…' : fullResultCopy === 'copied' ? 'Full result copied' : fullResultCopy === 'failed' ? 'Copy failed' : 'Copy full result'}</button>
+						<button type="button" class="copy-full-result" class:passed-on={fullResultPassedOn} disabled={fullResultCopy === 'copying'} title="Copy every response since your last prompt, with changed files and the contents of linked files, as one Markdown handoff" onclick={copyFullResult}>{fullResultCopy === 'copying' ? 'Preparing…' : fullResultCopy === 'copied' ? 'Full result copied' : fullResultCopy === 'failed' ? 'Copy failed' : fullResultPassedOn ? '✓ Copy full result' : 'Copy full result'}</button>
 					</div>
 				<div class="transcript" bind:this={transcriptEl} use:cancelJumpOnInput onscroll={onTranscriptScroll}>
 					{#if viewedAgentId ? agentHistoryLoading : sessionOpening[viewedId ?? '']}
@@ -9134,6 +9154,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.copy-full-result { padding: var(--space-3xs) var(--space-xs); border: var(--rule-hair) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper); color: var(--color-muted); font: inherit; font-size: var(--text-xs); cursor: pointer; }
 	.copy-full-result:hover:not(:disabled) { background: var(--color-paper-3); color: var(--color-ink); }
 	.copy-full-result:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+	.copy-full-result.passed-on { color: var(--color-success); border-color: var(--color-success); }
 	.copy-full-result:disabled { cursor: default; opacity: .7; }
 	.item.compact-activity { display: block; min-width: 0; padding-block: var(--space-2xs); }
 	.relay-block { display: grid; gap: var(--space-2xs); margin-block: var(--space-2xs); }
