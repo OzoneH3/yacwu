@@ -28,7 +28,15 @@ export default defineConfig({
 	},
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 	webServer: {
-		env: { YACWU_USAGE_DIR: testUsageDir },
+		env: {
+			YACWU_USAGE_DIR: testUsageDir,
+			// Commands run from inside a Yacwu session inherit the live server's
+			// environment. A test server must never attach to its persistent
+			// backend daemons (a single-client daemon would keep switching
+			// between the two servers) or start alternative backends.
+			YACWU_PERSISTENT_BACKENDS: '0',
+			YACWU_BACKENDS: ''
+		},
 		// Build the static SPA, then serve it (and the API) from the Gleam backend.
 		// The server fails closed without auth; the e2e suite runs it open on loopback.
 		command: `bun run build && cd server && YACWU_STATIC=../build YACWU_INSECURE_SKIP_AUTH=1 gleam run -- --host 127.0.0.1 --port ${port}`,
