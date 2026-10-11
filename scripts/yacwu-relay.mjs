@@ -26,7 +26,10 @@ const USAGE = `usage:
   yacwu-relay inbox  --session <your-session-id>
   yacwu-relay status --id <message-id>`;
 
-const RETRIES = 2;
+/** Keep retrying an unreachable relay this long: it outlasts a Yacwu restart. */
+export const RETRY_WINDOW_MS = 15_000;
+/** Wait before retry number `attempt` (0-based). */
+export const retryDelay = (attempt) => Math.min(2000, 250 * (attempt + 1));
 
 /** @param {string[]} argv */
 export function parseArgs(argv) {
@@ -164,6 +167,7 @@ export async function run(io) {
   } catch (error) {
     return { code: 1, output: { error: `cannot read the relay credential: ${error instanceof Error ? error.message : String(error)}` } };
   }
+  let waited = 0;
   for (let attempt = 0; ; attempt += 1) {
     try {
       // Retries resend the identical request, including the message id.
@@ -172,7 +176,7 @@ export async function run(io) {
       if (status >= 200 && status < 300) return { code: 0, output };
       return { code: status >= 500 ? 1 : 2, output: { status, ...(/** @type {object} */ (output)) } };
     } catch (error) {
-      if (attempt >= RETRIES) {
+      if (waited >= RETRY_WINDOW_MS) {
         return {
           code: 1,
           output: {
@@ -181,7 +185,9 @@ export async function run(io) {
           }
         };
       }
-      await sleep(250 * (attempt + 1));
+      const delay = retryDelay(attempt);
+      waited += delay;
+      await sleep(delay);
     }
   }
 }

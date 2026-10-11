@@ -38,13 +38,26 @@ pub type Backends {
 
 /// Where the default for sessions without their own choice is kept, so a
 /// restart does not silently turn messages back on.
+///
+/// It also keeps the messages not yet delivered (`load_open`/`save_open`),
+/// so a Yacwu restart does not lose a queue waiting for a busy recipient.
 pub type Persistence {
-  Persistence(load: fn() -> Bool, save: fn(Bool) -> Nil)
+  Persistence(
+    load: fn() -> Bool,
+    save: fn(Bool) -> Nil,
+    load_open: fn() -> List(Message),
+    save_open: fn(List(Message)) -> Nil,
+  )
 }
 
 /// For tests and embedders without storage.
 pub fn memory_persistence(accept: Bool) -> Persistence {
-  Persistence(load: fn() { accept }, save: fn(_) { Nil })
+  Persistence(
+    load: fn() { accept },
+    save: fn(_) { Nil },
+    load_open: fn() { [] },
+    save_open: fn(_) { Nil },
+  )
 }
 
 pub type Timeouts {
@@ -155,10 +168,13 @@ pub fn start(
       crypto.strong_random_bytes(6)
       |> bit_array.base16_encode
       |> string.lowercase
+    let #(core, restored) =
+      relay_core.new(epoch, limits)
+      |> relay_core.set_accept_by_default(0, persistence.load())
+      |> fn(pair) { pair.0 }
+      |> relay_core.restore(codex.now_ms(), persistence.load_open())
     State(
-      core: relay_core.new(epoch, limits)
-        |> relay_core.set_accept_by_default(0, persistence.load())
-        |> fn(pair) { pair.0 },
+      core: core,
       self: subject,
       life: life,
       backends: backends,
@@ -168,6 +184,7 @@ pub fn start(
       subscribers: [],
       next_wake: None,
     )
+    |> perform(restored)
     |> actor.initialised
     |> actor.selecting(selector)
     |> actor.returning(subject)
@@ -493,6 +510,18 @@ fn unwatch_submission(state: State, sub: String) -> State {
 }
 
 fn perform(state: State, effects: List(relay_core.Effect)) -> State {
+  // Every message change is published: keep the saved queue current.
+  case
+    list.any(effects, fn(effect) {
+      case effect {
+        relay_core.Publish(_) -> True
+        _ -> False
+      }
+    })
+  {
+    True -> state.persistence.save_open(relay_core.open_messages(state.core))
+    False -> Nil
+  }
   list.fold(effects, state, fn(state, effect) {
     case effect {
       relay_core.Publish(m) -> {

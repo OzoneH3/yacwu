@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildRequest, parseArgs, run, target } from '../../scripts/yacwu-relay.mjs';
+import { buildRequest, parseArgs, RETRY_WINDOW_MS, run, target } from '../../scripts/yacwu-relay.mjs';
 
 const env = { YACWU_RELAY_URL: 'http://127.0.0.1:3000', YACWU_RELAY_AUTH_FILE: '/run/yacwu/relay.auth' };
 const readFile = () => 'secret\n';
@@ -53,11 +53,15 @@ describe('yacwu-relay CLI', () => {
 	});
 
 	test('reports the id to reuse when the relay stays unreachable', async () => {
+		let slept = 0;
 		const result = await run({
-			argv: ['send', '--from', 'a', '--to', 'b', 'hi'], env, readFile, sleep: noSleep,
+			argv: ['send', '--from', 'a', '--to', 'b', 'hi'], env, readFile, sleep: async (ms: number) => { slept += ms; },
 			send: async () => { throw new Error('ECONNREFUSED'); }
 		});
 		expect(result.code).toBe(1);
+		// Long enough to ride out a Yacwu restart, not much longer.
+		expect(slept).toBeGreaterThanOrEqual(RETRY_WINDOW_MS);
+		expect(slept).toBeLessThan(RETRY_WINDOW_MS + 2500);
 		const output = result.output as { id: string; hint: string };
 		expect(output.hint).toContain(`--id ${output.id}`);
 	});

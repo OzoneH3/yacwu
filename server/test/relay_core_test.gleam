@@ -755,3 +755,41 @@ pub fn turning_the_default_off_rejects_only_followers_test() {
   state_of(core, "msg-0002") |> should.equal(Queued)
   relay_core.accept_by_default(core) |> should.be_false
 }
+
+// A Yacwu restart: what was still open comes back from storage. Queued
+// messages queue again; a reserved one may already have arrived, so it is
+// never sent again.
+pub fn restart_restores_open_messages_test() {
+  let core = fresh() |> connected(1)
+  let #(core, _) = completed(core, 1, 1, bob, "t0")
+  let #(core, _) = send(core, 2, "msg-0001", "first")
+  let #(core, _, _) = relay_core.claim_start(core, 3, to_bob())
+  let #(core, _) = send(core, 4, "msg-0002", "second")
+  let open = relay_core.open_messages(core)
+  list.map(open, fn(m) { #(m.id, m.state) })
+  |> should.equal([#("msg-0001", Reserved), #("msg-0002", Queued)])
+
+  let #(restored, _) = relay_core.restore(fresh(), 10, open)
+  let assert Ok(m1) = relay_core.message(restored, "msg-0001")
+  m1.state |> should.equal(Uncertain)
+  let assert Ok(m2) = relay_core.message(restored, "msg-0002")
+  m2.state |> should.equal(Queued)
+  relay_core.open_messages(restored)
+  |> list.map(fn(m) { m.id })
+  |> should.equal(["msg-0002"])
+  // A sender retrying with the same id after the restart is recognised.
+  let #(_, result, _) =
+    relay_core.send(
+      restored,
+      11,
+      SendInput(
+        "msg-0002",
+        Address(host, alice),
+        to_bob(),
+        "second",
+        CodexBackend,
+        1000,
+      ),
+    )
+  let assert Ok(relay_core.Duplicate(Some(_))) = result
+}

@@ -2,7 +2,8 @@
 
 Agents in Yacwu sessions on the same machine can send each other short
 messages through the Yacwu server. It is a trusted, single-user, local
-feature: state lives in server memory, and no session is ever woken up.
+feature: state lives in server memory (messages not yet delivered are also
+saved to disk), and no session is ever woken up.
 
 ## How agents use it
 
@@ -17,8 +18,9 @@ node "$YACWU_RELAY_CLI" inbox  --session <own id>          # read-only
 node "$YACWU_RELAY_CLI" status --id <message id>
 ```
 
-`send` prints the message id. When it retries after a connection failure it
-reuses that id, so the relay drops the duplicate; pass `--id` to retry by hand.
+`send` prints the message id. When the server can't be reached it keeps
+retrying for about 15 seconds, enough to outlast a Yacwu restart, and reuses
+that id, so the relay drops the duplicate; pass `--id` to retry by hand.
 
 ## Delivery
 
@@ -34,10 +36,10 @@ reuses that id, so the relay drops the duplicate; pass `--id` to retry by hand.
 
 | Status | Meaning |
 |---|---|
-| queued | Waiting in server memory; lost if the server restarts |
+| queued | Waiting to be delivered; kept across server restarts |
 | sending | A delivery attempt is in flight |
 | accepted | The recipient's backend acknowledged it. This is not proof the model read it. The Claude adapter can record a steer on the turn without forwarding it to a running model. |
-| uncertain | The backend may have taken it (lost connection, timeout, unrecognised error). It is never resent automatically. |
+| uncertain | The backend may have taken it (lost connection, timeout, unrecognised error, or a server restart during delivery). It is never resent automatically. |
 | rejected | Refused (unknown or archived recipient, messages turned off, …) |
 
 Only backend errors verified to be raised before the input is stored count
@@ -78,8 +80,11 @@ Claude's SendMessage tool, only reaches that agent's own subagents.
 16 KiB per message, 50 queued per recipient, 500 undelivered in total,
 10 messages / 64 KiB per delivery, 8 attempts in flight per backend. The last
 1000 finished messages and 5000 message ids are remembered for status and
-duplicate detection. All of it is lost on restart, so duplicate detection
-holds only within one server run.
+duplicate detection. Undelivered messages are saved in Yacwu's state
+directory (`relay-queue.json`) and queue again after a restart; a message
+that was being delivered at that moment comes back as uncertain. Everything
+else is lost on restart, so duplicate detection holds only within one server
+run, apart from the restored messages.
 
 ## Not yet verified against live backends
 

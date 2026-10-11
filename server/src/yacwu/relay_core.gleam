@@ -908,6 +908,91 @@ pub fn tick(core: Core, now: Int) -> #(Core, List(Effect)) {
   })
 }
 
+// -- Restart ------------------------------------------------------------------
+
+/// Messages not yet delivered for good (queued, or reserved by a
+/// submission), in each recipient's delivery order: what a Yacwu restart
+/// must not forget.
+pub fn open_messages(core: Core) -> List(Message) {
+  dict.values(core.recipients)
+  |> list.flat_map(fn(r) {
+    let reserved = case r.reservation {
+      Some(id) ->
+        dict.get(core.submissions, id)
+        |> result_members
+      None -> []
+    }
+    list.append(reserved, r.queue)
+  })
+  |> list.unique
+  |> list.filter_map(fn(id) {
+    case dict.get(core.messages, id) {
+      Ok(m) if m.state == Queued || m.state == Reserved -> Ok(m)
+      _ -> Error(Nil)
+    }
+  })
+}
+
+fn result_members(found: Result(Submission, Nil)) -> List(String) {
+  case found {
+    Ok(sub) -> sub.members
+    Error(_) -> []
+  }
+}
+
+/// Bring back what `open_messages` returned before a restart. Queued
+/// messages queue again. A reserved one may already have reached its
+/// recipient, so it becomes Uncertain and is never sent again.
+pub fn restore(
+  core: Core,
+  now: Int,
+  saved: List(Message),
+) -> #(Core, List(Effect)) {
+  let #(core, effects) =
+    list.fold(saved, #(core, []), fn(acc, m) {
+      let #(core, effects) = acc
+      case dict.has_key(core.messages, m.id) {
+        True -> acc
+        False -> {
+          let #(core, version) = bump(core)
+          let core = remember(core, m.id, m.fingerprint)
+          case m.state {
+            Queued -> {
+              let m =
+                Message(..m, submission: "", generation: 0, version: version)
+              let r = get_recipient(core, m.to)
+              let core =
+                Core(..core, messages: dict.insert(core.messages, m.id, m))
+                |> put_recipient(
+                  m.to,
+                  Recipient(..r, queue: list.append(r.queue, [m.id])),
+                )
+              #(core, [Publish(m), ..effects])
+            }
+            _ -> {
+              let m =
+                Message(
+                  ..m,
+                  state: Uncertain,
+                  reason: "Yacwu restarted while delivering it; it may or may not have arrived",
+                  version: version,
+                )
+              let core =
+                Core(
+                  ..core,
+                  messages: dict.insert(core.messages, m.id, m),
+                  terminal: [m.id, ..core.terminal],
+                )
+              #(core, [Publish(m), ..effects])
+            }
+          }
+        }
+      }
+    })
+  let #(core, more) = tick(retain(core), now)
+  #(core, list.append(list.reverse(effects), more))
+}
+
 // -- Settings -----------------------------------------------------------------
 
 /// Turn session messages on or off for a recipient thread. Turning them off
