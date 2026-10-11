@@ -1053,6 +1053,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			host: thr.host ?? existing?.host ?? undefined
 		};
 		sessions = [summary, ...sessions.filter((s) => s.id !== thr.id)];
+		markRunningFromList(thr);
+	}
+
+	/**
+	 * After a reload nothing is known about running turns until a session is
+	 * opened; session list entries already say which ones are working. Only
+	 * "active" is applied: a stale idle entry must not end a live turn.
+	 */
+	function markRunningFromList(thr: { id: string; status?: { type: string } }) {
+		if (thr.status?.type === 'active' && threads[thr.id]?.status !== 'running') syncThreadRuntime(thr.id, thr);
 	}
 
 	function touchSession(id: string, timestamp: unknown) {
@@ -1971,6 +1981,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			// fetch started (and not yet visible to thread/list) must survive.
 			const extras = sessions.filter((s) => !fetched.some((f) => f.id === s.id));
 			sessions = [...extras, ...fetched];
+			for (const summary of fetched) markRunningFromList(summary as ThreadSummary & { status?: { type: string } });
 			defaultCwd = data.defaultCwd ?? '';
 			await recoverSideChats();
 		} finally {
