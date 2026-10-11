@@ -16,3 +16,10 @@ test('active reasoning is not a stall and normal completion is not an interrupti
 	expect(runtimeOutcome({ status: { type: 'idle' }, turns: [{ id: 'done', status: 'completed' }] })).toBe('idle');
 	expect(runtimeOutcome({})).toBe('unknown');
 });
+
+test('an unloaded thread with an unfinished turn was cut off; a running one is not', () => {
+	expect(runtimeOutcome({ status: { type: 'notLoaded' }, turns: [{ id: 'cut', status: 'inProgress' }] })).toBe('interrupted');
+	expect(runtimeOutcome({ status: { type: 'notLoaded' }, turns: [{ id: 'done', status: 'completed' }] })).toBe('idle');
+	// A persistent backend Yacwu reconnected to still reports its running turn.
+	expect(runtimeOutcome({ status: { type: 'active' }, turns: [{ id: 'live', status: 'inProgress' }] })).toBe('running');
+});

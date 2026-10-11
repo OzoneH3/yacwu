@@ -14,5 +14,7 @@ export function runtimeOutcome(thread: RuntimeThread): 'running' | 'interrupted'
 	if (thread.status?.type === 'active') return 'running';
 	if (thread.status?.type !== 'idle' && thread.status?.type !== 'notLoaded') return 'unknown';
 	const latest = thread.turns?.at(-1);
+	// No backend runs a thread it has not loaded: its unfinished turn was cut off.
+	if (thread.status?.type === 'notLoaded' && latest?.status === 'inProgress') return 'interrupted';
 	return latest?.status === 'interrupted' || latest?.status === 'failed' ? 'interrupted' : 'idle';
 }

@@ -1409,25 +1409,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				}
 			}
 			if (Object.keys(previouslyRunning).length === 0) return;
-			const response = await fetch('/api/threads/loaded', { signal: AbortSignal.timeout(5000) });
-			if (!response.ok) return;
-			const data = await response.json();
-			const loaded = new Set<string>(Array.isArray(data.data) ? data.data : []);
+			// Ask each thread's own backend. A loaded-thread list is not enough:
+			// it covers one host only, and a persistent backend that Yacwu just
+			// reconnected to lists none of its still-running threads.
 			await Promise.all(Object.entries(previouslyRunning).map(async ([threadId, sessionId]) => {
 				const observedTurnId = threads[threadId]?.turnId;
 				try {
-					let outcome: ReturnType<typeof runtimeOutcome> = 'interrupted';
-					let thread: { status?: { type: string }; turns?: Turn[] } = { status: { type: 'idle' } };
-					if (loaded.has(threadId)) {
-						const url = new URL(threadApi(threadId), window.location.origin);
-						url.searchParams.set('turns', '1');
-						const read = await fetch(url, { signal: AbortSignal.timeout(5000) });
-						if (!read.ok) return;
-						const data = await read.json();
-						if (!data.thread) return;
-						thread = data.thread;
-						outcome = runtimeOutcome(thread);
-					}
+					const url = new URL(threadApi(threadId), window.location.origin);
+					url.searchParams.set('turns', '1');
+					const read = await fetch(url, { signal: AbortSignal.timeout(5000) });
+					if (!read.ok) return;
+					const data = await read.json();
+					if (!data.thread) return;
+					const thread: { status?: { type: string }; turns?: Turn[] } = data.thread;
+					const outcome = runtimeOutcome(thread);
 					// A new streamed turn must not be overwritten by an older read.
 					if (threads[threadId]?.turnId !== observedTurnId) return;
 					if (outcome === 'unknown' || outcome === 'running') return;
@@ -1436,7 +1431,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					for (const item of latest?.items ?? []) upsertItem(threadId, item, false, latest?.id, true);
 					if (outcome === 'interrupted' && !interruptedSessions[sessionId]) {
 						interruptedSessions[sessionId] = true;
-						addLocalNote(sessionId, `Task interrupted.\nReason: ${interruptionReason(thread, loaded.has(threadId))}\nUse Continue interrupted task to resume.`, 'err');
+						addLocalNote(sessionId, `Task interrupted.\nReason: ${interruptionReason(thread, thread.status?.type !== 'notLoaded')}\nUse Continue interrupted task to resume.`, 'err');
 					}
 				} catch { /* Unreachable is not proof of interruption; retain state. */ }
 			}));

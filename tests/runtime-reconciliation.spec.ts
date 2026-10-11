@@ -25,3 +25,38 @@ test('loaded Claude thread becoming interrupted clears running UI without a comp
 	await expect(page.getByRole('button', { name: 'Stop current turn', exact: true })).toHaveCount(0);
 	await expect(page.getByText('Task interrupted. Reason: server restarted before completing turn Use Continue interrupted task to resume.', { exact: true })).toBeVisible();
 });
+
+async function restartedSession(page: import('@playwright/test').Page, status: string, turnStatus: string) {
+	const id = 'claude-after-restart';
+	const thread = () => ({ id, host: 'claude', name: 'Claude test', cwd: '/tmp', status: { type: status },
+		turns: [{ id: 'turn-live', status: turnStatus, items: [], error: null }] });
+	await page.addInitScript(({ id }) => localStorage.setItem('yacwu-running-tasks', JSON.stringify({ [id]: id })), { id });
+	await page.clock.install();
+	await page.route('**/api/**', async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		let data: object = {};
+		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+		if (path === '/api/threads') data = { data: [thread()], defaultCwd: '/tmp' };
+		// A persistent backend Yacwu just reconnected to lists no loaded threads.
+		else if (path === '/api/threads/loaded') data = { data: [] };
+		else if (path.endsWith('/model')) data = { model: 'sonnet', effort: 'medium', models: [] };
+		else if (path.startsWith(`/api/threads/${id}`)) data = { thread: thread() };
+		await route.fulfill({ json: data });
+	});
+	await page.goto(`/s/${id}?host=claude`);
+	await page.clock.fastForward(16000);
+}
+
+test('a turn still running in a persistent backend after a restart is not flagged as interrupted', async ({ page }) => {
+	await restartedSession(page, 'active', 'inProgress');
+	await expect(page.getByRole('button', { name: 'Stop current turn', exact: true })).toBeVisible();
+	await page.clock.fastForward(16000);
+	await expect(page.getByRole('button', { name: 'Continue interrupted task', exact: true })).toHaveCount(0);
+	await expect(page.getByText(/Task interrupted/)).toHaveCount(0);
+});
+
+test('a thread its backend no longer runs is still flagged after a restart', async ({ page }) => {
+	await restartedSession(page, 'notLoaded', 'inProgress');
+	await expect(page.getByRole('button', { name: 'Continue interrupted task', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Stop current turn', exact: true })).toHaveCount(0);
+});
