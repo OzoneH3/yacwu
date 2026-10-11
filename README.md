@@ -40,7 +40,8 @@ rules locally, and records usage/diagnostic journals on the server.
   expandable groups. The latest activity stays visible while working, as does a
   final failure; **Show all activity** shows the full trace
 - ⏱️ Session bar with task progress, time-left estimates, elapsed time, and
-  5-hour / 7-day usage with reset countdowns
+  5-hour / 7-day usage with reset countdowns; quota-stopped sessions keep a
+  sidebar wait clock visible while allowance readings refresh
 - 🤝 Multi-agent visibility: switch between a session and its spawned agents,
   with read-only agent transcripts
 - 🧠 Per-session model and reasoning effort, with "Suggest settings" and

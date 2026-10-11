@@ -324,6 +324,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let accountUsageByHost = $state<Record<string, AccountUsage>>({});
 	let accountUsageFetchedAt = $state<Record<string, number>>({});
 	let accountUsagePending = $state<Record<string, boolean>>({});
+	let quotaUsageRefreshRequestedAt: Record<string, number> = {};
 	// Sub-agent threads spawned by sessions (multi-agent collaboration).
 	let agents = $state<AgentRegistry>({});
 	let activeTurnBySession = $state<Record<string, string>>({});
@@ -1777,7 +1778,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const t = ensureThread(tid);
 					t.status = 'idle';
 					for (const item of p.turn?.items ?? []) {
-						if (item.type === 'localNote' && item.quotaStop) upsertItem(tid, item, false, completedTurnId);
+						if (item.type === 'localNote' && item.quotaStop) {
+							upsertItem(tid, item, false, completedTurnId);
+							refreshQuotaUsage(sessionHost(tid));
+						}
 					}
 					if (p.turn?.status === 'completed' && t.turnStartedAt !== null && isClaudeSession(tid)) recordClaudeEstimateBias(t, completedTurnId ?? currentTurnId ?? null, t.turnStartedAt);
 					const duration = t.turnStartedAt === null ? null : Math.max(0, Date.now() - t.turnStartedAt);
@@ -2915,14 +2919,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const usage = accountUsageByHost[sessionHost(id)];
 		const reserve = isClaudeSession(id) ? settings.claudeAllowanceReserve : 0;
 		const now = activityClock / 1000;
+		const quotaStop = itemsOf(threads[id] ?? null).slice().reverse().find((item: any) => item.quotaStop && item.resumeAvailable);
 		const blocked = [usage?.fiveHour, usage?.sevenDay].filter((window): window is RateLimitWindow =>
 			Boolean(window) && window!.usedPercent >= 100 - reserve && (window!.resetsAt == null || window!.resetsAt > now));
 		if (blocked.length) {
 			const resets = blocked.map(window => window.resetsAt).filter((at): at is number => typeof at === 'number');
 			return resets.length === blocked.length ? `Waiting for allowance · resets in ${fmtReset(Math.max(...resets))}` : 'Waiting for allowance · reset time unknown';
 		}
-		if (!usage?.fiveHour && !usage?.sevenDay && itemsOf(threads[id] ?? null).some((item: any) => item.quotaStop && item.resumeAvailable)) return 'Waiting for allowance · reset time unknown';
+		// The quota guard stops from a fresher reading than the browser's periodic
+		// account sample. Keep the wait clock visible from its authoritative stop
+		// note while that sample catches up (including after a page refresh).
+		if (quotaStop) {
+			const text = String((quotaStop as any).text ?? '');
+			const window = /7-day/i.test(text) ? usage?.sevenDay : /5-hour/i.test(text) ? usage?.fiveHour : null;
+			if (window?.resetsAt != null && window.resetsAt > now) return `Waiting for allowance · resets in ${fmtReset(window.resetsAt)}`;
+			return 'Waiting for allowance · checking reset time';
+		}
 		return null;
+	}
+
+	function refreshQuotaUsage(host: string) {
+		const key = host || LOCAL_HOST;
+		const now = Date.now();
+		// At most one stop-triggered refresh per host every two minutes; the
+		// server applies the same minimum window to rate-limit reads.
+		if (now - (quotaUsageRefreshRequestedAt[key] ?? 0) < 120_000) return;
+		quotaUsageRefreshRequestedAt[key] = now;
+		void loadAccountUsage(key, true);
 	}
 
 	async function loadAccountUsage(host: string, force = false) {
