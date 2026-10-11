@@ -79,6 +79,7 @@ export function createClaudeUsageReader({
   function unavailable() {
     return { ...claudeRateLimits(null), usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
   }
+  /** @param {number} reserve */
   function lastKnownSafe(reserve) {
     const windows = [cached.rateLimits.primary, cached.rateLimits.secondary];
     return lastSuccess > 0 && windows.every(window =>
@@ -86,11 +87,13 @@ export function createClaudeUsageReader({
       (reserve <= 0 || window.usedPercent < 100 - reserve)
     );
   }
+  /** @param {number} reserve */
   function forcedFallback(reserve) {
     return lastKnownSafe(reserve)
       ? { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null }
       : unavailable();
   }
+  /** @returns {Promise<ReturnType<typeof claudeRateLimits> & {usageError?: {code: string, retryAt: number} | null}>} */
   return async ({ force = false, reserve = 10 } = {}) => {
     if (pending) {
       const reading = await pending;
@@ -128,7 +131,7 @@ export function createClaudeUsageReader({
         cached = claudeRateLimits(await response.json(), auth?.subscriptionType ?? null);
         lastSuccess = now();
         const resets = [cached.rateLimits.primary, cached.rateLimits.secondary]
-          .map(window => window?.resetsAt)
+          .map(window => window?.resetsAt ?? NaN)
           .filter((at) => Number.isFinite(at) && at * 1000 > now())
           .map(at => at * 1000);
         // Schedule a forced refresh at a known reset instead of throttling it
