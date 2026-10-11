@@ -53,8 +53,15 @@ fn track_async(
 /// #(pending, queued) request counts from the manager's own diagnostics.
 fn outstanding(cx: codex.Codex) -> #(Int, Int) {
   let text = json.to_string(codex.diagnostic_snapshot(cx))
+  // The manager's own startup look for running threads is not part of
+  // these scenarios (the silent stub never answers it).
   let assert Ok(pending) =
-    json.parse(text, decode.at(["pending"], decode.list(decode.dynamic)))
+    json.parse(
+      text,
+      decode.at(["pending"], decode.list(decode.at(["method"], decode.string))),
+    )
+  let pending =
+    list.filter(pending, fn(method) { method != "thread/loaded/list" })
   let assert Ok(queued) =
     json.parse(text, decode.at(["queuedCount"], decode.int))
   #(list.length(pending), queued)

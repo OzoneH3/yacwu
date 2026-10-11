@@ -471,6 +471,9 @@ type State {
     /// Threads resumed/started over this manager — re-resumed after a
     /// reconnect so their notifications keep flowing.
     resumed: List(String),
+    /// Whether this manager has looked for threads a persistent backend was
+    /// already running when it first connected (see `adopt_running_threads`).
+    adopted: Bool,
     home: String,
     codex_home: String,
     remote_sock: String,
@@ -510,6 +513,7 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     forwarder: None,
     connector: None,
     resumed: [],
+    adopted: False,
     home: case transport {
       Ssh(_) -> ""
       _ -> local_home()
@@ -1566,15 +1570,25 @@ fn on_response(
             })
           // Re-open the threads this manager had loaded before the
           // disconnect, so their notifications flow on this connection too.
-          list.fold(state.resumed, state, fn(state, thread_id) {
-            send_request(
-              state,
-              conn,
-              "thread/resume",
-              json.object([#("threadId", json.string(thread_id))]),
-              Discard,
-            )
-          })
+          let state =
+            list.fold(state.resumed, state, fn(state, thread_id) {
+              send_request(
+                state,
+                conn,
+                "thread/resume",
+                json.object([#("threadId", json.string(thread_id))]),
+                Discard,
+              )
+            })
+          case state.adopted, state.transport {
+            False, Local(_) -> state
+            False, _ -> {
+              let codex = state.self
+              process.spawn_unlinked(fn() { adopt_running_threads(codex) })
+              State(..state, adopted: True)
+            }
+            True, _ -> state
+          }
         }
         Error(message) -> {
           io.println_error(
@@ -1680,6 +1694,51 @@ fn on_response(
       }
   }
 }
+
+/// A persistent backend outlives yacwu, but a backend sends a thread's events
+/// only to connections that started or resumed it, and a freshly started
+/// manager has resumed nothing. Resume the threads still running there, so
+/// their events flow again right after a yacwu restart, also for sessions no
+/// page has open. Runs once per manager, outside the actor: it waits on
+/// replies. The resumes go through `request`, so `track_resumed` keeps them
+/// for later reconnects.
+fn adopt_running_threads(codex: Codex) -> Nil {
+  // Bounded: a backend that never answers must not keep these pending.
+  let ask = fn(method, params) {
+    request_tracked(codex, method, params, adopt_timeout_ms).result
+  }
+  let loaded =
+    ask("thread/loaded/list", json.object([]))
+    |> result.map(fn(reply) {
+      decode.run(reply, decode.at(["data"], decode.list(decode.string)))
+      |> result.unwrap([])
+    })
+    |> result.unwrap([])
+  list.each(loaded, fn(thread_id) {
+    let status =
+      ask(
+        "thread/read",
+        json.object([
+          #("threadId", json.string(thread_id)),
+          #("includeTurns", json.bool(False)),
+        ]),
+      )
+      |> result.map(jsonx.field_string(_, ["thread", "status", "type"]))
+    case status {
+      Ok(Ok("active")) -> {
+        let _ =
+          ask(
+            "thread/resume",
+            json.object([#("threadId", json.string(thread_id))]),
+          )
+        Nil
+      }
+      _ -> Nil
+    }
+  })
+}
+
+const adopt_timeout_ms = 30_000
 
 /// Maintain the set of threads to re-resume after a reconnect.
 fn track_resumed(

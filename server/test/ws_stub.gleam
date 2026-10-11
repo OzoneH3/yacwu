@@ -2,8 +2,10 @@
 ////
 //// Listens on a Unix socket, performs the WebSocket server handshake, and
 //// answers a tiny scripted subset of the app-server protocol: `initialize`
-//// gets an empty result, `thread/resume` echoes the thread id back, and any
-//// other request gets `{"ok": true}`. Every received request method is
+//// gets an empty result, `thread/resume` echoes the thread id back,
+//// `thread/loaded/list` reports two loaded threads ("thr_running", active,
+//// and "thr_idle") for `thread/read`, and any other request gets
+//// `{"ok": true}`. Every received request method is
 //// reported to the test's subject, and the test can kill the current
 //// connection to exercise the manager's reconnect path.
 
@@ -55,6 +57,8 @@ fn tcp_close(socket: Socket) -> Dynamic
 pub type Event {
   Attached
   Received(method: String)
+  /// A `thread/resume` for this thread id (after its `Received`).
+  Resumed(thread_id: String)
 }
 
 /// Test-side control over the stub.
@@ -246,21 +250,38 @@ fn handle_message(client: Socket, text: String, events: Subject(Event)) -> Nil {
         // Notifications (initialized, …) get no reply.
         Error(_) -> Nil
         Ok(id) -> {
+          let thread_id =
+            parsed
+            |> result.replace_error(Nil)
+            |> result.try(fn(msg) {
+              decode.run(msg, decode.at(["params", "threadId"], decode.string))
+              |> result.replace_error(Nil)
+            })
+            |> result.unwrap("thr_unknown")
           let result = case method {
             "thread/resume" -> {
-              let thread_id =
-                parsed
-                |> result.replace_error(Nil)
-                |> result.try(fn(msg) {
-                  decode.run(
-                    msg,
-                    decode.at(["params", "threadId"], decode.string),
-                  )
-                  |> result.replace_error(Nil)
-                })
-                |> result.unwrap("thr_unknown")
+              process.send(events, Resumed(thread_id))
               json.object([
                 #("thread", json.object([#("id", json.string(thread_id))])),
+              ])
+            }
+            "thread/loaded/list" ->
+              json.object([
+                #("data", json.array(["thr_running", "thr_idle"], json.string)),
+              ])
+            "thread/read" -> {
+              let status = case thread_id {
+                "thr_running" -> "active"
+                _ -> "idle"
+              }
+              json.object([
+                #(
+                  "thread",
+                  json.object([
+                    #("id", json.string(thread_id)),
+                    #("status", json.object([#("type", json.string(status))])),
+                  ]),
+                ),
               ])
             }
             _ -> json.object([#("ok", json.bool(True))])

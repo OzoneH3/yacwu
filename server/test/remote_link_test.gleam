@@ -102,3 +102,41 @@ fn await_stream_contains(
       }
   }
 }
+
+/// Every thread the stub resumed within `timeout` ms of quiet.
+fn resumed_threads(
+  events: process.Subject(ws_stub.Event),
+  timeout: Int,
+  found: List(String),
+) -> List(String) {
+  case process.receive(events, timeout) {
+    Error(_) -> found
+    Ok(ws_stub.Resumed(id)) -> resumed_threads(events, timeout, [id, ..found])
+    Ok(_) -> resumed_threads(events, timeout, found)
+  }
+}
+
+// A fresh manager (yacwu just restarted) attaching to a persistent backend
+// resumes the threads still running there, and only those, without any
+// page opening them: the backend sends a thread's events only to
+// connections that resumed it.
+pub fn adopts_running_threads_on_first_connect_test() -> Nil {
+  let path = "/tmp/yacwu-adopt-test.sock"
+  let events = process.new_subject()
+  let control = ws_stub.start(path, events)
+  let name: codex.Codex = process.new_name("codex_adopt_test")
+  let assert Ok(_) = codex.start(name, "stub", codex.UnixSock(path))
+
+  let assert Ok(_) = codex.request(name, "test/ping", json.object([]))
+  should.equal(resumed_threads(events, 1000, []), ["thr_running"])
+
+  // A later reconnect re-resumes it through the usual list, not by adopting
+  // again.
+  process.send(control, ws_stub.Kill)
+  let assert Ok(Nil) = await_received(events, "initialize", 15_000)
+  should.equal(resumed_threads(events, 1000, []), ["thr_running"])
+
+  process.send(control, ws_stub.Stop)
+  let _ = simplifile.delete(path)
+  Nil
+}
