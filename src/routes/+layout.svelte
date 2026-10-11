@@ -5205,6 +5205,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					if (activeId) void loadRelayLog(activeId);
 					return;
 				}
+				if (msg.method === 'yacwu/buildUpdated') {
+					checkForNewBuild();
+					return;
+				}
 				handleNotification(msg);
 			} catch {
 				/* ignore */

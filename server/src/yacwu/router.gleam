@@ -870,7 +870,20 @@ fn delete_archived_thread(
 /// always JSON objects, so a bare "ping" cannot collide.
 const ping = "ping"
 
+/// Like ping: a bare word, so it cannot collide with a JSON notification.
+const build_check = "build-check"
+
+const build_check_ms = 2000
+
+/// The deployed web UI's version file; "" while missing (mid-build).
+fn build_version(ctx: Context) -> String {
+  simplifile.read(filepath.join(ctx.static_dir, "_app/version.json"))
+  |> result.unwrap("")
+}
+
 /// Server-Sent Events stream of every codex notification (all sessions).
+/// It also tells the page as soon as a new web UI build is deployed, so the
+/// page can offer a reload without waiting for its own (slow) polling.
 fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
   mist.server_sent_events(
     req,
@@ -880,9 +893,11 @@ fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
       hosts.subscribe_all(ctx.registry, process.self(), subject)
       relay.subscribe(ctx.relay, process.self(), subject)
       let _ = process.send_after(subject, 15_000, ping)
-      subject
+      let _ = process.send_after(subject, build_check_ms, build_check)
+      #(subject, build_version(ctx))
     },
-    fn(subject, message, conn) {
+    fn(state, message, conn) {
+      let #(subject, version) = state
       case message {
         m if m == ping -> {
           let event =
@@ -895,9 +910,28 @@ fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
               hosts.subscribe_all(ctx.registry, process.self(), subject)
               relay.subscribe(ctx.relay, process.self(), subject)
               let _ = process.send_after(subject, 15_000, ping)
-              actor.continue(subject)
+              actor.continue(state)
             }
             Error(_) -> actor.stop()
+          }
+        }
+        m if m == build_check -> {
+          let _ = process.send_after(subject, build_check_ms, build_check)
+          case build_version(ctx) {
+            current if current == "" || current == version ->
+              actor.continue(state)
+            current ->
+              case
+                mist.send_event(
+                  conn,
+                  mist.event(string_tree.from_string(
+                    "{\"method\":\"yacwu/buildUpdated\",\"params\":{}}",
+                  )),
+                )
+              {
+                Ok(_) -> actor.continue(#(subject, current))
+                Error(_) -> actor.stop()
+              }
           }
         }
         notification ->
@@ -907,7 +941,7 @@ fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
               mist.event(string_tree.from_string(notification)),
             )
           {
-            Ok(_) -> actor.continue(subject)
+            Ok(_) -> actor.continue(state)
             Error(_) -> actor.stop()
           }
       }
