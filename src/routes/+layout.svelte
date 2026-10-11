@@ -1081,16 +1081,25 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			url.searchParams.set('turns', '1');
 			const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
 			if (!res.ok) return;
-			const turn = ((await res.json()).thread?.turns as Turn[] | undefined)?.findLast((turn) => turn.status === 'inProgress');
-			if (!turn?.id || sessionHistoryLoaded[id] || sessionOpening[id]) return;
+			const thread: { status?: { type: string }; turns?: Turn[] } | undefined = (await res.json()).thread;
+			if (!thread || sessionHistoryLoaded[id] || sessionOpening[id]) return;
+			// Finished while nobody was listening (e.g. during a Yacwu restart).
+			if (thread.status?.type === 'idle' || thread.status?.type === 'notLoaded') {
+				if (threads[id]?.status === 'running') syncThreadRuntime(id, thread);
+				return;
+			}
+			const turn = thread.turns?.findLast((turn) => turn.status === 'inProgress');
+			if (!turn?.id) return;
 			syncThreadRuntime(id, { status: { type: 'active' }, turns: [turn] });
-			// Items that streamed in meanwhile are newer: keep them after the turn's.
+			// Items that streamed in after the read started go after the turn's;
+			// for the rest the backend's saved copy is the current one.
 			const t = ensureThread(id);
 			const live = itemsOf(t);
+			const read = new Set((turn.items ?? []).map((item) => (item as any).id));
 			t.order = [];
 			t.byId = {};
 			for (const item of turn.items ?? []) if ((item as any).id) upsertItem(id, item as any, false, turn.id);
-			for (const item of live) upsertItem(id, item as ThreadItem & { id: string });
+			for (const item of live) if (!read.has(item.id)) upsertItem(id, item as ThreadItem & { id: string });
 		} catch {
 			/* the list keeps showing the session as running; progress fills in live */
 		}
@@ -5028,6 +5037,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (event.target === event.currentTarget) settingsDialog?.close();
 	}
 
+	/**
+	 * The event stream came back (Yacwu restarted, or the connection dropped):
+	 * nothing that happened meanwhile was streamed. Reload the open session,
+	 * which also resumes it so its events flow again; refresh running
+	 * sessions' current turns for the list; other sessions reload their
+	 * history when next opened.
+	 */
+	function resyncAfterReconnect() {
+		for (const id of Object.keys(sessionHistoryLoaded)) if (id !== activeId) sessionHistoryLoaded[id] = false;
+		if (activeId && !sessionOpening[activeId]) {
+			sessionHistoryLoaded[activeId] = false;
+			void openSession(activeId, false);
+		}
+		void loadSessions().then(() => {
+			for (const session of sessions) {
+				if (session.id !== activeId && threads[session.id]?.status === 'running') void loadRunningTurn(session.id);
+			}
+		});
+	}
+
 	const buildVersion = parseAppVersion(appVersion);
 
 	function checkForNewBuild() {
@@ -5186,6 +5215,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (activeId) void loadAccountUsage(activeHost, true);
 		}, 5 * 60 * 1000);
 		const es = new EventSource('/api/events');
+		/** Every later `yacwu/connected` is a reconnect. */
+		let streamConnectedBefore = false;
 		es.onopen = () => {
 			connected = true;
 			if (activeId) reportDiagnostics(activeId, 'sse_connected');
@@ -5200,6 +5231,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const msg = JSON.parse(e.data) as JsonRpcNotification;
 				if (msg.method === 'yacwu/connected') {
 					connected = true;
+					if (streamConnectedBefore) resyncAfterReconnect();
+					streamConnectedBefore = true;
 					checkForNewBuild();
 					void reconcileInterruptedSessions();
 					if (activeId) void loadRelayLog(activeId);

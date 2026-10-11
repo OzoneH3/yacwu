@@ -210,10 +210,12 @@ the server. Extra environment goes in `~/.config/yacwu/service.env`.
 Daemons keep the code and environment they started with. After updating
 codex, the Claude wrapper or the adapter, stop them so the next request starts
 fresh ones: `pkill -f "app-server --listen unix://$HOME/.cache/yacwu/"`.
-Backends run by `backend-daemon.mjs` (such as the Claude wrapper) hold the
-events and requests they send while Yacwu is down and deliver them when it
-reconnects, so an agent's question is not lost; the daemon must have been
-started by this version for that.
+After a restart Yacwu resumes the threads the daemons are still running, so
+their events keep streaming, and open pages reload what they missed while
+it was down. Backends run by `backend-daemon.mjs` (such as the Claude
+wrapper) also hold the events and requests they send meanwhile and deliver
+them on reconnect, so an agent's question is not lost; that needs a daemon
+started by this version.
 
 ### Alternative backends
 
