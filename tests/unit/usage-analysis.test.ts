@@ -77,8 +77,8 @@ test('learns separate model costs from independent overlapping usage mixtures', 
 		tokens(8.1, 'a', 500_000), tokens(8.1, 'b', 500_000), quota(8.2, 20),
 		event(9, 'turn/completed', { threadId: 'a', turnId: 'a', status: 'completed' }), quota(10, 16)
 	]);
-	expect(result.rates.find((rate) => rate.model === 'model-a')!.percentPer100kTokens).toBeCloseTo(1, 4);
-	expect(result.rates.find((rate) => rate.model === 'model-b')!.percentPer100kTokens).toBeCloseTo(3, 4);
+	expect(result.rates.find((rate) => rate.model === 'model-a')!.percentPerMillionTokens).toBeCloseTo(10, 4);
+	expect(result.rates.find((rate) => rate.model === 'model-b')!.percentPerMillionTokens).toBeCloseTo(30, 4);
 	expect(result.tasks.find((task) => task.threadId === 'a')!.estimatedWeeklyPercent).toBeCloseTo(5, 3);
 	expect(result.tasks.every((task) => task.overlapping)).toBe(true);
 });
@@ -107,7 +107,7 @@ test('quota resets and quota changes without tracked tokens do not train costs',
 test('identical mixtures cannot identify individual model costs', () => {
 	const result = analyzeUsage([...setup('a', 'model-a'), ...setup('b', 'model-b'), quota(2, 0), tokens(3, 'a', 100), tokens(3, 'b', 100), quota(4, 2), tokens(5, 'a', 200), tokens(5, 'b', 200), quota(6, 4), tokens(7, 'a', 300), tokens(7, 'b', 300), quota(8, 6)]);
 	expect(result.observations).toBe(3);
-	expect(result.rates.every((rate) => rate.percentPer100kTokens === null)).toBe(true);
+	expect(result.rates.every((rate) => rate.percentPerMillionTokens === null)).toBe(true);
 });
 
 test('model and effort are frozen per turn even when selection changes during work', () => {

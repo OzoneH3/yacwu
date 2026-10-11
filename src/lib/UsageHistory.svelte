@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { hostQuery } from './protocol';
-	import { analyzeUsage, type UsageEvent, type UsagePool } from './usage-analysis';
+	import { analyzeUsage, RATE_LABEL, RATE_TOKENS, type UsageEvent, type UsagePool } from './usage-analysis';
 	import BenchmarkControls from './BenchmarkControls.svelte';
 	import type { CostEstimate } from './usage-fit';
 	let { host, sessionId, models, selectedModel, selectedEffort, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; selectedModel?: string; selectedEffort?: string; onclose: () => void } = $props();
@@ -35,12 +35,12 @@
 	const accountChange = (pool: UsagePool) => pool.weeklyLeftBefore - pool.weeklyLeftAfter;
 	function observedRate(pool: UsagePool, tokenCount: number) {
 		return pool.status === 'settled' && pool.groups.length === 1 && tokenCount > 0
-			? accountChange(pool) / tokenCount * 100_000 : null;
+			? accountChange(pool) / tokenCount * RATE_TOKENS : null;
 	}
 	function roundingRange(pool: UsagePool, tokenCount: number) {
 		if (!tokenCount) return '';
 		const change = accountChange(pool);
-		return `Rounded endpoints allow roughly ${percent(Math.max(0, change - 1) / tokenCount * 100_000)}–${percent((change + 1) / tokenCount * 100_000)} per 100k tokens. External usage and reporting delay can add uncertainty.`;
+		return `Rounded endpoints allow roughly ${percent(Math.max(0, change - 1) / tokenCount * RATE_TOKENS)}–${percent((change + 1) / tokenCount * RATE_TOKENS)} per ${RATE_LABEL} tokens. External usage and reporting delay can add uncertainty.`;
 	}
 	function duration(start: number, end: number | null) {
 		const seconds = Math.max(0, Math.round(((end ?? Date.now()) - start) / 1000));
@@ -81,7 +81,7 @@
 		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded, including windows where an agent ran without reporting tokens. Ordinary intervals close after at least 2% used, stable readings, and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
 		<div class="table-wrap">
 			<table>
-				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>{windowLabel} cost / 100k (observed mix)</th><th>Uncached / cached / output per 100k</th></tr></thead>
+				<thead><tr><th>Model</th><th>Thinking</th><th>Samples</th><th>Tokens sampled</th><th>{windowLabel} cost / {RATE_LABEL} (observed mix)</th><th>Uncached / cached / output per {RATE_LABEL}</th></tr></thead>
 				<tbody>
 					{#each analysis.rates as rate}
 						<tr><td>{rate.model}</td><td>{rate.effort}</td><td>{rate.samples}<small>{rate.singleSettingSamples} single-setting</small></td><td>{tokens(rate.tokens)}</td><td>{range(rate.estimate)}{#if rate.estimate}<small>{rate.estimate.provisional ? `Provisional · ${rate.estimate.samples} single-setting samples` : rate.estimate.weighted ? 'Fitted on token categories' : 'Total-token fallback'}</small>{:else if rate.samples && !rate.singleSettingSamples}<small>Only mixed windows so far</small>{/if}</td><td>{#if Object.values(rate.weights).some((weight) => weight !== null)}{percent(rate.weights.uncached)} / {percent(rate.weights.cached)} / {percent(rate.weights.output)}{:else}—<small>Not separable yet: windows had similar token mixes</small>{/if}</td></tr>
@@ -107,7 +107,7 @@
 						<span>{tokens(pool.groups.reduce((sum, group) => sum + group.tokens.totalTokens, 0))} tokens · {accountChange(pool)}% account change</span>
 						<span>{Math.max(...pool.groups.map((group) => group.peakWorkers))} concurrent workers in one setting</span>
 						{#if pool.groups.length === 1 && pool.status === 'settled'}
-							<span class="pool-rate" title={roundingRange(pool, pool.groups[0].tokens.totalTokens)}>{percent(observedRate(pool, pool.groups[0].tokens.totalTokens))} / 100k</span>
+							<span class="pool-rate" title={roundingRange(pool, pool.groups[0].tokens.totalTokens)}>{percent(observedRate(pool, pool.groups[0].tokens.totalTokens))} / {RATE_LABEL}</span>
 						{/if}
 					</summary>
 					<p class="meta">Account {windowLabel.toLowerCase()} left: {pool.weeklyLeftBefore}% → {pool.weeklyLeftAfter}%. Window: {duration(pool.startedAt, pool.endedAt)}.
@@ -118,7 +118,7 @@
 					</p>
 					<div class="table-wrap">
 						<table>
-							<thead><tr><th>Model / thinking</th><th>Workers / turns</th><th>Combined tokens</th><th>Worker time</th><th>Observed {windowLabel.toLowerCase()} cost / 100k</th></tr></thead>
+							<thead><tr><th>Model / thinking</th><th>Workers / turns</th><th>Combined tokens</th><th>Worker time</th><th>Observed {windowLabel.toLowerCase()} cost / {RATE_LABEL}</th></tr></thead>
 							<tbody>
 								{#each pool.groups as group}
 									<tr>

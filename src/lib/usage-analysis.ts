@@ -1,4 +1,4 @@
-import { learnTokenCosts, type CostEstimate, type UsageObservation } from './usage-fit';
+import { learnTokenCosts, WEIGHT_TOKENS, type CostEstimate, type UsageObservation } from './usage-fit';
 
 /** Only usage metadata is stored: never prompts, answers or tool output. */
 export interface UsageEvent {
@@ -59,13 +59,25 @@ export interface UsageTask {
 	benchmark: boolean;
 }
 
+/** Allowance rates are shown per this many tokens. */
+export const RATE_TOKENS = 1_000_000;
+export const RATE_LABEL = '1M';
+
+function perRateTokens(weights: Record<'uncached' | 'cached' | 'output', number | null>) {
+	const scale = RATE_TOKENS / WEIGHT_TOKENS;
+	return { uncached: weights.uncached === null ? null : weights.uncached * scale,
+		cached: weights.cached === null ? null : weights.cached * scale,
+		output: weights.output === null ? null : weights.output * scale };
+}
+
 export interface UsageRate {
 	model: string;
 	effort: string;
 	samples: number;
 	singleSettingSamples: number;
 	tokens: number;
-	percentPer100kTokens: number | null;
+	/** Per RATE_TOKENS tokens of this setting's observed token mix. */
+	percentPerMillionTokens: number | null;
 	estimate: CostEstimate | null;
 	weights: Record<'uncached' | 'cached' | 'output', number | null>;
 }
@@ -441,11 +453,11 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		const total = emptyTokens();
 		for (const sample of samples) for (const field of Object.keys(total) as (keyof TokenTotals)[]) total[field] += sample.tokens[key][field];
 		const normalized = { ...total };
-		for (const field of Object.keys(total) as (keyof TokenTotals)[]) normalized[field] = total.totalTokens ? total[field] / total.totalTokens * 100_000 : 0;
+		for (const field of Object.keys(total) as (keyof TokenTotals)[]) normalized[field] = total.totalTokens ? total[field] / total.totalTokens * RATE_TOKENS : 0;
 		const estimate = learned.estimate(key, normalized);
 		return { model, effort, samples: samples.length,
 			singleSettingSamples: samples.filter((sample) => Object.values(sample.tokens).filter((tokens) => tokens.totalTokens > 0).length === 1).length,
-			tokens: total.totalTokens, percentPer100kTokens: estimate?.value ?? null, estimate, weights: learned.weights(key) };
+			tokens: total.totalTokens, percentPerMillionTokens: estimate?.value ?? null, estimate, weights: perRateTokens(learned.weights(key)) };
 	});
 	for (const task of tasks) {
 		const accountQuotas = quotas.filter((quota) => quota.accountKey === task.accountKey);

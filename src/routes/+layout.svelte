@@ -64,7 +64,7 @@
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
-	import { analyzeUsage } from '$lib/usage-analysis';
+	import { analyzeUsage, RATE_LABEL } from '$lib/usage-analysis';
 	import { summarizeTaskAllowances, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
 	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
 	import { readWorkspaceLink } from '$lib/workspace-links';
@@ -677,8 +677,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		const rate = activeUsageAnalysis?.rates.find((rate) => rate.model === activeConfig?.model && rate.effort === effort);
 		const fiveHourRate = activeFiveHourUsageAnalysis?.rates.find((rate) => rate.model === activeConfig?.model && rate.effort === effort);
 		return [{ rate, label: 'week' }, { rate: fiveHourRate, label: '5h' }].flatMap(({ rate: selected, label }) => {
-			return selected?.percentPer100kTokens != null
-				? [`${formatAllowancePercent(selected.percentPer100kTokens)} ${label}/100k${selected.estimate?.provisional ? ' · early' : ''}`] : [];
+			return selected?.percentPerMillionTokens != null
+				? [`${formatAllowancePercent(selected.percentPerMillionTokens)} ${label}/${RATE_LABEL}${selected.estimate?.provisional ? ' · early' : ''}`] : [];
 		}).join(' · ') || 'Learning…';
 	}
 

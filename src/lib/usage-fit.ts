@@ -31,9 +31,12 @@ function inverse(matrix: number[][]): number[][] | null {
 	return a.map((row) => row.slice(n));
 }
 
+/** Learned weights are % of the allowance per this many tokens of a category. */
+export const WEIGHT_TOKENS = 100_000;
+
 function train(observations: UsageObservation[], features: Feature[]) {
 	if (!features.length || observations.length < Math.max(3, features.length + 2)) return null;
-	const x = observations.map((sample) => features.map((f) => amount(sample.tokens[f.group], f.category) / 100_000));
+	const x = observations.map((sample) => features.map((f) => amount(sample.tokens[f.group], f.category) / WEIGHT_TOKENS));
 	const gram = features.map((_, i) => features.map((_, j) => x.reduce((sum, row) => sum + row[i] * row[j], 0)));
 	const covariance = inverse(gram);
 	if (!covariance) return null;
@@ -128,7 +131,7 @@ export function learnTokenCosts(observations: UsageObservation[]) {
 			return { value: totals.percent * scale, low: Math.max(0, totals.percent - single.length) * scale,
 				high: (totals.percent + single.length) * scale, samples: single.length, weighted: false, provisional: true };
 		}
-		const vector = fit.features.map((f) => f.group === group ? amount(tokens, f.category) / 100_000 : 0);
+		const vector = fit.features.map((f) => f.group === group ? amount(tokens, f.category) / WEIGHT_TOKENS : 0);
 		const value = vector.reduce((sum, feature, i) => sum + feature * fit.beta[i], 0);
 		const uncertainty = Math.sqrt(Math.max(0, fit.variance * vector.reduce((sum, feature, i) => sum + feature * vector.reduce((s, other, j) => s + other * fit!.covariance[i][j], 0), 0)));
 		// A range reaching zero without any single-setting window means mixed
