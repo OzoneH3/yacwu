@@ -79,3 +79,29 @@ test('unavailable usage after reset retries in two minutes, respecting rate-limi
 		expect(saved.at(-1)?.[0].checkAt).toBe(retryAt ?? now + 120_000);
 	}
 });
+
+test('a rate-limited new task gets a quiet usage recheck at Retry-After without being queued', async () => {
+	let time = 1_000_000;
+	let reads = 0;
+	const replies: any[] = [];
+	const retryAt = time + 300_000;
+	const guard = createClaudeQuotaGuard(async () => {
+		reads++;
+		return time < retryAt
+			? { rateLimits: { primary: null, secondary: null }, usageError: { code: 'rate_limited', retryAt } }
+			: { rateLimits: { primary: { usedPercent: 20 }, secondary: { usedPercent: 30 } } };
+	}, () => {}, message => replies.push(message), { now: () => time });
+	const request = { id: 7, method: 'turn/start', params: { threadId: 'new' } };
+	expect(await guard.allow(request)).toBe(false);
+	expect(replies[0].error.message).toContain('Try again after');
+	await guard.poll();
+	expect(reads).toBe(1);
+	time = retryAt;
+	await guard.poll();
+	expect(reads).toBe(2);
+	// The failed attempt is not retained or started in the background.
+	expect(replies).toHaveLength(1);
+	expect(await guard.allow(request)).toBe(true);
+	expect(reads).toBe(3);
+	guard.close();
+});

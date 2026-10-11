@@ -104,7 +104,8 @@ hard-coded. Where available, its 5-hour and weekly allowance windows appear in
 the Session bar. Task history records tokens and runtime, and learns allowance
 costs separately for each provider/model/thinking combination. Missing readings
 or insufficient calibration are shown as unavailable or still learning, not
-treated as zero consumption.
+treated as zero consumption. If the usage endpoint is temporarily rate-limited,
+Yacwu rechecks after its retry time; rejected prompts are never silently queued.
 
 Claude support is adapter-based, not a native Anthropic app-server integration.
 Agent events, approvals, steering and backend-specific slash commands depend on

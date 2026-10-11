@@ -36,6 +36,9 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
   const active = new Map();
   const interrupted = new Map();
   const pending = new Map();
+  // A rejected new turn is not queued, but recheck usage once the provider's
+  // Retry-After expires so the next user action doesn't inherit a stale block.
+  let usageRetryAt = 0;
   /** threadId -> reserve (%) last requested for that session. */
   const reserves = new Map();
   const progressPreferences = new Map();
@@ -115,6 +118,9 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
       const usage = await readUsage({ force: true, reserve });
       if (closed) return false;
       stop(usage);
+      if (usage?.usageError?.code === 'rate_limited' && Number.isFinite(usage.usageError.retryAt)) {
+        usageRetryAt = Math.max(usageRetryAt, usage.usageError.retryAt);
+      }
       let message = reason(usage, reserve);
       const windows = [usage?.rateLimits?.primary, usage?.rateLimits?.secondary];
       if (!message && windows.some(w => typeof w?.usedPercent !== 'number' || !Number.isFinite(w.usedPercent))) message = `Cannot verify Claude 5-hour and 7-day allowance. New tasks are blocked until usage is available to protect the ${reserve}% reserve.`;
@@ -202,10 +208,18 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
         if (entry) { entry.checking = false; entry.checkAt = now(); }
       }
       const ready = [...resumes.values()].filter(entry => !entry.checking && !entry.starting && (entry.checkAt ?? 0) <= now() && !active.has(entry.threadId));
-      if (closed || polling || (!active.size && !ready.length)) return;
+      const usageRetryDue = usageRetryAt > 0 && usageRetryAt <= now();
+      if (closed || polling || (!active.size && !ready.length && !usageRetryDue)) return;
       polling = true;
       try {
         const usage = await readUsage({ force: true });
+        if (usage?.usageError?.code === 'rate_limited') {
+          usageRetryAt = Math.max(now() + 120_000, Number(usage.usageError.retryAt) || 0);
+        } else if (usageRetryDue) {
+          // Recheck succeeded (or returned a non-429 unavailable response).
+          // Do not spin on an endpoint error; a later task start can retry it.
+          usageRetryAt = 0;
+        }
         stop(usage);
         for (const entry of ready) {
           if (!resumes.has(entry.threadId) || closed) continue;
