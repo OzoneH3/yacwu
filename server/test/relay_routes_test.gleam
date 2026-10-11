@@ -40,6 +40,7 @@ fn serve(conf: auth.Config) -> Int {
       auth: conf,
       relay: relay_name,
       relay_credential: credential,
+      project_rules: process.new_name("relay_routes_project_rules"),
     )
   let bound = process.new_subject()
   let assert Ok(_) =

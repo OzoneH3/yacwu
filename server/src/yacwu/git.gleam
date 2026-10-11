@@ -328,6 +328,23 @@ fn branch(repo: Repo) -> String {
   }
 }
 
+/// The repository's shared Git directory: the same for every worktree of a
+/// repository, so it identifies the project across worktrees.
+pub fn common_dir(repo: Repo) -> Result(String, Nil) {
+  case
+    repo.exec(
+      git_arguments(["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    )
+  {
+    Ok(#(0, output)) ->
+      case string.trim(output) {
+        "" -> Error(Nil)
+        dir -> Ok(dir)
+      }
+    _ -> Error(Nil)
+  }
+}
+
 fn is_work_tree(repo: Repo) -> Result(Bool, String) {
   repo.exec(git_arguments(["rev-parse", "--is-inside-work-tree"]))
   |> result.map(fn(output) { output.0 == 0 && string.trim(output.1) == "true" })

@@ -60,6 +60,9 @@ rules locally, and records usage/diagnostic journals on the server.
   **Copy for coordinator** copies a Markdown handoff (session, folder, branch,
   request, response, changed files and linked file contents) for another chat
 - ⌨️ Slash commands (see below), message copy buttons, and prompt history
+- 📐 Project rules: one rule set per repository, shared by all its worktrees,
+  given to each new session at start; Session details shows which version a
+  session started with and flags outdated ones
 - 📝 Per-session rules: progress reporting, shared coordination, and custom
   instructions. Shared coordination gives agents the session name and lets
   same-folder Codex and Claude sessions leave notes in `.workspace/coordination`

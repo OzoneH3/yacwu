@@ -38,6 +38,7 @@ import yacwu/jsonx
 import yacwu/model_state.{type Store}
 import yacwu/oauth
 import yacwu/profiles
+import yacwu/project_rules
 import yacwu/relay
 import yacwu/relay_core
 import yacwu/remote
@@ -58,6 +59,8 @@ pub type Context {
     /// Shared secret agents present on `/api/relay/*` (from the file named
     /// by YACWU_RELAY_AUTH_FILE). Empty disables those routes.
     relay_credential: String,
+    /// Central project rules and the version each thread loaded.
+    project_rules: project_rules.Store,
   )
 }
 
@@ -528,6 +531,14 @@ fn dispatch(
     ["api", "threads", id, "files"], Get -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       list_files(host, cx, req, id)
+    }
+    ["api", "threads", id, "project-rules"], Get -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      thread_project_rules(ctx, host, cx, id)
+    }
+    ["api", "threads", id, "project-rules"], Post -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      save_thread_project_rules(ctx, host, cx, req, id)
     }
     ["api", "threads", id, "path-kinds"], Post -> {
       use host, cx <- with_codex(ctx, req, Some(id))
@@ -1618,7 +1629,7 @@ fn post_profile(
               json.object([
                 #("threadId", json.string(thread_id)),
                 #("config", profiles.config_json(profile)),
-                ..defaults.thread_defaults()
+                ..resume_defaults(ctx, thread_id)
               ]),
             )
           json_response(200, profile_state_json(Ok(profile), available))
@@ -1929,12 +1940,38 @@ fn create_thread_on(
           ]
         }
       }
+      // Central project rules join the developer instructions once, here.
+      let start_cwd = case jsonx.field_string(body, ["cwd"]) {
+        Ok(cwd) if cwd != "" -> checked_cwd(host, cx, cwd) |> result.unwrap(cwd)
+        _ ->
+          case hosts.is_local(host) {
+            True -> codex.default_cwd()
+            False -> codex.info(cx).home
+          }
+      }
+      let project = project_of(host, cx, start_cwd)
+      let rules = project_rules.rules(ctx.project_rules, project)
+      let steering =
+        project_rules.instructions(defaults.image_output_instructions, rules)
+      let params = with_developer_instructions(params, steering)
       case codex.request(cx, "thread/start", json.object(params)) {
         Error(message) -> json_response(500, error_body(message))
         Ok(result) -> {
           case jsonx.field_string(result, ["thread", "id"]) {
             Ok(thread_id) -> {
               hosts.record_threads(ctx.registry, host, [thread_id])
+              project_rules.record(
+                ctx.project_rules,
+                thread_id,
+                project_rules.Applied(
+                  project:,
+                  version: rules
+                    |> option.map(fn(rules) { rules.version })
+                    |> option.unwrap(0),
+                  instructions: steering,
+                  applied_at: oauth.now(),
+                ),
+              )
               // Remember the choice for opens/resumes on this server.
               case profile {
                 Some(profile) ->
@@ -1975,6 +2012,141 @@ fn create_thread_on(
         }
       }
     }
+  }
+}
+
+// -- Project rules --------------------------------------------------------------
+
+/// The project a folder belongs to on this host: its repository's shared Git
+/// directory, so every worktree resolves to the same rules.
+fn project_of(host: String, cx: Codex, cwd: String) -> String {
+  let identity = git.common_dir(repo_for(host, cx, cwd)) |> result.unwrap(cwd)
+  project_rules.project_key(host, identity)
+}
+
+fn with_developer_instructions(
+  params: List(#(String, Json)),
+  instructions: String,
+) -> List(#(String, Json)) {
+  [
+    #("developerInstructions", json.string(instructions)),
+    ..list.filter(params, fn(entry) { entry.0 != "developerInstructions" })
+  ]
+}
+
+/// Resuming re-sends exactly what the thread started with: a backend may
+/// replace its stored instructions with whatever a resume carries, and rule
+/// changes must not silently rewrite a running session.
+fn resume_defaults(ctx: Context, thread_id: String) -> List(#(String, Json)) {
+  case project_rules.applied(ctx.project_rules, thread_id) {
+    Some(applied) ->
+      with_developer_instructions(
+        defaults.thread_defaults(),
+        applied.instructions,
+      )
+    None -> defaults.thread_defaults()
+  }
+}
+
+fn project_rules_json(
+  project: String,
+  rules: Option(project_rules.Rules),
+) -> Json {
+  let identity = case string.split_once(project, ":") {
+    Ok(#(_, identity)) -> identity
+    Error(_) -> project
+  }
+  json.object([
+    #("project", json.string(project)),
+    #("name", json.string(project_rules.project_name(identity))),
+    #("identity", json.string(identity)),
+    #(
+      "text",
+      json.string(rules |> option.map(fn(r) { r.text }) |> option.unwrap("")),
+    ),
+    #(
+      "version",
+      json.int(rules |> option.map(fn(r) { r.version }) |> option.unwrap(0)),
+    ),
+    #(
+      "updatedAt",
+      json.nullable(rules |> option.map(fn(r) { r.updated_at }), json.int),
+    ),
+  ])
+}
+
+/// The rules of a session's project, and which version the session loaded.
+fn thread_project_rules(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  thread_id: String,
+) -> Response(ResponseData) {
+  case thread_root(cx, thread_id) {
+    Error(message) -> json_response(500, error_body(message))
+    Ok(cwd) -> {
+      let project = project_of(host, cx, cwd)
+      let rules = project_rules.rules(ctx.project_rules, project)
+      let current =
+        rules |> option.map(fn(rules) { rules.version }) |> option.unwrap(0)
+      let applied = project_rules.applied(ctx.project_rules, thread_id)
+      let status = case applied {
+        None -> "unknown"
+        Some(applied) if applied.project != project -> "otherProject"
+        Some(applied) if applied.version < current -> "outdated"
+        Some(_) -> "current"
+      }
+      json_response(
+        200,
+        json.object([
+          #("current", project_rules_json(project, rules)),
+          #(
+            "applied",
+            json.nullable(applied, fn(applied: project_rules.Applied) {
+              json.object([
+                #("project", json.string(applied.project)),
+                #("version", json.int(applied.version)),
+                #("appliedAt", json.int(applied.applied_at)),
+              ])
+            }),
+          ),
+          #("status", json.string(status)),
+        ]),
+      )
+    }
+  }
+}
+
+/// Save the rules of a session's project (all its worktrees). Existing
+/// sessions keep what they loaded; new sessions get the new version.
+fn save_thread_project_rules(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  req: Request(Connection),
+  thread_id: String,
+) -> Response(ResponseData) {
+  case
+    jsonx.field_string(read_json_body(req), ["text"]),
+    thread_root(cx, thread_id)
+  {
+    Error(_), _ -> json_response(400, error_body("rules text is required"))
+    _, Error(message) -> json_response(500, error_body(message))
+    Ok(text), Ok(cwd) ->
+      case string.byte_size(text) > 32_768 {
+        True -> json_response(400, error_body("rules are limited to 32 KB"))
+        False -> {
+          let project = project_of(host, cx, cwd)
+          let rules =
+            project_rules.save_rules(
+              ctx.project_rules,
+              project,
+              text,
+              oauth.now(),
+            )
+          json_response(200, project_rules_json(project, Some(rules)))
+        }
+      }
   }
 }
 
@@ -2182,7 +2354,7 @@ fn open_thread(
         )
       let resume_params = [
         #("threadId", json.string(thread_id)),
-        ..defaults.thread_defaults()
+        ..resume_defaults(ctx, thread_id)
       ]
       let resume_params = case profile {
         Ok(profile) -> [
@@ -2976,14 +3148,20 @@ fn fork(
     Ok(True) -> [#("ephemeral", json.bool(True))]
     _ -> []
   }
+  let parent = project_rules.applied(ctx.project_rules, thread_id)
   let extra = case jsonx.field_string(body, ["developerInstructions"]) {
     Ok(instructions) ->
       case string.trim(instructions) {
         "" -> extra
-        instructions -> [
-          #("developerInstructions", json.string(instructions)),
-          ..extra
-        ]
+        instructions -> {
+          // Extra fork instructions may replace the parent's: keep the
+          // project rules the parent started with in front of them.
+          let instructions = case parent {
+            Some(parent) -> parent.instructions <> "\n\n" <> instructions
+            None -> instructions
+          }
+          [#("developerInstructions", json.string(instructions)), ..extra]
+        }
       }
     Error(_) -> extra
   }
@@ -2999,7 +3177,14 @@ fn fork(
       // The fork lives on the same host as its parent; remember that so
       // follow-up calls route without a hint.
       case jsonx.field_string(result, ["thread", "id"]) {
-        Ok(fork_id) -> hosts.record_threads(ctx.registry, host, [fork_id])
+        Ok(fork_id) -> {
+          hosts.record_threads(ctx.registry, host, [fork_id])
+          case parent {
+            Some(parent) ->
+              project_rules.record(ctx.project_rules, fork_id, parent)
+            None -> Nil
+          }
+        }
         Error(_) -> Nil
       }
       json_response(

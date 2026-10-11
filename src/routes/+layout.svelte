@@ -11,6 +11,8 @@
 	import { clearsStalledWorkerPrompt } from '$lib/stalled-worker';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
+	import ProjectRulesEditor from '$lib/ProjectRulesEditor.svelte';
+	import type { ProjectRulesState } from '$lib/project-rules';
 	import GlobalSettingsForm from '$lib/GlobalSettingsForm.svelte';
 	import { defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings } from '$lib/settings';
 	import {
@@ -220,6 +222,18 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let folderDraft = $state<string | null>(null);
 	let folderError = $state('');
 	let folderChecking = $state(false);
+	// Which project-rule version each session started with, for the session bar.
+	let projectRuleStatus = $state<Record<string, ProjectRulesState['status']>>({});
+	$effect(() => {
+		const id = activeId;
+		if (!id) return;
+		untrack(() => {
+			fetch(threadApi(id, '/project-rules'))
+				.then((response) => response.ok ? response.json() : null)
+				.then((data: ProjectRulesState | null) => { if (data?.status) projectRuleStatus[id] = data.status; })
+				.catch(() => {});
+		});
+	});
 	// Composer option: clear the session (new empty conversation) before sending.
 	let resetBeforeSend = $state(false);
 	// How far Claude's stated minutes overshot on recently finished turns.
@@ -5768,6 +5782,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if activeConfig?.profile}
 						<span class="fact profile" title={`Profile ${activeConfig.profile}`}>{activeConfig.profile}</span>
 					{/if}
+					{#if projectRuleStatus[activeId] === 'outdated'}
+						<span class="fact rules-outdated" title="This session started with an older version of the project rules. Rule changes apply to new sessions; see Session details.">Rules outdated</span>
+					{/if}
 					{#if active?.tokens}
 						<span class="fact tokens" title={`${active.tokens.toLocaleString()} tokens used`}>{fmtTokens(active.tokens)} tok</span>
 					{/if}
@@ -6010,6 +6027,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						{/if}
 					</dl>
+					{#key activeId}<ProjectRulesEditor api={threadApi(activeId, '/project-rules')} onstatus={(data) => { if (activeId) projectRuleStatus[activeId] = data.status; }} />{/key}
 					{#key activeId}<SessionRulesEditor rules={rulesFor(activeId)} defaults={ruleDefaults()} onsave={(rules) => saveSessionRules(activeId, rules)} relayEnabled={relayEnabled[activeId] ?? null} onrelaychange={(enabled) => setRelayEnabled(activeId, enabled)} />{/key}
 					<button class="mini" type="button" onclick={() => { sessionInfoDialog?.close(); usageHistoryOpen = true; }}>Task usage history</button>
 					<div class="session-detail-actions">
@@ -8067,6 +8085,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.fact-detail {
 		color: var(--color-muted);
+	}
+
+	.fact.rules-outdated {
+		color: var(--color-error);
 	}
 
 	.fact.profile {

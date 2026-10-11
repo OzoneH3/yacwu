@@ -19,6 +19,7 @@ import yacwu/config
 import yacwu/hosts
 import yacwu/model_state
 import yacwu/profiles
+import yacwu/project_rules
 import yacwu/relay
 import yacwu/relay_env
 import yacwu/relay_settings
@@ -82,6 +83,7 @@ authentication (e.g. bound to localhost only).",
   let store_name = process.new_name("yacwu_models")
   let profile_store_name = process.new_name("yacwu_profiles")
   let relay_name = process.new_name("yacwu_relay")
+  let project_rules_name = process.new_name("yacwu_project_rules")
   // Exported before any backend child can be spawned.
   let relay_credential = relay_env.setup(conf)
 
@@ -94,6 +96,7 @@ authentication (e.g. bound to localhost only).",
       auth: auth_config,
       relay: relay_name,
       relay_credential: relay_credential,
+      project_rules: project_rules_name,
     )
 
   // Everything lives under one supervision tree, including the HTTP
@@ -141,6 +144,10 @@ authentication (e.g. bound to localhost only).",
     ))
     |> supervisor.add(model_state.supervised(store_name))
     |> supervisor.add(profiles.supervised(profile_store_name))
+    |> supervisor.add(project_rules.supervised(
+      project_rules_name,
+      project_rules.path(),
+    ))
     |> supervisor.add(mist.supervised(web))
     |> supervisor.start
 
