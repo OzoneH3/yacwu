@@ -12,6 +12,8 @@ export interface HandoffInput {
 	branch?: string | null;
 	durationMs?: number | null;
 	request?: string | null;
+	/** Show only the start of the request (see promptExcerpt). */
+	requestExcerpt?: boolean;
 	result: string;
 	changedFiles?: string[];
 	files?: HandoffFile[];
@@ -29,6 +31,17 @@ function fenced(name: string, content: string): string {
 	return `${fence}${language}\n${content.replace(/\n$/, '')}\n${fence}`;
 }
 
+/** The first few lines of a prompt, noting how much was left out. */
+export function promptExcerpt(text: string, maxLines = 5, maxChars = 500): string {
+	const trimmed = text.trim();
+	const lines = trimmed.split('\n');
+	let excerpt = lines.slice(0, maxLines).join('\n');
+	if (excerpt.length > maxChars) excerpt = `${excerpt.slice(0, maxChars).trimEnd()}…`;
+	const omittedLines = lines.length - Math.min(lines.length, maxLines);
+	if (excerpt.length >= trimmed.length) return trimmed;
+	return `${excerpt}\n\n[… prompt shortened${omittedLines ? `: ${omittedLines} more line${omittedLines === 1 ? '' : 's'}` : ''}]`;
+}
+
 function duration(ms: number): string {
 	const minutes = Math.floor(ms / 60_000);
 	const seconds = Math.round((ms % 60_000) / 1000);
@@ -44,7 +57,7 @@ export function coordinatorHandoff(input: HandoffInput): string {
 		...(typeof input.durationMs === 'number' ? [`- Took: ${duration(input.durationMs)}`] : [])
 	];
 	const sections = [`# Session result: ${input.session}`, facts.join('\n')];
-	if (input.request?.trim()) sections.push(`## Request\n\n${input.request.trim()}`);
+	if (input.request?.trim()) sections.push(`## Request\n\n${input.requestExcerpt ? promptExcerpt(input.request) : input.request.trim()}`);
 	sections.push(`## Result\n\n${input.result.trim() || '(no text)'}`);
 	if (input.changedFiles?.length) sections.push(`## Files changed in this task\n\n${input.changedFiles.map((file) => `- ${file}`).join('\n')}`);
 	const skipped = [...(input.skipped ?? [])];

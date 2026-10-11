@@ -4587,7 +4587,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	 * responses, files changed among `scope`, and every text file the
 	 * responses link to.
 	 */
-	async function buildHandoff(id: string, requestItem: any | null, responses: any[], scope: any[]): Promise<string> {
+	async function buildHandoff(id: string, requestItem: any | null, responses: any[], scope: any[], requestExcerpt = false): Promise<string> {
 		const request = requestItem
 			? visibleUserText((requestItem.content ?? []).map((part: any) => typeof part?.text === 'string' ? part.text : '').join('\n'))
 			: null;
@@ -4629,6 +4629,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			branch,
 			durationMs: typeof last?._turnDurationMs === 'number' ? last._turnDurationMs : null,
 			request,
+			requestExcerpt,
 			result: responses.map((response) => stripTaskProgressMarkers(String(response.text ?? '')).trim()).filter(Boolean).join('\n\n---\n\n'),
 			changedFiles,
 			files,
@@ -4673,7 +4674,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 		fullResultCopy = 'copying';
 		try {
-			await navigator.clipboard.writeText(await buildHandoff(id, promptIndex >= 0 ? items[promptIndex] : null, responses, scope));
+			// The full result is about the responses; the prompt only gives context.
+			await navigator.clipboard.writeText(await buildHandoff(id, promptIndex >= 0 ? items[promptIndex] : null, responses, scope, true));
 			fullResultCopy = 'copied';
 		} catch (error) {
 			fullResultCopy = 'failed';

@@ -59,7 +59,7 @@ test('Copy full result takes every response since the last prompt, with their fi
 			{ type: 'agentMessage', id: 'a0', text: 'Earlier answer about `old/file.js`.' }
 		] },
 		{ id: 't1', status: 'completed', items: [
-			{ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'Finish the zoom work' }] },
+			{ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'Finish the zoom work\nstep 2\nstep 3\nstep 4\nstep 5\nstep 6\nstep 7' }] },
 			{ type: 'agentMessage', id: 'a1', text: 'Plan written to `docs/zoom.md`.\n\n[[YACWU_PROGRESS percent=40 remaining_minutes=5]]' },
 			{ type: 'fileChange', id: 'f1', status: 'completed', changes: [{ path: '/home/u/growpilot/web/history.js', kind: { type: 'update' } }] },
 			{ type: 'agentMessage', id: 'a2', text: 'Done. Code in `web/history.js`.' }
@@ -88,7 +88,9 @@ test('Copy full result takes every response since the last prompt, with their fi
 	await page.getByRole('button', { name: 'Copy full result' }).click();
 	await expect(page.getByRole('button', { name: 'Full result copied' })).toBeVisible();
 	const copied = await page.evaluate(() => navigator.clipboard.readText());
-	expect(copied).toContain('## Request\n\nFinish the zoom work\n\n## Result\n\nPlan written to `docs/zoom.md`.\n\n---\n\nDone. Code in `web/history.js`.');
+	// Only the start of a long prompt: the responses are what matter here.
+	expect(copied).toContain('## Request\n\nFinish the zoom work\nstep 2\nstep 3\nstep 4\nstep 5\n\n[… prompt shortened: 2 more lines]\n\n## Result\n\nPlan written to `docs/zoom.md`.\n\n---\n\nDone. Code in `web/history.js`.');
+	expect(copied).not.toContain('step 6');
 	expect(copied).not.toContain('YACWU_PROGRESS');
 	expect(copied).not.toContain('Earlier');
 	expect(copied).toContain('## Files changed in this task\n\n- web/history.js');
