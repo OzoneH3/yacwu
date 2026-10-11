@@ -60,3 +60,10 @@ test('the browser can shorten the reminder interval or turn reminders off', () =
 	const slow = setup(true, '\n<!-- YACWU_PROGRESS_REMINDERS minutes=999 -->');
 	slow.at(301000); slow.activity(); slow.reminders.tick(); expect(slow.sent).toHaveLength(0);
 });
+
+test('a marker written with a % sign postpones reminders too', () => {
+	const s = setup();
+	const delta = (text: string) => s.reminders.observe({ method: 'item/agentMessage/delta', params: { threadId: 't', turnId: 'turn', itemId: 'message', delta: text } });
+	s.at(200000); delta('[[YACWU_PROGRESS percent=60% remaining_minutes=12]]');
+	s.at(301000); s.activity(); s.reminders.tick(); expect(s.sent).toHaveLength(0);
+});

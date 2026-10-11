@@ -12,7 +12,15 @@ export interface TaskProgressTranscriptEntry extends TaskProgressEstimate {
 }
 
 const PROGRESS_CONTEXT_MARKER = '<!-- YACWU_TASK_PROGRESS -->';
-const PROGRESS_VALUE_RE = /\[\[YACWU_PROGRESS percent=(\d{1,3}) remaining_minutes=(\d{1,4}|unknown)\]\]/g;
+/**
+ * The progress marker, tolerating what agents tend to add to the exact
+ * format: a % after the percentage, a unit after the minutes, extra spaces.
+ * Groups: percent, minutes (or "unknown").
+ */
+const PROGRESS_MARKER = String.raw`\[\[YACWU_PROGRESS\s+percent=(\d{1,3})\s*%?\s+remaining_minutes=(\d{1,4}|unknown)(?:\s*(?:minutes|mins|min|m))?\s*\]\]`;
+const PROGRESS_VALUE_RE = new RegExp(PROGRESS_MARKER, 'gi');
+const PROGRESS_LINE_RE = new RegExp(String.raw`(^|\n)[ \t]*${PROGRESS_MARKER}[ \t]*(?:\r?\n|$)`, 'gim');
+const PROGRESS_INLINE_RE = new RegExp(String.raw`[ \t]*${PROGRESS_MARKER}[ \t]*`, 'gi');
 
 /**
  * Add per-task reporting instructions without changing what the transcript
@@ -42,7 +50,7 @@ export function parseTaskProgress(text: string): TaskProgressEstimate | null {
 		if (!Number.isFinite(percent)) continue;
 		latest = {
 			percent: Math.max(0, Math.min(100, percent)),
-			remainingMinutes: match[2] === 'unknown' ? null : Number(match[2])
+			remainingMinutes: match[2].toLowerCase() === 'unknown' ? null : Number(match[2])
 		};
 	}
 	return latest;
@@ -162,8 +170,8 @@ export function estimateBias(turnBiases: number[]): number {
 /** Keep protocol markers out of the visible assistant transcript. */
 export function stripTaskProgressMarkers(text: string): string {
 	return text
-		.replace(/(^|\n)[ \t]*\[\[YACWU_PROGRESS percent=\d{1,3} remaining_minutes=(?:\d{1,4}|unknown)\]\][ \t]*(?:\r?\n|$)/gm, '$1')
-		.replace(/[ \t]*\[\[YACWU_PROGRESS percent=\d{1,3} remaining_minutes=(?:\d{1,4}|unknown)\]\][ \t]*/g, ' ')
+		.replace(PROGRESS_LINE_RE, '$1')
+		.replace(PROGRESS_INLINE_RE, ' ')
 		.replace(/(^|\n) +/g, '$1')
 		.replace(/[ \t]+\n/g, '\n')
 		.replace(/\n{3,}/g, '\n\n')

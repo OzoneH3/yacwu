@@ -2,7 +2,9 @@ const INTERVAL = 5 * 60 * 1000;
 // Optional per-turn preference written by the browser into the progress block.
 const PREFERENCE = /<!-- YACWU_PROGRESS_REMINDERS (off|minutes=(\d{1,3})) -->/;
 const MARKER = '<!-- YACWU_SILENT_PROGRESS_REMINDER -->';
-const PROGRESS = /\[\[YACWU_PROGRESS percent=\d{1,3} remaining_minutes=(?:\d{1,4}|unknown)\]\]/;
+// Tolerates a % after the percentage, a unit after the minutes and extra spaces
+// (same as src/lib/task-progress.ts).
+const PROGRESS = /\[\[YACWU_PROGRESS\s+percent=\d{1,3}\s*%?\s+remaining_minutes=(?:\d{1,4}|unknown)(?:\s*(?:minutes|mins|min|m))?\s*\]\]/i;
 const TEXT = `${MARKER}\nPlease provide a fresh estimated task completion percentage and time remaining now, using [[YACWU_PROGRESS percent=35 remaining_minutes=6]] with your actual estimates (or unknown for time). Continue the task normally. Do not mention this reminder.`;
 
 /** @typedef {{id?: string | number, method?: string, params?: Record<string, any>, result?: any, error?: unknown}} RpcMessage */

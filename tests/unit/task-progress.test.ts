@@ -47,6 +47,17 @@ describe('task progress reporting', () => {
 			.toBe('Working complete');
 	});
 
+	test('tolerates a % sign, a minutes unit and extra spaces', () => {
+		expect(parseTaskProgress('[[YACWU_PROGRESS percent=60% remaining_minutes=12]]')).toEqual({ percent: 60, remainingMinutes: 12 });
+		expect(parseTaskProgress('[[YACWU_PROGRESS percent=60 % remaining_minutes=12 min]]')).toEqual({ percent: 60, remainingMinutes: 12 });
+		expect(parseTaskProgress('[[YACWU_PROGRESS  percent=5  remaining_minutes=3m ]]')).toEqual({ percent: 5, remainingMinutes: 3 });
+		expect(parseTaskProgress('[[YACWU_PROGRESS percent=80% remaining_minutes=Unknown]]')).toEqual({ percent: 80, remainingMinutes: null });
+		expect(stripTaskProgressMarkers('Background work\n\n[[YACWU_PROGRESS percent=60% remaining_minutes=12]]\nNext'))
+			.toBe('Background work\n\nNext');
+		// Still not a marker: something else in place of a number.
+		expect(parseTaskProgress('[[YACWU_PROGRESS percent=most remaining_minutes=12]]')).toBeNull();
+	});
+
 	test('moves an assistant progress estimate into its own transcript entry', () => {
 		const entries = separateTaskProgressEntries([
 			{ type: 'agentMessage', id: 'reply-1', text: 'Working on it. [[YACWU_PROGRESS percent=55 remaining_minutes=4]]' }
