@@ -80,6 +80,7 @@ function connectClient(socketPath) {
   const socket = createConnection(socketPath);
   let buffered = Buffer.alloc(0);
   let upgraded = false;
+  let status = '';
   const received = [];
   const waiters = [];
   const deliver = () => { while (received.length && waiters.length) waiters.shift()(received.shift()); };
@@ -91,28 +92,33 @@ function connectClient(socketPath) {
       if (!upgraded) {
         const end = buffered.indexOf('\r\n\r\n');
         if (end < 0) return;
+        status = buffered.subarray(0, end).toString().split('\r\n')[0];
         upgraded = true;
         buffered = buffered.subarray(end + 4);
-        resolve();
+        resolve(status);
       }
       // Test messages stay under 126 bytes: a one-byte length.
       while (buffered.length >= 2 && buffered.length >= 2 + buffered[1]) {
-        received.push(JSON.parse(buffered.subarray(2, 2 + buffered[1]).toString()));
+        const opcode = buffered[0] & 0x0f;
+        const payload = buffered.subarray(2, 2 + buffered[1]);
         buffered = buffered.subarray(2 + buffered[1]);
+        // Answer the daemon's liveness pings, as Yacwu does.
+        if (opcode === 0x9) frame(0xa, payload);
+        else if (opcode === 0x1) received.push(JSON.parse(payload.toString()));
       }
       deliver();
     });
   });
+  function frame(opcode, payload) {
+    const mask = Buffer.from([9, 8, 7, 6]);
+    socket.write(Buffer.concat([Buffer.from([0x80 | opcode, 0x80 | payload.length]), mask, Buffer.from(payload.map((b, i) => b ^ mask[i % 4]))]));
+  }
   return {
     opened,
-    send(message) {
-      const payload = Buffer.from(JSON.stringify(message));
-      const mask = Buffer.from([9, 8, 7, 6]);
-      socket.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, Buffer.from(payload.map((b, i) => b ^ mask[i % 4]))]));
-    },
+    send(message) { frame(0x1, Buffer.from(JSON.stringify(message))); },
     next: () => new Promise((resolve) => { waiters.push(resolve); deliver(); }),
     pending: () => received.length,
-    close: () => new Promise((resolve) => { socket.once('close', resolve); socket.destroy(); })
+    close: () => new Promise((resolve) => { if (socket.destroyed) { resolve(); return; } socket.once('close', resolve); socket.destroy(); })
   };
 }
 
@@ -154,6 +160,35 @@ test('what the backend sends between clients waits for the next client\'s handsh
   second.send({ id: 'q1', result: {} });
   assert.deepEqual(await second.next(), { method: 'answered', params: {} });
   await second.close();
+});
+
+test('a second client is refused while the current one answers, and accepted once it is gone', { timeout: 15000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'yacwu-backend-daemon-'));
+  const socketPath = join(dir, 'b.sock');
+  const backend = "require('readline').createInterface({input:process.stdin}).on('line',l=>{const m=JSON.parse(l);if(m.id!==undefined)console.log(JSON.stringify({id:m.id,result:{}}))})";
+  const { child, server } = runDaemon({ socketPath, command: [process.execPath, '-e', backend] });
+  t.after(() => { child.removeAllListeners('exit'); child.kill(); server.close(); });
+  await new Promise((resolve) => server.on('listening', resolve));
+
+  const first = connectClient(socketPath);
+  assert.match(await first.opened, / 101 /);
+  first.send({ id: 1, method: 'initialize' });
+  assert.deepEqual(await first.next(), { id: 1, result: {} });
+
+  // Another server (a test copy, say) must not push the working one out.
+  const intruder = connectClient(socketPath);
+  assert.match(await intruder.opened, / 409 /);
+  first.send({ id: 2, method: 'still-here' });
+  assert.deepEqual(await first.next(), { id: 2, result: {} });
+
+  // Once the first is gone, a newcomer gets in.
+  await first.close();
+  const next = connectClient(socketPath);
+  assert.match(await next.opened, / 101 /);
+  next.send({ id: 3, method: 'initialize' });
+  assert.deepEqual(await next.next(), { id: 3, result: {} });
+  await next.close();
+  await intruder.close();
 });
 
 test('held messages are bounded, oldest notifications first, requests kept', () => {

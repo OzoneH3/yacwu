@@ -7,7 +7,9 @@
 // The backend runs once, as a child speaking newline-delimited JSON-RPC on
 // stdio. Yacwu connects over the Unix socket with the same WebSocket framing
 // codex's own Unix-socket transport uses (one JSON-RPC message per text
-// frame). One client at a time: a reconnect replaces the previous one.
+// frame). One client at a time: a newcomer replaces the current client
+// only if that one no longer answers a ping (otherwise it is refused, so a
+// second Yacwu server cannot push out a working one).
 // Notifications and requests the backend sends while no client is ready
 // (between connections, e.g. while Yacwu restarts, or before the new
 // client's `initialized`) are held and delivered once it is: a dropped
@@ -94,6 +96,9 @@ export function createDecoder() {
 /** Held messages kept at most; beyond it the oldest notifications go first. */
 const MAX_HELD = 20_000;
 
+/** How long the current client has to answer before a newcomer replaces it. */
+const PROBE_MS = 2000;
+
 /** @param {string} line @returns {'request' | 'notification' | 'response'} */
 export function messageKind(line) {
   try {
@@ -158,30 +163,28 @@ export function runDaemon({ socketPath, command }) {
   child.on('exit', (code, signal) => { cleanup(); process.exit(code ?? (signal ? 1 : 0)); });
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => { child.kill('SIGTERM'); });
 
+  /** Called when the current client answers a liveness ping. */
+  let onPong = null;
+  /**
+   * Whether the current client still answers. A second Yacwu server (a test
+   * copy, say) must not push out a working one: the two would keep
+   * replacing each other. A client that doesn't answer is gone or stuck.
+   * @returns {Promise<boolean>}
+   */
+  const clientAlive = () => new Promise((resolve) => {
+    if (!connected()) { resolve(false); return; }
+    const timer = setTimeout(() => { onPong = null; resolve(false); }, PROBE_MS);
+    onPong = () => { clearTimeout(timer); onPong = null; resolve(true); };
+    client.write(encodeFrame(0x9, Buffer.from('yacwu-daemon-probe')));
+  });
+
   const server = createServer((socket) => {
     let header = Buffer.alloc(0);
     let decoder = null;
-    socket.on('data', (chunk) => {
-      if (!decoder) {
-        header = Buffer.concat([header, chunk]);
-        const end = header.indexOf('\r\n\r\n');
-        if (end < 0) { if (header.length > 16384) socket.destroy(); return; }
-        const request = header.subarray(0, end).toString('latin1');
-        const key = /^sec-websocket-key:\s*(.+)$/im.exec(request)?.[1]?.trim();
-        if (!/^get /i.test(request) || !/^upgrade:\s*websocket/im.test(request) || !key) {
-          socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
-          return;
-        }
-        socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`);
-        // A reconnect replaces the previous connection.
-        if (client && client !== socket) client.destroy();
-        client = socket;
-        ready = false;
-        decoder = createDecoder();
-        chunk = header.subarray(end + 4);
-        header = Buffer.alloc(0);
-        if (!chunk.length) return;
-      }
+    /** Frames that arrived while deciding whether to accept this client. */
+    let early = [];
+    let deciding = false;
+    const receive = (chunk) => {
       let messages;
       try { messages = decoder.push(chunk); } catch { socket.destroy(); return; }
       for (const { opcode, payload } of messages) {
@@ -192,8 +195,41 @@ export function runDaemon({ socketPath, command }) {
             for (const line of held.take()) send(0x1, Buffer.from(line, 'utf8'));
           }
         } else if (opcode === 0x9) socket.write(encodeFrame(0xa, payload));
+        else if (opcode === 0xa) { if (socket === client) onPong?.(); }
         else if (opcode === 0x8) { socket.end(encodeFrame(0x8, Buffer.alloc(0))); }
       }
+    };
+    const accept = (key, rest) => {
+      if (socket.destroyed) return;
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`);
+      // Replaces a previous client that no longer answers.
+      if (client && client !== socket) client.destroy();
+      client = socket;
+      ready = false;
+      decoder = createDecoder();
+      for (const chunk of [rest, ...early]) if (chunk.length) receive(chunk);
+      early = [];
+    };
+    socket.on('data', (chunk) => {
+      if (decoder) { receive(chunk); return; }
+      if (deciding) { early.push(chunk); return; }
+      header = Buffer.concat([header, chunk]);
+      const end = header.indexOf('\r\n\r\n');
+      if (end < 0) { if (header.length > 16384) socket.destroy(); return; }
+      const request = header.subarray(0, end).toString('latin1');
+      const key = /^sec-websocket-key:\s*(.+)$/im.exec(request)?.[1]?.trim();
+      if (!/^get /i.test(request) || !/^upgrade:\s*websocket/im.test(request) || !key) {
+        socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+        return;
+      }
+      const rest = header.subarray(end + 4);
+      header = Buffer.alloc(0);
+      deciding = true;
+      void clientAlive().then((alive) => {
+        deciding = false;
+        if (alive) socket.end('HTTP/1.1 409 Conflict\r\nContent-Type: text/plain\r\n\r\nanother Yacwu server is attached to this backend\n');
+        else accept(key, rest);
+      });
     });
     socket.on('close', () => { if (client === socket) { client = null; ready = false; } });
     socket.on('error', () => {});
