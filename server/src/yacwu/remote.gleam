@@ -158,10 +158,17 @@ if command -v pkill >/dev/null 2>&1; then
   sleep 1
 fi
 rm -f \"$sock\"
+# Locally, a scope of its own keeps the server alive when the service or
+# terminal that started yacwu is stopped (systemd stops a unit's processes).
+scope=\"\"
+if [ -n \"$YACWU_OWN_SCOPE\" ] && command -v systemd-run >/dev/null 2>&1 \\
+  && systemd-run --user --scope --quiet --collect true >/dev/null 2>&1; then
+  scope=\"systemd-run --user --scope --quiet --collect\"
+fi
 if command -v setsid >/dev/null 2>&1; then
-  setsid nohup $server --listen \"unix://$sock\" $YACWU_APP_SERVER_ARGS </dev/null >>\"$log\" 2>&1 &
+  setsid nohup $scope $server --listen \"unix://$sock\" $YACWU_APP_SERVER_ARGS </dev/null >>\"$log\" 2>&1 &
 else
-  nohup $server --listen \"unix://$sock\" $YACWU_APP_SERVER_ARGS </dev/null >>\"$log\" 2>&1 &
+  nohup $scope $server --listen \"unix://$sock\" $YACWU_APP_SERVER_ARGS </dev/null >>\"$log\" 2>&1 &
 fi
 pid=$!
 echo \"$pid\" >\"$pidfile\"
@@ -216,8 +223,9 @@ pub fn bootstrap(host: String) -> Result(Bootstrap, String) {
 
 /// The same persistent app-server on this machine: the bootstrap script run
 /// by a local `sh` instead of over ssh, with its own socket name. The server
-/// is started detached (setsid), so it outlives yacwu restarts and keeps
-/// in-flight turns running. Like a local child it runs in the default
+/// is started detached (setsid) and, where systemd is available, in a scope
+/// of its own, so it outlives yacwu restarts — also as a systemd service —
+/// and keeps in-flight turns running. Like a local child it runs in the default
 /// working directory and without the AppImage's library path.
 pub fn bootstrap_local(
   name: String,
@@ -251,6 +259,7 @@ pub fn bootstrap_local(
         "-u",
         "LD_LIBRARY_PATH",
         "YACWU_SOCKET_NAME=" <> name,
+        "YACWU_OWN_SCOPE=1",
         "RUST_LOG=" <> { envoy.get("RUST_LOG") |> result.unwrap("info") },
         ..list.append(backend, ["sh"])
       ]),

@@ -196,6 +196,12 @@ wrapper run inside `scripts/backend-daemon.mjs`.
 YACWU_PERSISTENT_BACKENDS=1 ./start.sh
 ```
 
+To run Yacwu itself as a systemd user service, run `scripts/install-service.sh`
+from a shell where `bun run start` works (the service keeps that shell's
+PATH), then `systemctl --user enable --now yacwu`. Local daemons start in
+systemd scopes of their own, so `systemctl --user restart yacwu` restarts only
+the server. Extra environment goes in `~/.config/yacwu/service.env`.
+
 Daemons keep the code and environment they started with. After updating
 codex, the Claude wrapper or the adapter, stop them so the next request starts
 fresh ones: `pkill -f "app-server --listen unix://$HOME/.cache/yacwu/"`.
