@@ -723,7 +723,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     TcpClosed ->
       case state.status {
         Running(SockConn(_)) | Initializing(SockConn(_), _, _) ->
-          on_disconnect(state, "connection to codex app-server lost")
+          on_disconnect(
+            state,
+            "connection to " <> backend_name(state) <> " lost",
+          )
         _ -> actor.continue(state)
       }
     GetDiagnostics(reply) -> {
@@ -1935,6 +1938,17 @@ fn exit_reason_text(reason: process.ExitReason) -> String {
     process.Normal -> "normal"
     process.Killed -> "killed"
     process.Abnormal(reason) -> string.inspect(reason)
+  }
+}
+
+/// What this manager talks to, for messages: alternative backends (such as
+/// Claude) speak the same protocol but are not codex.
+fn backend_name(state: State) -> String {
+  case state.transport {
+    LocalDaemon(_, [_, ..]) | Local([_, ..]) if state.label != "local" ->
+      "the " <> state.label <> " backend"
+    Ssh(host) -> "the codex app-server on " <> host
+    _ -> "the codex app-server"
   }
 }
 
