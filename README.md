@@ -581,6 +581,8 @@ checked before each new task. Recent valid readings are reused for up to two
 minutes; unknown readings and elapsed reset windows trigger a refresh. If the
 usage endpoint is rate limited, its retry delay is respected and displayed
 when starts cannot be verified. Stale readings cannot authorize new work.
+Repeated forced checks after a failed read are throttled to one attempt every
+two minutes; endpoint rate limits take precedence.
 
 Logs live in `$XDG_STATE_HOME/yacwu/diagnostics` (default
 `~/.local/state/yacwu/diagnostics`). Set `YACWU_DIAGNOSTICS_DIR` to override it.

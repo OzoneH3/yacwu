@@ -136,6 +136,26 @@ test('failed forced Claude usage refresh never presents stale quota as current',
 	expect(refreshed.rateLimits.secondary).toBeNull();
 });
 
+test('forced checks do not probe again during the two-minute failure backoff', async () => {
+	let time = Date.parse('2026-10-08T14:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => { calls++; return new Response('', { status: 503 }); }
+	});
+	const first = await read({ force: true });
+	for (let i = 0; i < 5; i++) {
+		const duringBackoff = await read({ force: true });
+		expect(duringBackoff.rateLimits.primary).toBeNull();
+	}
+	expect(calls).toBe(1);
+	time += 120_000;
+	await read({ force: true });
+	expect(calls).toBe(2);
+	expect(first.rateLimits.primary).toBeNull();
+});
+
 test('fresh usage survives repeated starts and forced reads respect HTTP 429 backoff', async () => {
 	let time = Date.parse('2026-10-08T14:00:00Z');
 	let calls = 0;

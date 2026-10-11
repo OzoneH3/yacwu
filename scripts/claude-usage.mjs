@@ -88,7 +88,9 @@ export function createClaudeUsageReader({
     if (currentReading(reserve)) return cached;
     // Honor throttling even when callers need a fresh safety check.
     if (now() < retryAt) return force ? unavailable() : { ...cached, usageError: { code: 'rate_limited', retryAt } };
-    if (!force && now() < nextRead) return cached;
+    // Forced safety checks must not authorize work with stale data, but they
+    // should still share the retry throttle after transient failures.
+    if (now() < nextRead) return force ? unavailable() : cached;
     pending = (async () => {
       nextRead = now() + 120_000;
       try {
@@ -113,6 +115,13 @@ export function createClaudeUsageReader({
         if (!response.ok) return force ? unavailable() : { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
         cached = claudeRateLimits(await response.json(), auth?.subscriptionType ?? null);
         lastSuccess = now();
+        const resets = [cached.rateLimits.primary, cached.rateLimits.secondary]
+          .map(window => window?.resetsAt)
+          .filter((at) => Number.isFinite(at) && at * 1000 > now())
+          .map(at => at * 1000);
+        // Schedule a forced refresh at a known reset instead of throttling it
+        // behind the ordinary two-minute retry interval.
+        if (resets.length) nextRead = Math.min(nextRead, ...resets);
         retryAt = 0;
         rateLimited = false;
       } catch {
