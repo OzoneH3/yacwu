@@ -1064,7 +1064,36 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	 * "active" is applied: a stale idle entry must not end a live turn.
 	 */
 	function markRunningFromList(thr: { id: string; status?: { type: string } }) {
-		if (thr.status?.type === 'active' && threads[thr.id]?.status !== 'running') syncThreadRuntime(thr.id, thr);
+		if (thr.status?.type !== 'active' || threads[thr.id]?.status === 'running') return;
+		syncThreadRuntime(thr.id, thr);
+		void loadRunningTurn(thr.id);
+	}
+
+	/**
+	 * The session list's progress comes from the running turn's messages, which
+	 * an unopened session doesn't have yet. Read them once, without opening
+	 * (resuming) the session; opening it later replaces them with full history.
+	 */
+	async function loadRunningTurn(id: string) {
+		if (sessionHistoryLoaded[id] || sessionOpening[id] || id === activeId) return;
+		try {
+			const url = new URL(threadApi(id), window.location.origin);
+			url.searchParams.set('turns', '1');
+			const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+			if (!res.ok) return;
+			const turn = ((await res.json()).thread?.turns as Turn[] | undefined)?.findLast((turn) => turn.status === 'inProgress');
+			if (!turn?.id || sessionHistoryLoaded[id] || sessionOpening[id]) return;
+			syncThreadRuntime(id, { status: { type: 'active' }, turns: [turn] });
+			// Items that streamed in meanwhile are newer: keep them after the turn's.
+			const t = ensureThread(id);
+			const live = itemsOf(t);
+			t.order = [];
+			t.byId = {};
+			for (const item of turn.items ?? []) if ((item as any).id) upsertItem(id, item as any, false, turn.id);
+			for (const item of live) upsertItem(id, item as ThreadItem & { id: string });
+		} catch {
+			/* the list keeps showing the session as running; progress fills in live */
+		}
 	}
 
 	function touchSession(id: string, timestamp: unknown) {
