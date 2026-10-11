@@ -79,6 +79,8 @@ rules locally, and records usage/diagnostic journals on the server.
   quiet-worker notices, and whether sessions accept direct messages
 - 🎛️ Per-session Codex profiles from `$CODEX_HOME/<name>.config.toml`
 - 🧾 `/todo <task>` queues follow-up work to run after the current turn
+- ♻️ Optional persistent backends (`YACWU_PERSISTENT_BACKENDS=1`): restarting
+  Yacwu leaves running agents alone
 - 🔁 Alternative backends via `YACWU_BACKENDS`, such as
   [claude-codex](https://github.com/fuergaosi233/claude-codex)
 - 🌐 Remote machines over SSH with a persistent app-server and full feature
@@ -179,6 +181,26 @@ selects the working directory for new sessions; `YACWU_STATIC` points at the
 web UI build directory (default `./build`, relative to where the server runs —
 the `bun run` scripts set it for you). Set `YACWU_DEBUG=1` for a per-request
 timing log on stderr.
+
+### Restarting without stopping agents
+
+By default the local `codex app-server` and each alternative backend run as
+children of the server, so restarting Yacwu interrupts their running turns
+(Yacwu offers to continue them afterwards). With `YACWU_PERSISTENT_BACKENDS=1`
+they run as detached daemons on Unix sockets in `~/.cache/yacwu/` instead,
+started by the same bootstrap remote hosts use: restarting Yacwu reconnects
+to them and their turns keep running. Stdio backends such as the Claude
+wrapper run inside `scripts/backend-daemon.mjs`.
+
+```bash
+YACWU_PERSISTENT_BACKENDS=1 ./start.sh
+```
+
+Daemons keep the code and environment they started with. After updating
+codex, the Claude wrapper or the adapter, stop them so the next request starts
+fresh ones: `pkill -f "app-server --listen unix://$HOME/.cache/yacwu/"`.
+Events a backend sends while Yacwu is down are not replayed; opening a session
+reloads its history.
 
 ### Alternative backends
 

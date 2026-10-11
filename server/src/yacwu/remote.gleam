@@ -54,6 +54,7 @@ type PortOption {
   StderrToStdout
   Hide
   Args(List(String))
+  Cd(String)
   Active(Bool)
 }
 
@@ -122,9 +123,10 @@ export PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:/opt/homebrew/bin
 if [ -f \"$HOME/.profile\" ]; then . \"$HOME/.profile\" >/dev/null 2>&1 || true; fi
 dir=\"${XDG_CACHE_HOME:-$HOME/.cache}/yacwu\"
 mkdir -p \"$dir\" && chmod 700 \"$dir\" || exit 1
-sock=\"$dir/app-server.sock\"
-pidfile=\"$dir/app-server.pid\"
-log=\"$dir/app-server.log\"
+name=\"${YACWU_SOCKET_NAME:-app-server}\"
+sock=\"$dir/$name.sock\"
+pidfile=\"$dir/$name.pid\"
+log=\"$dir/$name.log\"
 # Liveness is judged by a running process serving this socket path, not by
 # the recorded pid: npm-style codex installs launch through a wrapper whose
 # pid can die while the real server lives on.
@@ -142,7 +144,10 @@ if [ -n \"$pid\" ] && [ -S \"$sock\" ]; then
   echo \"YACWU_SOCK $sock\"
   exit 0
 fi
-if ! command -v codex >/dev/null 2>&1; then
+# YACWU_APP_SERVER (local backends only) replaces `codex app-server`;
+# YACWU_APP_SERVER_ARGS follows the --listen option.
+server=\"${YACWU_APP_SERVER:-codex app-server}\"
+if [ -z \"$YACWU_APP_SERVER\" ] && ! command -v codex >/dev/null 2>&1; then
   echo \"YACWU_ERR codex not found on the remote PATH\"
   exit 1
 fi
@@ -154,9 +159,9 @@ if command -v pkill >/dev/null 2>&1; then
 fi
 rm -f \"$sock\"
 if command -v setsid >/dev/null 2>&1; then
-  setsid nohup codex app-server --listen \"unix://$sock\" </dev/null >>\"$log\" 2>&1 &
+  setsid nohup $server --listen \"unix://$sock\" $YACWU_APP_SERVER_ARGS </dev/null >>\"$log\" 2>&1 &
 else
-  nohup codex app-server --listen \"unix://$sock\" </dev/null >>\"$log\" 2>&1 &
+  nohup $server --listen \"unix://$sock\" $YACWU_APP_SERVER_ARGS </dev/null >>\"$log\" 2>&1 &
 fi
 pid=$!
 echo \"$pid\" >\"$pidfile\"
@@ -207,6 +212,53 @@ pub fn bootstrap(host: String) -> Result(Bootstrap, String) {
   let _ = erl_port_command(port, bit_array.from_string(bootstrap_script))
   let output = collect_port_output(port, "", deadline_ms(60_000))
   parse_bootstrap(output, host)
+}
+
+/// The same persistent app-server on this machine: the bootstrap script run
+/// by a local `sh` instead of over ssh, with its own socket name. The server
+/// is started detached (setsid), so it outlives yacwu restarts and keeps
+/// in-flight turns running. Like a local child it runs in the default
+/// working directory and without the AppImage's library path.
+pub fn bootstrap_local(
+  name: String,
+  cwd: String,
+  command: List(String),
+) -> Result(Bootstrap, String) {
+  // A stdio backend runs inside backend-daemon.mjs, which serves the socket.
+  let backend = case command {
+    [] -> []
+    _ -> {
+      let root =
+        envoy.get("YACWU_BACKEND_ROOT")
+        |> result.lazy_or(fn() { envoy.get("PWD") })
+        |> result.unwrap(".")
+      [
+        "YACWU_APP_SERVER=node "
+          <> root
+          <> "/scripts/backend-daemon.mjs app-server",
+        "YACWU_APP_SERVER_ARGS=-- " <> string.join(command, " "),
+      ]
+    }
+  }
+  let port =
+    erl_open_port(SpawnExecutable("/usr/bin/env"), [
+      Binary,
+      ExitStatus,
+      UseStdio,
+      StderrToStdout,
+      Hide,
+      Args([
+        "-u",
+        "LD_LIBRARY_PATH",
+        "YACWU_SOCKET_NAME=" <> name,
+        "RUST_LOG=" <> { envoy.get("RUST_LOG") |> result.unwrap("info") },
+        ..list.append(backend, ["sh"])
+      ]),
+      Cd(cwd),
+    ])
+  let _ = erl_port_command(port, bit_array.from_string(bootstrap_script))
+  let output = collect_port_output(port, "", deadline_ms(60_000))
+  parse_bootstrap(output, "this machine")
 }
 
 fn deadline_ms(from_now: Int) -> Int {

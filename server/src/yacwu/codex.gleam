@@ -114,6 +114,11 @@ pub type Transport {
   /// Persistent server on `host` from ~/.ssh/config, over a forwarded
   /// Unix socket.
   Ssh(host: String)
+  /// Persistent server on this machine, started detached by the same
+  /// bootstrap as `Ssh` (socket `<name>.sock`), so it and its running turns
+  /// outlive yacwu restarts: codex itself (`command` empty) or a stdio
+  /// backend's argv run inside scripts/backend-daemon.mjs.
+  LocalDaemon(name: String, command: List(String))
 }
 
 pub type Reply =
@@ -469,6 +474,8 @@ type State {
     home: String,
     codex_home: String,
     remote_sock: String,
+    /// The detached local server's OS pid (`LocalDaemon` only).
+    daemon_pid: Result(Int, Nil),
     backoff: Int,
     last_error: String,
     activity: diagnostics.Tracker,
@@ -509,6 +516,7 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     },
     codex_home: "",
     remote_sock: "",
+    daemon_pid: Error(Nil),
     backoff: 0,
     last_error: "",
     activity: dict.new(),
@@ -651,6 +659,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
             decode.at([1], decode.int),
           )
           |> result.replace_error(Nil)
+        Running(SockConn(_)) | Initializing(SockConn(_), _, _) ->
+          state.daemon_pid
         _ -> Error(Nil)
       }
       process.send(reply, pid)
@@ -679,7 +689,10 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
     ConnResult(result) -> on_conn_result(state, result)
     TryReconnect ->
       case state.status, state.transport {
-        NotRunning, UnixSock(_) | NotRunning, Ssh(_) ->
+        NotRunning, UnixSock(_)
+        | NotRunning, Ssh(_)
+        | NotRunning, LocalDaemon(_, _)
+        ->
           case state.resumed {
             [] -> actor.continue(state)
             _ -> begin_connect(state, [])
@@ -1120,7 +1133,7 @@ fn begin_connect(state: State, queued: List(Queued)) -> actor.Next(State, Msg) {
       let port = spawn_codex(command, state.label)
       actor.continue(begin_initialize(state, PortConn(port), queued))
     }
-    UnixSock(_) | Ssh(_) -> {
+    UnixSock(_) | Ssh(_) | LocalDaemon(_, _) -> {
       let connector = spawn_connector(state)
       let state = broadcast_status(state, "connecting", "")
       actor.continue(
@@ -1219,6 +1232,15 @@ fn spawn_connector(state: State) -> Pid {
           use handover <- result.try(remote.attach(local, owner, 40))
           Ok(#(handover.socket, handover.leftover, Some(boot)))
         }
+        LocalDaemon(name, command) -> {
+          use boot <- result.try(remote.bootstrap_local(
+            name,
+            default_cwd(),
+            command,
+          ))
+          use handover <- result.try(remote.attach(boot.socket, owner, 40))
+          Ok(#(handover.socket, handover.leftover, Some(boot)))
+        }
         Local(_) -> Error("local transport needs no connector")
       }
       process.send(subject, ConnResult(result))
@@ -1271,6 +1293,10 @@ fn on_conn_result(
             home: boot.home,
             codex_home: boot.codex_home,
             remote_sock: boot.socket,
+            daemon_pid: case state.transport {
+              LocalDaemon(_, _) -> int.parse(boot.pid)
+              _ -> Error(Nil)
+            },
           )
         None -> state
       }

@@ -12,6 +12,7 @@
 //// from thread listings and creations (yacwu stores nothing on disk), so
 //// thread-scoped API calls can omit the host once a thread has been seen.
 
+import envoy
 import exception
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
@@ -325,6 +326,17 @@ fn ensure_manager(
   }
 }
 
+/// `YACWU_PERSISTENT_BACKENDS=1`: run the local codex and the configured
+/// backends as detached servers on Unix sockets instead of child processes,
+/// so restarting yacwu leaves them and their running turns alone. Read when
+/// a host's manager starts.
+fn persistent_backends() -> Bool {
+  case envoy.get("YACWU_PERSISTENT_BACKENDS") {
+    Ok("1") | Ok("true") | Ok("yes") -> True
+    _ -> False
+  }
+}
+
 fn start_manager(
   state: State,
   host: String,
@@ -337,8 +349,16 @@ fn start_manager(
     }
   }
   let transport = case host == local, backends.command(host) {
-    True, _ -> codex.Local(codex.default_command)
-    False, Ok(command) -> codex.Local(command)
+    True, _ ->
+      case persistent_backends() {
+        True -> codex.LocalDaemon("local-app-server", [])
+        False -> codex.Local(codex.default_command)
+      }
+    False, Ok(command) ->
+      case persistent_backends() {
+        True -> codex.LocalDaemon("backend-" <> host, command)
+        False -> codex.Local(command)
+      }
     False, Error(_) -> codex.Ssh(host)
   }
   case codex.start(name, host, transport) {
