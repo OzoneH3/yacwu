@@ -69,6 +69,7 @@
 	import { createPathKindQueue, pathKindKey, type PathKind } from '$lib/path-kinds';
 	import { createSoundPlayer, signalSounds, type SoundKind } from '$lib/sounds';
 	import { coordinatorHandoff, type HandoffFile } from '$lib/coordinator-handoff';
+	import { unconfirmedEchoes } from '$lib/user-echoes';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
@@ -2496,8 +2497,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				// rollout first, then merge those live items back so history is not
 				// replaced by a partial stream snapshot.
 				const liveItems = itemsOf(ensureThread(id));
+				const echoes = pendingUserEchoes[id] ?? [];
 				replaceItems(id, thr.turns ?? []);
-				for (const item of liveItems) upsertItem(id, item as ThreadItem & { id: string });
+				// Local copies of sent messages that history now holds would show twice.
+				const pending = unconfirmedEchoes(echoes, itemsOf(ensureThread(id)) as any[]);
+				const confirmed = new Set(echoes.filter((echo) => !pending.includes(echo)).map((echo) => echo.id));
+				pendingUserEchoes[id] = pending;
+				for (const item of liveItems) if (!confirmed.has(item.id)) upsertItem(id, item as ThreadItem & { id: string });
 			}
 			sessionHistoryLoaded[id] = true;
 			reconcileTodoQueue(id, runtimeStatus);
