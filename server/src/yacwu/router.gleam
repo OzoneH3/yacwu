@@ -686,6 +686,14 @@ fn with_codex(
 /// GET /api/hosts: local, every configured backend, and every concrete
 /// ~/.ssh/config alias, with the connection state of any manager already
 /// running. Never connects anything.
+/// The model a new session starts with when none is chosen.
+fn default_model(host: String) -> String {
+  case is_claude_backend(host) {
+    True -> defaults.new_claude_session_model
+    False -> defaults.new_session_model
+  }
+}
+
 fn is_claude_backend(host: String) -> Bool {
   case list.find(backends.discover(), fn(entry) { entry.name == host }) {
     Ok(entry) ->
@@ -1994,7 +2002,7 @@ fn create_thread_on(
         None -> {
           let params = case jsonx.field_string(body, ["model"]) {
             Ok(model) if model != "" -> params
-            _ -> [#("model", json.string(defaults.new_session_model)), ..params]
+            _ -> [#("model", json.string(default_model(host))), ..params]
           }
           let effort = case jsonx.field_string(body, ["effort"]) {
             Ok(effort) if effort != "" -> effort
@@ -2052,7 +2060,7 @@ fn create_thread_on(
                 None -> {
                   let model = case jsonx.field_string(body, ["model"]) {
                     Ok(model) if model != "" -> model
-                    _ -> defaults.new_session_model
+                    _ -> default_model(host)
                   }
                   let effort = case jsonx.field_string(body, ["effort"]) {
                     Ok(effort) if effort != "" -> effort

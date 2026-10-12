@@ -120,6 +120,8 @@ test('project rules reach Claude and Codex sessions per repository', { skip, tim
 
 		// Claude and Codex in one repository share its rules.
 		const claude = await start('claude', fx.main);
+		// New Claude sessions name their model rather than a floating "default".
+		assert.equal((await json(`/threads/${claude}/model`)).model, 'claude-opus-5-5');
 		const applied = (await rules(claude)).applied;
 		assert.equal(applied.project, project);
 		assert.equal(applied.version, 1);
