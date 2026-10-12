@@ -420,10 +420,13 @@ test('command activity aligns status and collapses long output', async ({ page }
 			const sidebar = page.locator('#session-sidebar');
 			const expandSidebar = page.locator('.header-menu');
 			await expect(expandSidebar).toBeVisible();
-			if ((await expandSidebar.getAttribute('aria-expanded')) === 'true') {
-				await expandSidebar.evaluate((element) => (element as HTMLButtonElement).click());
-			}
-			await expect(expandSidebar).toHaveAttribute('aria-expanded', 'false');
+			// The drawer can still be settling after the resize: close it until it stays closed.
+			await expect(async () => {
+				if ((await expandSidebar.getAttribute('aria-expanded')) === 'true') {
+					await expandSidebar.evaluate((element) => (element as HTMLButtonElement).click());
+				}
+				await expect(expandSidebar).toHaveAttribute('aria-expanded', 'false', { timeout: 1000 });
+			}).toPass({ timeout: 10_000 });
 			await expect(sidebar).not.toHaveClass(/open/);
 			await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
 			await expect(expandSidebar).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
