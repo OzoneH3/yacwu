@@ -358,3 +358,14 @@ test('an agent that never reports tokens excludes the windows its usage may fall
 	const before = analyzeUsage([...setup('a', 'model'), ...silentAgent(1, 1.5), quota(2, 10), tokens(3, 'a', 1000), quota(5, 12)]);
 	expect(before.observations).toBe(1);
 });
+
+test('aliases of one model share one group when named alike', () => {
+	const events = [
+		...setup('a', 'default'), ...setup('b', 'opus'),
+		quota(2, 10), tokens(3, 'a', 100), tokens(3, 'b', 200), quota(4, 12)
+	];
+	const names: Record<string, string> = { default: 'Claude Opus 5.5', opus: 'Claude Opus 5.5' };
+	const merged = analyzeObservedUsage(events, { settleMs: 0, modelName: (model) => names[model] ?? model });
+	expect(merged.pools[0].groups.map((group) => [group.model, group.tokens.totalTokens])).toEqual([['Claude Opus 5.5', 300]]);
+	expect(analyzeUsage(events).pools[0].groups.map((group) => group.model)).toEqual(['default', 'opus']);
+});

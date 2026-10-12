@@ -80,7 +80,7 @@ import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskPr
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, loadArchiveCatalog } from '$lib/archive';
 import { claudeBackendHost, sessionTarget } from '$lib/session-target';
-import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity } from '$lib/model-display';
+import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity, usageModelNames } from '$lib/model-display';
 import { createMessageTimestampStore } from '$lib/message-timestamps';
 
 	let { children } = $props();
@@ -322,6 +322,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let turnModels = $state<Record<string, string>>({});
 	let turnEfforts = $state<Record<string, string>>({});
 	let effortPending = $state(false);
+	// Per host: model id -> the model a usage rate is learned for (see usageModelNames).
+	let usageModelNamesByHost = $state<Record<string, Record<string, string>>>({});
 	let accountUsageByHost = $state<Record<string, AccountUsage>>({});
 	let accountUsageFetchedAt = $state<Record<string, number>>({});
 	let accountUsagePending = $state<Record<string, boolean>>({});
@@ -659,8 +661,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 			const response = await fetch(`/api/usage${hostQuery(host)}`, { signal: AbortSignal.timeout(10_000) });
 			if (!response.ok) return;
 			const data = await response.json();
-			usageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host });
-			fiveHourUsageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host, windowDurationMins: 300 });
+			const modelName = (model: string) => usageModelName(host, model);
+			usageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host, modelName });
+			fiveHourUsageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host, windowDurationMins: 300, modelName });
 		} catch { /* Retain the last learned rates if telemetry is unavailable. */ }
 		finally { usageLoading.delete(host); }
 	}
@@ -675,9 +678,14 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		}, 500));
 	}
 
+	function usageModelName(host: string, model: string): string {
+		return usageModelNamesByHost[host]?.[model] ?? model;
+	}
+
 	function thinkingCostLabel(effort: string) {
-		const rate = activeUsageAnalysis?.rates.find((rate) => rate.model === activeConfig?.model && rate.effort === effort);
-		const fiveHourRate = activeFiveHourUsageAnalysis?.rates.find((rate) => rate.model === activeConfig?.model && rate.effort === effort);
+		const model = activeConfig?.model ? usageModelName(activeHost, activeConfig.model) : null;
+		const rate = activeUsageAnalysis?.rates.find((rate) => rate.model === model && rate.effort === effort);
+		const fiveHourRate = activeFiveHourUsageAnalysis?.rates.find((rate) => rate.model === model && rate.effort === effort);
 		return [{ rate, label: 'week' }, { rate: fiveHourRate, label: '5h' }].flatMap(({ rate: selected, label }) => {
 			return selected?.percentPerMillionTokens != null
 				? [`${formatAllowancePercent(selected.percentPerMillionTokens)} ${label}/${RATE_LABEL}${selected.estimate?.provisional ? ' · early' : ''}`] : [];
@@ -2423,6 +2431,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	/** Cache the catalog and reasoning efforts the session's current model accepts. */
 	function rememberEfforts(id: string, settings: ModelState) {
 		sessionModels[id] = settings.models;
+		// Learn which ids name the same model; re-analyze usage once new names arrive.
+		const host = sessionHost(id);
+		const names = usageModelNames(settings.models ?? []);
+		const known = usageModelNamesByHost[host] ?? {};
+		if (Object.entries(names).some(([modelId, name]) => known[modelId] !== name)) {
+			usageModelNamesByHost[host] = { ...known, ...names };
+			if (usageAnalysisByHost[host]) void refreshTaskUsage(host);
+		}
 		const choice = settings.models.find((m) => m.id === settings.model);
 		modelEfforts[id] = choice?.efforts ?? [];
 	}
@@ -7047,7 +7063,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 {#if usageHistoryOpen && activeId}
 	{#key `${activeHost}:${activeId}`}
-		<UsageHistory host={activeHost} sessionId={activeId} models={activeModels} selectedModel={activeConfig?.model} selectedEffort={activeConfig?.effort} onclose={() => usageHistoryOpen = false} />
+		<UsageHistory host={activeHost} sessionId={activeId} models={activeModels} modelNames={usageModelNamesByHost[activeHost] ?? {}} selectedModel={activeConfig?.model} selectedEffort={activeConfig?.effort} onclose={() => usageHistoryOpen = false} />
 	{/key}
 {/if}
 

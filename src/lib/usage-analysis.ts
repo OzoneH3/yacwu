@@ -244,8 +244,10 @@ function resolveSpawnEvidence(events: UsageEvent[]): UsageEvent[] {
 	})].sort((a, b) => a.at - b.at);
 }
 
-export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; settleMs?: number; windowDurationMins?: 300 | 10080 } = {}) {
+export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; settleMs?: number; windowDurationMins?: 300 | 10080; modelName?: (model: string) => string } = {}) {
 	const host = options.host ?? 'local';
+	// Aliases of one model learn one rate (see usageModelNames).
+	const modelName = options.modelName ?? ((model: string) => model);
 	const settleMs = options.settleMs ?? 60_000;
 	const windowDurationMins = options.windowDurationMins ?? 10080;
 	// Legacy quotas and benchmark boundaries describe the weekly allowance.
@@ -317,10 +319,10 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			baseline = null; intervalTokens = {}; intervalTasks = new Map(); intervalIncomplete = false; benchmarkInterval = null;
 		} else if ((event.event === 'settings' || event.event === 'metadata' || event.event === 'spawnedThread') && id) {
 			const previous = settings.get(id);
-			settings.set(id, { model: event.model || previous?.model || 'Unknown', effort: event.effort || previous?.effort || 'Unknown', parent: event.parentThreadId || previous?.parent || null });
+			settings.set(id, { model: (event.model && modelName(event.model)) || previous?.model || 'Unknown', effort: event.effort || previous?.effort || 'Unknown', parent: event.parentThreadId || previous?.parent || null });
 			const task = active.get(id);
 			if (task) {
-				if (task.model === 'Unknown' && event.model) task.model = event.model;
+				if (task.model === 'Unknown' && event.model) task.model = modelName(event.model);
 				if (task.effort === 'Unknown' && event.effort) task.effort = event.effort;
 				if (!task.parentThreadId && event.parentThreadId) task.parentThreadId = event.parentThreadId;
 			}

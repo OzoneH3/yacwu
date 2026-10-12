@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { filterAndSortModelChoices, modelDisplayProfile } from '../../src/lib/model-display';
+import { filterAndSortModelChoices, modelDisplayProfile, usageModelNames } from '../../src/lib/model-display';
 
 const models = [
 	{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
@@ -96,4 +96,13 @@ describe('model display ranking', () => {
 			'claude-sonnet-5-5', 'claude-sonnet-5-5[1m]', 'claude-opus-5-5'
 		]);
 	});
+});
+
+test('usage model names merge aliases by display name only', () => {
+	expect(usageModelNames([
+		{ id: 'default', displayName: 'Claude Opus 5.5 (default)' },
+		{ id: 'opus', displayName: 'Claude Opus 5.5' },
+		{ id: 'haiku', displayName: 'Claude Haiku 4.5' },
+		{ id: 'claude-haiku-5-5', displayName: 'Claude Haiku 5.5' }
+	])).toEqual({ default: 'Claude Opus 5.5', opus: 'Claude Opus 5.5', haiku: 'Claude Haiku 4.5', 'claude-haiku-5-5': 'Claude Haiku 5.5' });
 });

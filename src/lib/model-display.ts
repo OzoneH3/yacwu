@@ -119,3 +119,18 @@ export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices:
 	});
 	return visible.map(({ choice }) => choice);
 }
+
+/**
+ * The model a usage rate is learned for: its display name, so aliases of one
+ * model (Claude's "default" and "opus" are both Opus 5.5) share a rate while
+ * different models with similar ids ("haiku" is Haiku 4.5, not Haiku 5.5) do
+ * not. Unknown ids stay as they are.
+ */
+export function usageModelNames(choices: ModelChoiceSummary[]): Record<string, string> {
+	const names: Record<string, string> = {};
+	for (const choice of choices) {
+		const name = choice.displayName?.replace(/\s*\(default\)\s*$/i, '').trim();
+		if (choice.id && name) names[choice.id] = name;
+	}
+	return names;
+}
