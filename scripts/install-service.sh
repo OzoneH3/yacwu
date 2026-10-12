@@ -38,7 +38,7 @@ Environment=YACWU_PERSISTENT_BACKENDS=1
 Environment="YACWU_BACKENDS=claude=node ./scripts/claude-backend.mjs ./claude-codex/dist/src/adapter.mjs"
 EnvironmentFile=-%h/.config/yacwu/service.env
 ExecStart=$(command -v bun) run start
-Restart=on-failure
+Restart=always
 RestartSec=2
 
 [Install]
