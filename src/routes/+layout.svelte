@@ -103,6 +103,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		tokens: number | null;
 		contextWindow: number | null;
 		error: string | null;
+		/** A transient backend notice while it retries (Codex "Reconnecting… 1/5"). */
+		retrying?: string | null;
 		goal: Goal | null;
 		turnStartedAt: number | null;
 	}
@@ -1651,6 +1653,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		}
 
+		// Any turn or item event means a retrying backend got through again.
+		if (tid && threads[tid]?.retrying && (msg.method.startsWith('item/') || msg.method.startsWith('turn/'))) {
+			threads[tid].retrying = null;
+		}
+
 		switch (msg.method) {
 			case 'yacwu/diagnostic/stalled': {
 				const workerId = String(p.threadId ?? '');
@@ -1895,6 +1902,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			case 'error': {
 				if (tid) {
 					const t = ensureThread(tid);
+					// The backend is retrying on its own (Codex "Reconnecting… 1/5"):
+					// the turn is still running, and the notice ends when it does.
+					if (p.willRetry === true) {
+						t.retrying = p.error?.message ?? 'Reconnecting…';
+						break;
+					}
+					t.retrying = null;
 					t.error = p.error?.message ?? 'error';
 					t.status = 'idle';
 				}
@@ -6704,6 +6718,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{#if viewedTurnElapsed}<span class="working-duration" title="Time this task has been running">{viewedTurnElapsed}</span>{/if}
 								<span class="working-description">{currentWorkDescription(viewedItems)}</span>
 							</div>
+						</div>
+					{/if}
+					{#if viewed?.retrying && !viewed?.error}
+						<div class="item note retrying" role="status">
+							<span class="gutter">↻</span>
+							<div class="body">{viewed.retrying}</div>
 						</div>
 					{/if}
 					{#if viewed?.error}
