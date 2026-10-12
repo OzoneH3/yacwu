@@ -460,7 +460,11 @@ fn dispatch(
     }
     ["api", "usage"], Get -> {
       use host, _ <- with_codex(ctx, req, None)
-      json_response(200, usage.shared_history(host))
+      response.new(200)
+      |> response.set_header("content-type", "application/json")
+      |> response.set_body(
+        mist.Bytes(bytes_tree.from_string(usage.shared_history(host))),
+      )
     }
     ["api", "usage", "benchmark"], Get -> {
       use host, _ <- with_codex(ctx, req, None)

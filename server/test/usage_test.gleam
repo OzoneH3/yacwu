@@ -66,9 +66,11 @@ pub fn persists_usage_without_conversation_content_test() {
   string.contains(saved, "usedPercent") |> should.be_true
   string.contains(saved, "private@example.invalid") |> should.be_false
   string.contains(saved, "fingerprint") |> should.be_true
-  usage.shared_history(label)
-  |> json.to_string
-  |> string.contains("usage-unit-test")
+  let shared = usage.shared_history(label)
+  string.contains(shared, "usage-unit-test") |> should.be_true
+  // Passed through as written, it is still one valid JSON document.
+  json.parse(shared, decode.at(["events"], decode.list(decode.dynamic)))
+  |> result.is_ok
   |> should.be_true
   let path =
     json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
@@ -124,5 +126,25 @@ pub fn correlates_idle_snapshot_reads_without_recording_thread_content_test() {
   string.contains(saved, "private") |> should.be_false
   let path =
     json.parse(saved, decode.at(["path"], decode.string)) |> result.unwrap("")
+  simplifile.delete(path) |> should.be_ok
+}
+
+/// A line cut short by a crash mid-write is left out; the rest still reads.
+pub fn shared_history_skips_a_torn_line_test() {
+  let label = "usage-torn-unit-test"
+  usage.record(label, "collectorStarted", [])
+  let assert Ok(path) =
+    json.parse(
+      usage.history(label) |> json.to_string,
+      decode.at(["path"], decode.string),
+    )
+  let assert Ok(Nil) =
+    simplifile.append(path, "{\"event\":\"tokens\",\"total\":{\"a\":1}\n")
+  usage.record(label, "collectorStarted", [])
+  let shared = usage.shared_history(label)
+  let assert Ok(events) =
+    json.parse(shared, decode.at(["events"], decode.list(decode.dynamic)))
+  { events != [] } |> should.be_true
+  string.contains(shared, "\"total\":{\"a\":1}") |> should.be_false
   simplifile.delete(path) |> should.be_ok
 }

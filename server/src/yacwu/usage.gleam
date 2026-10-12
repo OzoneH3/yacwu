@@ -6,6 +6,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/result
 import gleam/string
+import gleam/string_tree
 import yacwu/jsonx
 
 @external(erlang, "yacwu_usage", "now")
@@ -263,16 +264,24 @@ pub fn history(label: String) -> Json {
   ])
 }
 
-/// Historical sources are included even when their remote connection is offline.
-pub fn shared_history(label: String) -> Json {
+/// Historical sources are included even when their remote connection is
+/// offline. The journal lines are already JSON, so they are passed through
+/// as they are: parsing every line into terms and encoding them again took
+/// over a gigabyte for a large journal. Lines that do not parse (a write cut
+/// short) are left out.
+pub fn shared_history(label: String) -> String {
   let events =
     read_all()
     |> string.split("\n")
-    |> list.filter_map(fn(line) {
-      json.parse(line, decode.dynamic) |> result.map(jsonx.to_json)
+    |> list.filter(fn(line) {
+      result.is_ok(json.parse(line, decode.success(Nil)))
     })
-  json.object([
-    #("host", json.string(label)),
-    #("events", json.preprocessed_array(events)),
+  string_tree.concat([
+    string_tree.from_string("{\"host\":"),
+    string_tree.from_string(json.to_string(json.string(label))),
+    string_tree.from_string(",\"events\":["),
+    string_tree.join(list.map(events, string_tree.from_string), ","),
+    string_tree.from_string("]}"),
   ])
+  |> string_tree.to_string
 }
