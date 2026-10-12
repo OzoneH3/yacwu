@@ -59,7 +59,7 @@ test.afterEach(async ({ request }) => {
 
 test('loads warm light editorial UI', async ({ page }) => {
 	await page.goto('/');
-	await expect(page.locator('.brand')).toContainText('yacwu');
+	await expect(page.locator('.brand')).toContainText('Yacwu');
 	// The default light theme is anchored on the warm cream canvas.
 	const bg = await page.evaluate(() =>
 		getComputedStyle(document.body).backgroundColor
@@ -108,14 +108,14 @@ test('mobile drawer, compact header, composer growth, and archive undo remain us
 	await expect(sidebarScrim).toHaveCSS('visibility', 'visible');
 	await expect(sidebarScrim).toHaveCSS('opacity', '1');
 	await expect(page.locator('#session-sidebar')).not.toHaveAttribute('inert', '');
-	await expect(page.locator('button.new')).toBeFocused();
+	await expect(page.locator('button.new[aria-label="New session"]')).toBeFocused();
 	await page.keyboard.press('Escape');
 	await expect(sidebarScrim).toHaveCSS('visibility', 'hidden');
 	await expect(sidebarScrim).toHaveCSS('opacity', '0');
 	await expect(welcomeMenu).toBeFocused();
 
 	await welcomeMenu.click();
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 	for (const width of [320, 375, 414, 768]) {
@@ -244,7 +244,7 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 	const sessionsBefore = await page.locator('.session').count();
 
 	// Session A (default working directory via the picker).
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 	await expect(page.locator('.session')).toHaveCount(sessionsBefore + 1);
@@ -274,7 +274,7 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 	expect(sessionAItems).toBeGreaterThan(0);
 
 	// Session B — independent, should start empty.
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.session')).toHaveCount(sessionsBefore + 2);
 	await expect(page.locator('.item.agent')).toHaveCount(0);
@@ -303,7 +303,7 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 test('command activity aligns status and collapses long output', async ({ page }) => {
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await page.getByLabel('Show all activity').check();
 
@@ -418,7 +418,7 @@ test('web search activity renders its action, query, and result count', async ({
 
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 
 	const search = page.locator('.item.web-search');
@@ -472,7 +472,7 @@ test('Codex messages use the full row without a logo', async ({ page }) => {
 	await page.goto('/');
 	await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 
 	const message = page.locator('.item.agent').first();
@@ -545,7 +545,7 @@ test('side-chat delete unsubscribes without archiving and stays deleted after re
 
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 
@@ -584,7 +584,7 @@ test('new session can target a specific working directory', async ({ page }) => 
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 
 	// Open the picker and create a session rooted at /tmp.
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await expect(page.locator('.cwd-input')).toBeVisible();
 	await page.locator('.cwd-input').fill('/tmp');
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
@@ -599,7 +599,7 @@ test('new session can target a specific working directory', async ({ page }) => 
 	});
 
 	// A bad directory surfaces an error instead of creating a session.
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.cwd-input').fill('/no/such/dir/xyz');
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.create-err')).toContainText('does not exist', {
@@ -625,7 +625,7 @@ test('new session folder picker navigates into and selects directories', async (
 	});
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.cwd-browse-trigger').click();
 	await expect(page.locator('.cwd-current')).toHaveText('/workspace');
 	await expect(page.locator('.cwd-directory')).toHaveCount(1);
@@ -705,7 +705,7 @@ test('Git changes viewer filters and renders a responsive Monaco diff', async ({
 
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.cwd-input').fill(projectRoot);
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
@@ -776,7 +776,7 @@ test('slash commands: /goal sets, shows, and clears the goal', async ({ page }) 
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 
@@ -937,7 +937,7 @@ test('slash command: /status reports account, limits & session info', async ({ p
 
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 	await expect(page.locator('.usage-limits')).toContainText('5h 58% left');
@@ -965,7 +965,7 @@ test('slash command: /fast toggles Fast mode and marks the session', async ({ pa
 
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 
 	const textarea = page.locator('.composer textarea');
@@ -1014,7 +1014,7 @@ test('slash command: /model lists and changes model settings', async ({ page }) 
 
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 
@@ -1046,7 +1046,7 @@ test('slash command: /model lists and changes model settings', async ({ page }) 
 test('new transcript output preserves scroll when not at the bottom', async ({ page }) => {
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 
@@ -1106,7 +1106,7 @@ test('session id is reflected in the URL and the sidebar uses links', async ({ p
 	await expect(page).toHaveURL(/\/$/); // welcome at the root
 
 	// Creating a session navigates to /s/<id>.
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 	await expect(page).toHaveURL(/\/s\/[0-9a-f-]{36}$/);
@@ -1150,7 +1150,7 @@ test('slash command & picker: /profile selects codex profiles', async ({ page })
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 
 	// The picker lists profiles (from the stub) with the base config default.
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await expect(page.locator('.profile-input')).toBeVisible();
 	await expect(page.locator('.profile-input option')).toHaveCount(3);
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
@@ -1179,7 +1179,7 @@ test('slash command & picker: /profile selects codex profiles', async ({ page })
 
 	// Creating via the picker sends the profile; the real backend rejects the
 	// stub-only name, proving validation runs against the profiles on disk.
-	await page.locator('button.new').click();
+	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.profile-input').selectOption('fast');
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.create-err')).toContainText('unknown profile: fast', {
