@@ -85,6 +85,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🧾 `/todo <task>` queues follow-up work to run after the current turn
 - ♻️ Optional persistent backends (`YACWU_PERSISTENT_BACKENDS=1`): restarting
   Yacwu leaves running agents alone
+- 🩹 Tasks cut off by a crashed backend (or Yacwu itself) continue on their own
+  once it is back, at most twice per half hour per session
 - 🏷️ The session list footer shows the build's commit and offers a reload when
   a newer build is deployed
 - 🔁 Alternative backends via `YACWU_BACKENDS`, such as

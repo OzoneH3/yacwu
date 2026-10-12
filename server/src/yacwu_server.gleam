@@ -190,6 +190,7 @@ authentication (e.g. bound to localhost only).",
         "  WARNING: authentication disabled (YACWU_INSECURE_SKIP_AUTH=1)",
       )
   }
+  router.start_task_recovery(ctx)
   run_until_shutdown(supervisor_started.pid)
 }
 

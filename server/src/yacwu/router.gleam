@@ -45,6 +45,7 @@ import yacwu/remote
 import yacwu/session_lock
 import yacwu/ssh_config
 import yacwu/static_files
+import yacwu/task_recovery
 import yacwu/usage
 import yacwu/workspace
 
@@ -2833,110 +2834,119 @@ fn message(
     Error(message) -> json_response(400, error_body(message))
     Ok(#([], _, _)) -> json_response(400, error_body("empty message"))
     Ok(#(input, turn_id, cwd)) -> {
-      // Messages queued for this session ride along with the user's own
-      // prompt, as a separate input part after it. Never with a steer: the
-      // relay steers running turns itself.
-      let claim = case turn_id, hosts.is_local(host) {
-        None, True ->
-          relay.claim_start(ctx.relay, relay_core.Address(host, thread_id))
-        _, _ -> None
+      start_turn(ctx, host, cx, thread_id, input, turn_id, cwd)
+    }
+  }
+}
+
+/// Start (or steer) a turn with `input`, as a message from the browser does:
+/// queued relay messages ride along, and the session's model or profile
+/// applies.
+fn start_turn(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  thread_id: String,
+  input: List(Json),
+  turn_id: Option(String),
+  cwd: Option(String),
+) -> Response(ResponseData) {
+  // Messages queued for this session ride along with the user's own
+  // prompt, as a separate input part after it. Never with a steer: the
+  // relay steers running turns itself.
+  let claim = case turn_id, hosts.is_local(host) {
+    None, True ->
+      relay.claim_start(ctx.relay, relay_core.Address(host, thread_id))
+    _, _ -> None
+  }
+  let input = case claim {
+    Some(claim) ->
+      list.append(input, [
+        json.object([
+          #("type", json.string("text")),
+          #("text", json.string(claim.text)),
+        ]),
+      ])
+    None -> input
+  }
+  let params = [
+    #("threadId", json.string(thread_id)),
+    #("input", json.preprocessed_array(input)),
+  ]
+  let params = case claim {
+    Some(claim) ->
+      list.append(params, [
+        #("clientUserMessageId", json.string(claim.submission)),
+      ])
+    None -> params
+  }
+  let method = case turn_id {
+    Some(turn_id) -> {
+      #(
+        list.append(params, [#("expectedTurnId", json.string(turn_id))]),
+        "turn/steer",
+      )
+    }
+    None -> #(params, "turn/start")
+  }
+  let #(params, method) = method
+  let params = case cwd {
+    Some(cwd) -> list.append(params, [#("cwd", json.string(cwd))])
+    None -> params
+  }
+  // An explicit /model override wins; otherwise the session's selected
+  // profile supplies model/effort. (turn/start has no `config` param, so
+  // only these two profile keys can apply at turn level — the full
+  // profile config is layered on thread start/resume.)
+  let params = case model_state.get_override(ctx.store, thread_id) {
+    // Catalog-less backends can leave either field empty (see
+    // model_state); only pass along what was actually chosen.
+    Ok(settings) -> {
+      let params = case settings.model {
+        "" -> params
+        model -> list.append(params, [#("model", json.string(model))])
       }
-      let input = case claim {
-        Some(claim) ->
-          list.append(input, [
-            json.object([
-              #("type", json.string("text")),
-              #("text", json.string(claim.text)),
-            ]),
-          ])
-        None -> input
+      case settings.effort {
+        "" -> params
+        effort -> list.append(params, [#("effort", json.string(effort))])
       }
-      let params = [
-        #("threadId", json.string(thread_id)),
-        #("input", json.preprocessed_array(input)),
-      ]
-      let params = case claim {
-        Some(claim) ->
-          list.append(params, [
-            #("clientUserMessageId", json.string(claim.submission)),
-          ])
-        None -> params
-      }
-      let method = case turn_id {
-        Some(turn_id) -> {
-          #(
-            list.append(params, [#("expectedTurnId", json.string(turn_id))]),
-            "turn/steer",
-          )
-        }
-        None -> #(params, "turn/start")
-      }
-      let #(params, method) = method
-      let params = case cwd {
-        Some(cwd) -> list.append(params, [#("cwd", json.string(cwd))])
-        None -> params
-      }
-      // An explicit /model override wins; otherwise the session's selected
-      // profile supplies model/effort. (turn/start has no `config` param, so
-      // only these two profile keys can apply at turn level — the full
-      // profile config is layered on thread start/resume.)
-      let params = case model_state.get_override(ctx.store, thread_id) {
-        // Catalog-less backends can leave either field empty (see
-        // model_state); only pass along what was actually chosen.
-        Ok(settings) -> {
-          let params = case settings.model {
-            "" -> params
-            model -> list.append(params, [#("model", json.string(model))])
+    }
+    Error(_) ->
+      case
+        profiles.get_selection(ctx.profile_store, thread_id)
+        |> result.try(fn(name) { profiles.find(host_profiles(host, cx), name) })
+      {
+        Error(_) -> params
+        Ok(profile) -> {
+          let params = case profile.model {
+            Some(model) -> list.append(params, [#("model", json.string(model))])
+            None -> params
           }
-          case settings.effort {
-            "" -> params
-            effort -> list.append(params, [#("effort", json.string(effort))])
-          }
-        }
-        Error(_) ->
-          case
-            profiles.get_selection(ctx.profile_store, thread_id)
-            |> result.try(fn(name) {
-              profiles.find(host_profiles(host, cx), name)
-            })
-          {
+          case jsonx.field_string(profile.config, ["model_reasoning_effort"]) {
+            Ok(effort) ->
+              list.append(params, [#("effort", json.string(effort))])
             Error(_) -> params
-            Ok(profile) -> {
-              let params = case profile.model {
-                Some(model) ->
-                  list.append(params, [#("model", json.string(model))])
-                None -> params
-              }
-              case
-                jsonx.field_string(profile.config, ["model_reasoning_effort"])
-              {
-                Ok(effort) ->
-                  list.append(params, [#("effort", json.string(effort))])
-                Error(_) -> params
-              }
-            }
           }
-      }
-      // turn/steer only accepts threadId, input, and expectedTurnId.
-      let params = case turn_id {
-        Some(_) ->
-          list.filter(params, fn(entry) {
-            case entry {
-              #(key, _) -> key != "model" && key != "effort"
-            }
-          })
-        None -> params
-      }
-      case claim {
-        None -> rpc(cx, method, json.object(params))
-        Some(claim) -> {
-          relay.dispatching(ctx.relay, claim.submission)
-          let reply =
-            codex.request_tracked(cx, method, json.object(params), 60_000)
-          relay.finish(ctx.relay, claim.submission, reply)
-          tracked_start_response(reply)
         }
       }
+  }
+  // turn/steer only accepts threadId, input, and expectedTurnId.
+  let params = case turn_id {
+    Some(_) ->
+      list.filter(params, fn(entry) {
+        case entry {
+          #(key, _) -> key != "model" && key != "effort"
+        }
+      })
+    None -> params
+  }
+  case claim {
+    None -> rpc(cx, method, json.object(params))
+    Some(claim) -> {
+      relay.dispatching(ctx.relay, claim.submission)
+      let reply = codex.request_tracked(cx, method, json.object(params), 60_000)
+      relay.finish(ctx.relay, claim.submission, reply)
+      tracked_start_response(reply)
     }
   }
 }
@@ -3837,5 +3847,187 @@ fn tracked_start_response(reply: codex.TrackedReply) -> Response(ResponseData) {
           "The backend did not confirm the prompt. It may have started; check the transcript before sending it again.",
         ),
       )
+  }
+}
+
+// -- Task recovery --------------------------------------------------------------
+
+type Recovery {
+  RecoveryLife(codex.Lifecycle)
+  RecoveryResubscribe
+  RecoveryCheck(host: String)
+}
+
+/// Continue tasks a crashed backend cut off (see task_recovery): turns that
+/// were running when a host disconnected, or when Yacwu last stopped, are
+/// checked once the host is connected again.
+pub fn start_task_recovery(ctx: Context) -> Nil {
+  let _ =
+    process.spawn(fn() {
+      let life = process.new_subject()
+      let self = process.new_subject()
+      let selector =
+        process.new_selector()
+        |> process.select(self)
+        |> process.select_map(life, RecoveryLife)
+      // Subscribing also reports hosts that are already connected.
+      hosts.subscribe_lifecycle(ctx.registry, process.self(), life)
+      let _ = process.send_after(self, 60_000, RecoveryResubscribe)
+      let path = task_recovery.path()
+      recovery_loop(ctx, self, life, selector, path, task_recovery.load(path))
+    })
+  Nil
+}
+
+fn recovery_loop(
+  ctx: Context,
+  self: process.Subject(Recovery),
+  life: process.Subject(codex.Lifecycle),
+  selector: process.Selector(Recovery),
+  path: String,
+  tracker: task_recovery.Tracker,
+) -> Nil {
+  let next = case process.selector_receive_forever(selector) {
+    RecoveryLife(codex.TurnStarted(host, _, thread, turn)) ->
+      Ok(task_recovery.turn_started(tracker, host, thread, turn))
+    RecoveryLife(codex.TurnCompleted(host, _, thread, _)) ->
+      Ok(task_recovery.turn_completed(tracker, host, thread))
+    RecoveryLife(codex.Disconnected(host, _)) -> {
+      // A local child is respawned by the next request: the check's own
+      // read brings it back, with or without a browser open.
+      let _ = process.send_after(self, 10_000, RecoveryCheck(host))
+      Ok(task_recovery.disconnected(tracker, host))
+    }
+    RecoveryLife(codex.Connected(host, _)) -> {
+      // Give a reconnected backend time to pick up threads still running.
+      let _ = process.send_after(self, 10_000, RecoveryCheck(host))
+      Error(tracker)
+    }
+    RecoveryResubscribe -> {
+      hosts.subscribe_lifecycle(ctx.registry, process.self(), life)
+      let _ = process.send_after(self, 60_000, RecoveryResubscribe)
+      Error(tracker)
+    }
+    RecoveryCheck(host) -> {
+      let #(tracker, orphans) = task_recovery.take_orphans(tracker, host)
+      Ok(
+        list.fold(orphans, tracker, fn(tracker, orphan) {
+          recover_turn(ctx, host, orphan.0, orphan.1, tracker)
+        }),
+      )
+    }
+  }
+  // Only changes are saved.
+  let tracker = case next {
+    Ok(tracker) -> {
+      task_recovery.save(path, tracker)
+      tracker
+    }
+    Error(tracker) -> tracker
+  }
+  recovery_loop(ctx, self, life, selector, path, tracker)
+}
+
+fn recover_turn(
+  ctx: Context,
+  host: String,
+  thread_id: String,
+  turn_id: String,
+  tracker: task_recovery.Tracker,
+) -> task_recovery.Tracker {
+  let read = fn(cx) {
+    codex.request(
+      cx,
+      "thread/read",
+      json.object([
+        #("threadId", json.string(thread_id)),
+        #("includeTurns", json.bool(True)),
+      ]),
+    )
+  }
+  case hosts.resolve(ctx.registry, Some(host), None) {
+    Error(_) -> tracker
+    Ok(#(_, cx)) ->
+      case read(cx) {
+        Error(_) -> tracker
+        Ok(thread) ->
+          case task_recovery.cut_off(thread, turn_id) {
+            False -> tracker
+            True -> {
+              let #(tracker, allowed) =
+                task_recovery.allow_attempt(tracker, thread_id, oauth.now())
+              case allowed {
+                False -> {
+                  io.println_error(
+                    "yacwu: not continuing "
+                    <> thread_id
+                    <> " again: it was cut off repeatedly",
+                  )
+                  tracker
+                }
+                True -> {
+                  let _ =
+                    codex.request(
+                      cx,
+                      "thread/resume",
+                      json.object([
+                        #("threadId", json.string(thread_id)),
+                        ..resume_defaults(ctx, thread_id)
+                      ]),
+                    )
+                  let started =
+                    start_turn(
+                      ctx,
+                      host,
+                      cx,
+                      thread_id,
+                      [
+                        json.object([
+                          #("type", json.string("text")),
+                          #(
+                            "text",
+                            json.string(task_recovery.continuation_prompt),
+                          ),
+                        ]),
+                      ],
+                      None,
+                      None,
+                    )
+                  case started.status {
+                    200 ->
+                      io.println(
+                        "yacwu: continued interrupted task "
+                        <> thread_id
+                        <> " on "
+                        <> host,
+                      )
+                    status ->
+                      io.println_error(
+                        "yacwu: could not continue interrupted task "
+                        <> thread_id
+                        <> " on "
+                        <> host
+                        <> " ("
+                        <> int.to_string(status)
+                        <> "): "
+                        <> response_text(started),
+                      )
+                  }
+                  tracker
+                }
+              }
+            }
+          }
+      }
+  }
+}
+
+fn response_text(response: Response(ResponseData)) -> String {
+  case response.body {
+    mist.Bytes(bytes) ->
+      bytes_tree.to_bit_array(bytes)
+      |> bit_array.to_string
+      |> result.unwrap("")
+    _ -> ""
   }
 }

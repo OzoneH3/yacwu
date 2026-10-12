@@ -5,20 +5,11 @@
 // developer instructions Yacwu recorded for them.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const repo = fileURLToPath(new URL('../..', import.meta.url));
-const adapter = join(repo, 'claude-codex/dist/src/adapter.mjs');
-const has = (cmd) => spawnSync(cmd, ['--version'], { stdio: 'ignore' }).status === 0;
-const skip = !existsSync(adapter) ? 'Claude adapter checkout is not built'
-	: !has('gleam') ? 'gleam is not installed'
-	: !has('codex') ? 'codex is not installed'
-	: false;
+import { skip, startServer } from './yacwu-server.mjs';
 
 const RULE = 'Before making changes, identify your actual repository and worktree. If the instruction files are unavailable in this checkout, report that explicitly rather than claiming they were loaded.';
 
@@ -52,41 +43,6 @@ function fixtures(root) {
 	return { main, worktree, oldCheckout, clone, unrelated };
 }
 
-const freePort = () => new Promise((resolve) => {
-	const server = createServer().listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); });
-});
-
-async function startServer(root) {
-	const port = await freePort();
-	const home = join(root, 'home');
-	mkdirSync(home);
-	const child = spawn('gleam', ['run'], {
-		cwd: join(repo, 'server'),
-		detached: true,
-		stdio: ['ignore', 'pipe', 'pipe'],
-		env: {
-			...process.env,
-			HOME: home,
-			XDG_STATE_HOME: join(home, 'state'),
-			PORT: String(port),
-			YACWU_PERSISTENT_BACKENDS: '0',
-			YACWU_INSECURE_SKIP_AUTH: '1',
-			YACWU_BACKEND_ROOT: repo,
-			YACWU_BACKENDS: `claude=node ./scripts/claude-backend.mjs ${adapter}`,
-			CLAUDE_CODEX_MOCK: '1'
-		}
-	});
-	let log = '';
-	child.stdout.on('data', (data) => { log += data; });
-	child.stderr.on('data', (data) => { log += data; });
-	const base = `http://127.0.0.1:${port}/api`;
-	for (let i = 0; i < 240; i++) {
-		try { if ((await fetch(`${base}/hosts`)).ok) return { base, home, stop: () => { try { process.kill(-child.pid, 'SIGTERM'); } catch {} } }; } catch {}
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-	try { process.kill(-child.pid, 'SIGTERM'); } catch {}
-	throw new Error(`server did not start:\n${log.slice(-2000)}`);
-}
 
 test('project rules reach Claude and Codex sessions per repository', { skip, timeout: 300_000 }, async () => {
 	const root = mkdtempSync(join(tmpdir(), 'yacwu-rules-launch-'));
