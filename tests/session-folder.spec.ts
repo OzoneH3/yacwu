@@ -15,6 +15,10 @@ async function mock(page: Page, host = 'local') {
 		if (path === '/api/threads') return route.fulfill({ json: { data: [thread], defaultCwd: '/home/u' } });
 		if (path === '/api/threads/loaded') return route.fulfill({ json: { data: [ID] } });
 		if (path.endsWith('/model')) return route.fulfill({ json: { model: 'test', effort: 'medium', models: [] } });
+		if (path === '/api/directories') {
+			const folder = new URL(route.request().url()).searchParams.get('path') || '/home/u';
+			return route.fulfill({ json: { path: folder, entries: folder === '/home/u/old' ? [{ name: 'project', kind: 'dir', symlink: false }, { name: 'notes.txt', kind: 'file', symlink: false }] : [] } });
+		}
 		if (path === `/api/threads/${ID}/cwd`) {
 			const { cwd } = route.request().postDataJSON();
 			return cwd === '/nope'
@@ -68,4 +72,22 @@ test('Claude sessions can move too, carrying their conversation', async ({ page 
 	await page.getByLabel(/^Message /).press('Enter');
 	await expect.poll(() => sent.length).toBe(1);
 	expect(sent[0].cwd).toBe('/home/u/elsewhere');
+});
+
+test('the folder browser from new sessions picks the new folder', async ({ page }) => {
+	await mock(page);
+	await details(page).click();
+	await page.getByRole('button', { name: 'Change folder…' }).click();
+	await page.getByRole('button', { name: 'Browse' }).click();
+	const browser = page.getByLabel('Choose session folder');
+	await expect(browser.locator('.cwd-current')).toHaveText('/home/u/old');
+	await expect(browser.locator('.cwd-directory')).toHaveCount(1);
+	await browser.getByRole('button', { name: /project/ }).click();
+	await expect(browser.locator('.cwd-current')).toHaveText('/home/u/old/project');
+	// Browsing into a folder selects it.
+	await expect(page.getByLabel('New session folder')).toHaveValue('/home/u/old/project');
+	await browser.getByRole('button', { name: 'Use folder /home/u/old/project' }).click();
+	await expect(browser).toHaveCount(0);
+	await page.getByRole('button', { name: 'Use folder', exact: true }).click();
+	await expect(page.locator('.folder-pending')).toContainText('Moves to /home/u/old/project with your next message');
 });

@@ -62,6 +62,7 @@
 	import { ComposerHistory } from '$lib/history';
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
+	import FolderBrowser from '$lib/FolderBrowser.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { analyzeUsage, RATE_LABEL } from '$lib/usage-analysis';
@@ -166,12 +167,6 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		model: string | null;
 	}
 
-	interface DirectoryChoice {
-		name: string;
-		kind: 'dir' | 'file' | 'other';
-		symlink: boolean;
-	}
-
 	type RenderPart =
 		| { type: 'text'; text: string }
 		| { type: 'image'; path: string; source: 'local' | 'remote' }
@@ -226,6 +221,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let folderDraft = $state<string | null>(null);
 	let folderError = $state('');
 	let folderChecking = $state(false);
+	let folderBrowseOpen = $state(false);
+	let folderBrowseKey = $state(0);
+	let folderBrowseLoading = $state(false);
 	// Which project-rule version each session started with, for the session bar.
 	let projectRuleStatus = $state<Record<string, ProjectRulesState['status']>>({});
 	$effect(() => {
@@ -759,15 +757,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let createError = $state<string | null>(null);
 	let newCwd = $state('');
 	let cwdBrowseOpen = $state(false);
-	let cwdBrowsePath = $state('');
-	let cwdBrowseEntries = $state<DirectoryChoice[]>([]);
-	let showHiddenDirectories = $state(false);
+	// Bumped to reopen the browser at the folder now in the input.
+	let cwdBrowseKey = $state(0);
 	let cwdBrowseLoading = $state(false);
-	let cwdBrowseRequest = 0;
-	let cwdBrowseError = $state<string | null>(null);
-	const visibleCwdBrowseEntries = $derived(
-		cwdBrowseEntries.filter((entry) => showHiddenDirectories || !entry.name.startsWith('.'))
-	);
 	let newProfile = $state('');
 	let profileChoices = $state<ProfileChoice[]>([]);
 	let defaultCwd = $state('');
@@ -2140,10 +2132,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		createError = null;
 		newCwd = '';
 		cwdBrowseOpen = false;
-		cwdBrowsePath = '';
-		cwdBrowseEntries = [];
-		showHiddenDirectories = false;
-		cwdBrowseError = null;
 		newProfile = '';
 		newMachine = LOCAL_HOST;
 		newProvider = 'codex';
@@ -2262,55 +2250,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function onNewHostChange() {
 		if (newMachine !== LOCAL_HOST) newProvider = 'codex';
-		cwdBrowseRequest++;
 		cwdBrowseLoading = false;
 		createError = null;
 		newProfile = '';
 		cwdBrowseOpen = false;
-		cwdBrowsePath = '';
 		void loadProfileChoices(newHost);
 		if (isRemoteHost(newHost) && hostDefaultCwds[newHost] === undefined) {
 			void loadHostSessions(newHost);
 		}
 	}
 
-	function directoryParent(path: string): string {
-		const normalized = path.replace(/[\\/]+$/, '');
-		const slash = normalized.lastIndexOf('/');
-		if (slash <= 0) return normalized.startsWith('/') ? '/' : normalized;
-		return normalized.slice(0, slash);
-	}
-
-	async function browseDirectories(path?: string) {
-		const request = ++cwdBrowseRequest;
-		const host = newHost;
+	function openCwdBrowser() {
+		cwdBrowseKey++;
 		cwdBrowseOpen = true;
-		cwdBrowseLoading = true;
-		cwdBrowseError = null;
-		try {
-			const params = new URLSearchParams();
-			if (isRemoteHost(newHost)) params.set('host', newHost);
-			const requested = path ?? (newCwd.trim() || (isRemoteHost(newHost) ? hostDefaultCwds[newHost] : defaultCwd));
-			if (requested) params.set('path', requested);
-			const res = await fetch(`/api/directories?${params.toString()}`);
-			const data = await res.json();
-			if (request !== cwdBrowseRequest || host !== newHost) return;
-			if (!res.ok) throw new Error(data.error ?? 'Could not list this directory');
-			cwdBrowsePath = data.path ?? '';
-			// Browsing into a folder selects it too; starting a session must not
-			// silently use the old/default folder shown before navigation.
-			if (cwdBrowsePath) newCwd = cwdBrowsePath;
-			cwdBrowseEntries = (data.entries ?? []).filter((entry: DirectoryChoice) => entry.kind === 'dir');
-		} catch (error) {
-			if (request !== cwdBrowseRequest || host !== newHost) return;
-			cwdBrowseError = error instanceof Error ? error.message : 'Could not list this directory';
-			cwdBrowseEntries = [];
-		} finally {
-			if (request === cwdBrowseRequest) cwdBrowseLoading = false;
-		}
 	}
 
-	function selectBrowseDirectory(path = cwdBrowsePath) {
+	function useCwdBrowserFolder(path: string) {
 		newCwd = path;
 		cwdBrowseOpen = false;
 		cwdInputEl?.focus();
@@ -5703,46 +5658,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							autocapitalize="off"
 							autocomplete="off"
 						/>
-						<button class="cwd-browse-trigger" type="button" onclick={() => browseDirectories()} aria-expanded={cwdBrowseOpen} aria-controls="cwd-browser">
+						<button class="cwd-browse-trigger" type="button" onclick={openCwdBrowser} aria-expanded={cwdBrowseOpen} aria-controls="cwd-browser">
 							<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" /></svg>
 							Browse
 						</button>
 					</div>
 				</div>
 				{#if cwdBrowseOpen}
-					<div class="cwd-browser" id="cwd-browser" aria-label="Choose working directory">
-		<div class="cwd-browser-toolbar">
-							<button class="cwd-up" type="button" onclick={() => browseDirectories(directoryParent(cwdBrowsePath))} disabled={!cwdBrowsePath || directoryParent(cwdBrowsePath) === cwdBrowsePath} aria-label="Go to parent folder" title="Parent folder">↑</button>
-							<button
-								class="cwd-current"
-								type="button"
-								title="Use this folder"
-								aria-label={`Use folder ${cwdBrowsePath || 'current directory'}`}
-								disabled={!cwdBrowsePath || cwdBrowseLoading}
-								onclick={() => selectBrowseDirectory()}
-							>{cwdBrowsePath || 'Choose a folder'}</button>
-		</div>
-		<label class="cwd-hidden-toggle">
-			<input type="checkbox" bind:checked={showHiddenDirectories} />
-			<span>Show hidden folders</span>
-		</label>
-		{#if cwdBrowseLoading}
-							<p class="cwd-browser-message">Loading folders…</p>
-						{:else if cwdBrowseError}
-						<p class="cwd-browser-message error">{cwdBrowseError}</p>
-		{:else if visibleCwdBrowseEntries.length === 0}
-			<p class="cwd-browser-message">No subfolders here.</p>
-		{:else}
-			<div class="cwd-directory-list" role="group" aria-label="Subfolders">
-				{#each visibleCwdBrowseEntries as entry (entry.name)}
-								<button class="cwd-directory" type="button" onclick={() => browseDirectories(`${cwdBrowsePath.replace(/[\\/]+$/, '')}/${entry.name}`)}>
-									<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" /></svg>
-									<span>{entry.name}</span><span aria-hidden="true">›</span>
-								</button>
-							{/each}
-						</div>
-						{/if}
-					</div>
+					{#key `${newHost}:${cwdBrowseKey}`}
+						<FolderBrowser
+							id="cwd-browser"
+							label="Choose working directory"
+							host={isRemoteHost(newHost) ? newHost : null}
+							start={newCwd.trim() || (isRemoteHost(newHost) ? hostDefaultCwds[newHost] : defaultCwd)}
+							bind:loading={cwdBrowseLoading}
+							onnavigate={(path) => (newCwd = path)}
+							onuse={useCwdBrowserFolder}
+						/>
+					{/key}
 				{/if}
 				{#if profileChoices.length > 0}
 					<div class="create-row">
@@ -6251,13 +6184,29 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{#if folderDraft !== null}
 									<form class="folder-form" onsubmit={(event) => { event.preventDefault(); if (folderDraft?.trim()) void chooseSessionFolder(activeId!, folderDraft.trim()); }}>
 										<input aria-label="New session folder" bind:value={folderDraft} spellcheck="false" autocomplete="off" />
-										<button class="mini" type="submit" disabled={folderChecking || !folderDraft.trim()}>{folderChecking ? 'Checking…' : 'Use folder'}</button>
-										<button class="mini ghost" type="button" onclick={() => { folderDraft = null; folderError = ''; }}>Cancel</button>
+										<button class="mini ghost" type="button" aria-expanded={folderBrowseOpen} aria-controls="session-folder-browser" onclick={() => { folderBrowseKey++; folderBrowseOpen = true; }}>Browse</button>
+										{#if folderBrowseOpen}
+											<div class="folder-browser-slot">
+												{#key folderBrowseKey}
+													<FolderBrowser
+														id="session-folder-browser"
+														label="Choose session folder"
+														host={isRemoteHost(sessionHost(activeId)) ? sessionHost(activeId) : null}
+														start={folderDraft.trim()}
+														bind:loading={folderBrowseLoading}
+														onnavigate={(path) => (folderDraft = path)}
+														onuse={(path) => { folderDraft = path; folderBrowseOpen = false; }}
+													/>
+												{/key}
+											</div>
+										{/if}
+										<button class="mini" type="submit" disabled={folderChecking || folderBrowseLoading || !folderDraft.trim()}>{folderChecking ? 'Checking…' : 'Use folder'}</button>
+										<button class="mini ghost" type="button" onclick={() => { folderDraft = null; folderError = ''; folderBrowseOpen = false; }}>Cancel</button>
 										{#if folderError}<span class="folder-error" role="alert">{folderError}</span>{/if}
 										{#if isClaudeSession(activeId)}<span class="folder-note">Claude's conversation is copied to the new folder, so it keeps its history.</span>{/if}
 									</form>
 								{:else}
-									<button class="mini ghost" type="button" title="Move this session to another folder, starting with your next message" onclick={() => { folderDraft = pendingFolders[activeId!] ?? cwds[activeId!] ?? activeSummary?.cwd ?? ''; folderError = ''; }}>Change folder…</button>
+									<button class="mini ghost" type="button" title="Move this session to another folder, starting with your next message" onclick={() => { folderDraft = pendingFolders[activeId!] ?? cwds[activeId!] ?? activeSummary?.cwd ?? ''; folderError = ''; folderBrowseOpen = false; }}>Change folder…</button>
 								{/if}
 							</dd>
 						</div>
@@ -7486,8 +7435,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		width: 1px;
 	}
 
-	.cwd-browse-trigger,
-	.cwd-up {
+	.cwd-browse-trigger {
 		display: inline-flex;
 		flex: none;
 		align-items: center;
@@ -7504,14 +7452,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-weight: 600;
 	}
 
-	.cwd-browse-trigger:disabled,
-	.cwd-up:disabled {
+	.cwd-browse-trigger:disabled {
 		cursor: default;
 		opacity: 0.48;
 	}
 
-	.cwd-browse-trigger svg,
-	.cwd-directory svg {
+	.cwd-browse-trigger svg {
 		width: 1rem;
 		height: 1rem;
 		fill: none;
@@ -7521,126 +7467,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		stroke-width: 1.75;
 	}
 
-	.cwd-browser {
-		display: flex;
-		flex-direction: column;
-		min-width: 0;
-		max-height: 17rem;
-		overflow: hidden;
-		border: var(--rule-hair) solid var(--color-rule);
-		border-radius: var(--radius-input);
-		background: var(--color-paper);
-		box-shadow: var(--shadow-card);
-	}
-
-	.cwd-browser-toolbar {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2xs);
-		min-width: 0;
-		padding: var(--space-2xs);
-		border-block-end: var(--rule-hair) solid var(--color-rule);
-	}
-
-	.cwd-up {
-		width: var(--control-height-compact);
-		min-height: var(--control-height-compact);
-		padding: 0;
-		font-size: var(--text-md);
-	}
-
-	.cwd-current {
-		appearance: none;
-		border: 0;
-		padding: var(--space-3xs);
-		background: transparent;
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		color: var(--color-muted);
-		cursor: pointer;
-		font-family: var(--font-outlier);
-		font-size: 0.68rem;
-		text-align: start;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.cwd-current:hover:not(:disabled),
-	.cwd-current:focus-visible {
-		color: var(--color-accent-active);
-		text-decoration: underline;
-		text-underline-offset: 0.2em;
-	}
-
-	.cwd-current:disabled {
-		cursor: default;
-	}
-
-	.cwd-hidden-toggle {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2xs);
-		min-height: var(--control-height-compact);
-		padding-inline: var(--space-xs);
-		border-block-end: var(--rule-hair) solid var(--color-rule);
-		color: var(--color-muted);
-		cursor: pointer;
-		font-size: var(--text-xs);
-	}
-
-	.cwd-hidden-toggle input {
-		width: 1rem;
-		height: 1rem;
-		margin: 0;
-		accent-color: var(--color-accent-active);
-	}
-
-	.cwd-directory-list {
-		min-height: 0;
-		overflow: auto;
-		padding: var(--space-3xs);
-	}
-
-	.cwd-directory {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2xs);
-		width: 100%;
-		min-height: var(--control-height-compact);
-		padding: var(--space-3xs) var(--space-2xs);
-		border: 0;
-		border-radius: var(--radius-sm);
-		background: transparent;
-		color: var(--color-neutral);
-		cursor: pointer;
-		font-size: var(--text-sm);
-		text-align: start;
-	}
-
-	.cwd-directory span:first-of-type {
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.cwd-browser-message {
-		margin: 0;
-		padding: var(--space-xs);
-		color: var(--color-muted);
-		font-size: var(--text-xs);
-	}
-
-	.cwd-browser-message.error {
-		color: var(--color-error);
-	}
-
 	@media (hover: hover) and (pointer: fine) {
-		.cwd-browse-trigger:hover,
-		.cwd-up:hover:not(:disabled),
-		.cwd-directory:hover {
+		.cwd-browse-trigger:hover {
 			background: var(--color-paper-3);
 			color: var(--color-ink);
 		}
@@ -8856,8 +8684,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.folder-form {
 		display: flex;
 		flex-wrap: wrap;
+		align-items: flex-start;
 		gap: var(--space-2xs);
 		inline-size: 100%;
+	}
+
+	.folder-browser-slot {
+		flex: 1 1 100%;
+		min-inline-size: 0;
 	}
 
 	.folder-form input {

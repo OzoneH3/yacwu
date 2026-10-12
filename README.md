@@ -25,8 +25,9 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🧵 Multi-session workspace: create, rename, reorder, clear, archive, restore,
   and delete sessions, and resume interrupted work; **Clear first** in the
   message box starts that message in a fresh conversation
-- 🗂️ Move a session to another folder from Session details; it applies with
-  your next message (Claude sessions bring their conversation along)
+- 🗂️ Move a session to another folder from Session details (type it or browse,
+  as for new sessions); it applies with your next message (Claude sessions
+  bring their conversation along)
 - ✅ Completion badges mark finished sessions until you open them
 - 🔔 Soft sounds when a session finishes, asks a question, or hits an error;
   the speaker button at the top right mutes them, and resting on it opens a
