@@ -17,3 +17,12 @@ test('manual interaction cancels settling without pulling the reader back down',
 		cancelled: () => cancelled, frame: async () => { viewport.scrollTop = 100; cancelled = true; } });
 	expect(viewport.scrollTop).toBe(100);
 });
+
+test('a scroll away without an input event also stops the jump', async () => {
+	let frames = 0;
+	const viewport = { scrollHeight: 1000, scrollTop: 0, clientHeight: 200 };
+	await settleTranscriptBottom(viewport, { flush: async () => {}, update: () => {}, atEnd: () => true, cancelled: () => false,
+		frame: async () => { frames += 1; if (frames === 2) viewport.scrollTop = 0; } });
+	expect(viewport.scrollTop).toBe(0);
+	expect(frames).toBe(2);
+});

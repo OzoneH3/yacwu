@@ -354,13 +354,17 @@
 		}
 		const uri = monacoRef.Uri.file(`/${path}`);
 		const previous = model;
+		// Re-showing the document just saved keeps its "Saved" status.
+		const justSaved = previous?.uri.toString() === uri.toString() && content === savedContent;
 		model = monacoRef.editor.getModel(uri) ?? monacoRef.editor.createModel(content, undefined, uri);
 		if (model.getValue() !== content) model.setValue(content);
 		editor.setModel(model);
 		savedContent = content;
 		editorText = content;
-		saveStatus = '';
-		saveError = null;
+		if (!justSaved) {
+			saveStatus = '';
+			saveError = null;
+		}
 		if (previous && previous !== model) previous.dispose();
 
 		// Jump to a requested line (path:123 links), marking it quietly.

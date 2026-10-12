@@ -2166,7 +2166,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		await tick();
 		const target =
 			sidebarEl?.querySelector<HTMLElement>('.session.active') ??
-			sidebarEl?.querySelector<HTMLElement>('.new') ??
+			sidebarEl?.querySelector<HTMLElement>('.new:not(.archive-browser-open)') ??
 			sidebarEl?.querySelector<HTMLElement>('a, button:not(:disabled)');
 		target?.focus();
 	}
