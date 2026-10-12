@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -22,6 +22,55 @@ function startHolder(resumeId?: string): Promise<{ proc: ChildProcess; threadId:
 			}
 		});
 		proc.on('error', reject);
+	});
+}
+
+/**
+ * Stand in for the model. The page keeps its real server and event stream,
+ * but sending a message is answered locally: the reply arrives as injected
+ * turn events, so no test spends a model turn or needs Codex credentials.
+ * Later reads of the session include those turns.
+ */
+async function fakeModel(page: Page, reply: (prompt: string) => string) {
+	await page.addInitScript(() => {
+		const w = window as any;
+		const Native = window.EventSource;
+		w.EventSource = class extends Native {
+			constructor(url: string | URL, init?: EventSourceInit) {
+				super(url, init);
+				w.__sse = this;
+			}
+		};
+		w.__emit = (msg: unknown) => w.__sse?.onmessage?.({ data: JSON.stringify(msg) });
+	});
+	const turns = new Map<string, any[]>();
+	let count = 0;
+	await page.route('**/api/threads/*/message', async (route) => {
+		const threadId = new URL(route.request().url()).pathname.split('/')[3];
+		const prompt = String(route.request().postDataJSON()?.text ?? '');
+		count += 1;
+		const turnId = `fake-turn-${count}`;
+		const user = { type: 'userMessage', id: `fake-user-${count}`, content: [{ type: 'text', text: prompt }] };
+		const agent = { type: 'agentMessage', id: `fake-agent-${count}`, text: reply(prompt) };
+		turns.set(threadId, [...(turns.get(threadId) ?? []), { id: turnId, status: 'completed', items: [user, agent] }]);
+		await route.fulfill({ json: {} });
+		await page.evaluate(({ threadId, turnId, user, agent }) => {
+			const emit = (window as any).__emit;
+			emit({ method: 'turn/started', params: { threadId, turn: { id: turnId, status: 'inProgress', items: [] } } });
+			emit({ method: 'item/completed', params: { threadId, turnId, item: user } });
+			emit({ method: 'item/started', params: { threadId, turnId, item: { ...agent, text: '' } } });
+			emit({ method: 'item/agentMessage/delta', params: { threadId, turnId, itemId: agent.id, delta: agent.text } });
+			emit({ method: 'item/completed', params: { threadId, turnId, item: agent } });
+			emit({ method: 'turn/completed', params: { threadId, turn: { id: turnId, status: 'completed', items: [] } } });
+		}, { threadId, turnId, user, agent });
+	});
+	await page.route('**/api/threads/*/open', async (route) => {
+		const threadId = new URL(route.request().url()).pathname.split('/')[3];
+		const fake = turns.get(threadId);
+		if (!fake) return route.fallback();
+		const response = await route.fetch();
+		const data = response.ok() ? await response.json() : {};
+		await route.fulfill({ json: { ...data, thread: { id: threadId, status: { type: 'idle' }, ...data.thread, turns: [...(data.thread?.turns ?? []), ...fake] } } });
 	});
 }
 
@@ -94,6 +143,7 @@ test('title hints use immediate chat-bubble tooltips', async ({ page }) => {
 });
 
 test('mobile drawer, compact header, composer growth, and archive undo remain usable', async ({ page }) => {
+	await fakeModel(page, () => 'OK');
 	await page.setViewportSize({ width: 375, height: 780 });
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
@@ -146,9 +196,9 @@ test('mobile drawer, compact header, composer growth, and archive undo remain us
 	const info = page.locator('.session-info-trigger');
 	await expect(info).toHaveAttribute('aria-label', /idle/);
 	await info.click();
-	await expect(page.locator('.session-info-dialog')).toBeVisible();
-	await expect(page.locator('.session-info-dialog')).toContainText('Session details');
-	await page.locator('.session-info-close').click();
+	await expect(page.getByRole('dialog', { name: 'Session details' })).toBeVisible();
+	await expect(page.getByRole('dialog', { name: 'Session details' })).toContainText('Session details');
+	await page.getByRole('dialog', { name: 'Session details' }).locator('.session-info-close').click();
 
 	const textarea = page.locator('.composer textarea');
 	const before = await textarea.evaluate((element) => element.getBoundingClientRect().height);
@@ -181,16 +231,17 @@ test('mobile drawer, compact header, composer growth, and archive undo remain us
 	expect(composerRows.actionsTop).toBeGreaterThanOrEqual(composerRows.textareaBottom - 1);
 	await textarea.fill('Reply with exactly: OK');
 	await page.locator('.send').click();
-	await expect(page.locator('.item.agent .body').last()).toContainText('OK', { timeout: 90_000 });
+	await expect(page.locator('.item.agent .body').last()).toContainText('OK');
 
 	await page.locator('.header-menu').click();
 	await expect(page.locator('.session.active')).toBeFocused();
 	const active = page.locator('.session.active');
 	const activeId = await active.getAttribute('data-id');
 	if (!activeId) throw new Error('new session did not expose its id');
-	const activeRow = page.locator('.session-row', { has: active });
-	await activeRow.hover();
-	await activeRow.locator('.delete-session').click();
+	// Sessions are archived from Session details.
+	await page.keyboard.press('Escape');
+	await page.locator('.session-info-trigger').click();
+	await page.getByRole('dialog', { name: 'Session details' }).getByRole('button', { name: 'Archive session' }).click();
 	await expect(page.locator('.archive-toast')).toContainText('Archived');
 	await page.locator('.archive-toast button', { hasText: 'Undo' }).click();
 	await expect(page.locator(`.session[data-id="${activeId}"]`)).toBeAttached();
@@ -232,6 +283,7 @@ test('mobile drawer, compact header, composer growth, and archive undo remain us
 });
 
 test('multi-session: create two, stream a reply, switch between them', async ({ page }) => {
+	await fakeModel(page, (prompt) => (prompt.includes('SECOND') ? 'SECOND' : 'PONG'));
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 
@@ -264,7 +316,10 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 	await page.locator('.composer textarea').fill('For this follow-up, reply with the single word: SECOND');
 	await page.locator('button.send').click();
 	await expect(page.locator('.original-prompt p')).toHaveText('For this follow-up, reply with the single word: SECOND');
-	await expect(page.locator('.original-prompt')).toHaveAttribute('title', /Original prompt: Reply with exactly the single word: PONG/);
+	// The session label's hint lists the latest and the original prompt.
+	await expect.poll(() => page.locator('.original-prompt .session-label').evaluate((element) =>
+		element.getAttribute('title') ?? element.getAttribute('data-yacwu-tooltip') ?? ''
+	)).toMatch(/Original prompt: Reply with exactly the single word: PONG/);
 	await expect(page.locator('.item.agent .body').last()).toContainText('SECOND', { timeout: 90_000 });
 	await expect(page.locator('.topbar .session-info-trigger')).toHaveAttribute('aria-label', /idle/, {
 		timeout: 90_000
@@ -293,9 +348,8 @@ test('multi-session: create two, stream a reply, switch between them', async ({ 
 
 	// Switch back to Session A — its transcript (with PONG) is restored.
 	await page.locator(`.session[data-id="${sessionAId}"]`).click();
-	await expect(page.locator('.item.agent .body').last()).toContainText('PONG', {
-		timeout: 30_000
-	});
+	await expect(page.locator('.item.agent .body', { hasText: 'PONG' })).toBeVisible();
+	await expect(page.locator('.item.agent .body').last()).toContainText('SECOND');
 
 	await page.screenshot({ path: 'tests/yacwu.png', fullPage: true });
 });
@@ -420,6 +474,9 @@ test('web search activity renders its action, query, and result count', async ({
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
+	// A new session starts empty; its history loads (through /open) on the next visit.
+	await expect(page.locator('.composer')).toBeVisible();
+	await page.reload();
 
 	const search = page.locator('.item.web-search');
 	await expect(search).toContainText('Searched the web for Codex app-server protocol');
@@ -474,9 +531,13 @@ test('Codex messages use the full row without a logo', async ({ page }) => {
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 	await page.locator('button.new[aria-label="New session"]').click();
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
+	// A new session starts empty; its history loads (through /open) on the next visit.
+	await expect(page.locator('.composer')).toBeVisible();
+	await page.reload();
 
 	const message = page.locator('.item.agent').first();
-	await expect(page.locator('.original-prompt')).toContainText('First navigation point');
+	// The header shows the latest prompt.
+	await expect(page.locator('.original-prompt')).toContainText('Second navigation point');
 	await expect(page.locator('.original-prompt p')).toHaveCSS('white-space', 'nowrap');
 	await expect(message).toContainText('A full-width Codex response.');
 	await expect(message.locator('.codex-mark')).toHaveCount(0);
@@ -503,7 +564,7 @@ test('Codex messages use the full row without a logo', async ({ page }) => {
 	expect(Math.abs(geometry.bodyRight - geometry.contentRight)).toBeLessThanOrEqual(1);
 
 	await page.locator('.session-info-trigger').click();
-	const details = page.locator('.session-info-dialog');
+	const details = page.getByRole('dialog', { name: 'Session details' });
 	await expect(details).toContainText('Last modified');
 	await expect(details.locator('time')).toHaveAttribute(
 		'datetime',
@@ -553,9 +614,8 @@ test('side-chat delete unsubscribes without archiving and stays deleted after re
 	await page.locator('button.send').click();
 	const sideSession = page.locator(`.session[data-id="${sideId}"]`);
 	await expect(sideSession).toHaveClass(/active/);
-	const sideRow = page.locator('.session-row.side-row', { has: sideSession });
-	await sideRow.hover();
-	await sideRow.locator('.delete-session').click();
+	await page.locator('.session-info-trigger').click();
+	await page.getByRole('dialog', { name: 'Session details' }).getByRole('button', { name: 'Remove side conversation' }).click();
 
 	await expect(sideSession).toHaveCount(0);
 	await expect(page.locator('.archive-toast')).toContainText('Deleted');
@@ -626,6 +686,8 @@ test('new session folder picker navigates into and selects directories', async (
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 	await page.locator('button.new[aria-label="New session"]').click();
+	// Browsing starts from the folder in the input.
+	await page.locator('.cwd-input').fill('/workspace');
 	await page.locator('.cwd-browse-trigger').click();
 	await expect(page.locator('.cwd-current')).toHaveText('/workspace');
 	await expect(page.locator('.cwd-directory')).toHaveCount(1);
@@ -773,6 +835,16 @@ test('Git changes viewer filters and renders a responsive Monaco diff', async ({
 });
 
 test('slash commands: /goal sets, shows, and clears the goal', async ({ page }) => {
+	// Setting a real goal makes Codex start working on it (a model turn), so
+	// the goal endpoint is stubbed: this test covers the slash commands.
+	let goal: { objective: string; status: string; tokenBudget: number | null; tokensUsed: number; timeUsedSeconds: number } | null = null;
+	await page.route('**/api/threads/*/goal**', async (route) => {
+		if (route.request().method() === 'POST') {
+			const body = route.request().postDataJSON() ?? {};
+			goal = body.clear ? null : { objective: String(body.objective ?? ''), status: 'active', tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0 };
+		}
+		await route.fulfill({ json: { goal } });
+	});
 	await page.goto('/');
 	await expect(page.locator('.brand .dot.on')).toBeVisible({ timeout: 15_000 });
 
@@ -952,7 +1024,7 @@ test('slash command: /status reports account, limits & session info', async ({ p
 	await expect(note).toContainText('context   unavailable');
 	await expect(note).toContainText('account   dev@example.com · pro', { timeout: 15_000 });
 	await expect(note).toContainText('5h limit  42% used');
-	await expect(note).toContainText('7d limit  7% used');
+	await expect(note).toContainText('7d limit  7.6% used');
 });
 
 test('slash command: /fast toggles Fast mode and marks the session', async ({ page }) => {
@@ -1151,8 +1223,8 @@ test('slash command & picker: /profile selects codex profiles', async ({ page })
 
 	// The picker lists profiles (from the stub) with the base config default.
 	await page.locator('button.new[aria-label="New session"]').click();
-	await expect(page.locator('.profile-input')).toBeVisible();
-	await expect(page.locator('.profile-input option')).toHaveCount(3);
+	await expect(page.locator('#new-profile')).toBeVisible();
+	await expect(page.locator('#new-profile option')).toHaveCount(3);
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
 	expect(createBody).toEqual({});
@@ -1180,7 +1252,7 @@ test('slash command & picker: /profile selects codex profiles', async ({ page })
 	// Creating via the picker sends the profile; the real backend rejects the
 	// stub-only name, proving validation runs against the profiles on disk.
 	await page.locator('button.new[aria-label="New session"]').click();
-	await page.locator('.profile-input').selectOption('fast');
+	await page.locator('#new-profile').selectOption('fast');
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.create-err')).toContainText('unknown profile: fast', {
 		timeout: 15_000

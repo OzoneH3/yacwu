@@ -464,10 +464,10 @@ bunx playwright test # end-to-end verification (builds the UI, runs the Gleam se
 ```
 
 Test servers use a separate temporary usage directory so their collector
-startup events do not invalidate live task recordings or calibration.
-`tests/e2e.spec.ts` drives a real `codex app-server` in your `~/.codex` store
-and sends a short real prompt; run it with a separate `HOME` to keep it
-offline (its model-dependent steps then fail).
+startup events do not invalidate live task recordings or calibration. They
+also get their own empty Codex home and Yacwu state, so tests never see your
+sessions or credentials and cannot spend a model turn: model replies are
+stubbed in the tests.
 
 ## Architecture
 
