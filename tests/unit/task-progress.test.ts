@@ -7,6 +7,7 @@ import {
 	turnEstimateBias,
 	parseTaskProgress,
 	separateTaskProgressEntries,
+	taskProgressParts,
 	stripTaskProgressMarkers,
 	withTaskProgressInstructions
 } from '../../src/lib/task-progress';
@@ -136,4 +137,15 @@ test('a follow-up sent into a running task keeps its reported progress', () => {
 	// Idle: a new message starts over.
 	expect(latestTaskProgress(items, null)).toBeNull();
 	expect(latestTaskProgress(items.slice(0, 5), null)?.percent).toBe(45);
+});
+
+describe('taskProgressParts', () => {
+	test('splits a message once per text, so streaming does not re-split history', () => {
+		const text = `Earlier answer ${Math.random()}\n[[YACWU_PROGRESS percent=40 remaining_minutes=3]]\nDone.`;
+		const first = taskProgressParts(text);
+		expect(first).toEqual({ estimate: { percent: 40, remainingMinutes: 3 }, visibleText: first.visibleText });
+		expect(first.visibleText).not.toContain('YACWU_PROGRESS');
+		expect(taskProgressParts(`${text}`)).toBe(first);
+		expect(taskProgressParts(`${text} more`)).not.toBe(first);
+	});
 });

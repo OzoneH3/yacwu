@@ -75,6 +75,7 @@
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
+	import { createDeltaBatcher } from '$lib/delta-batch';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, loadArchiveCatalog } from '$lib/archive';
@@ -1628,11 +1629,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (stopped) dismissStalledWorkerPrompt(sessionId, item.id);
 	}
 
+	// Streamed deltas reach the transcript once per frame (or every 100 ms in
+	// a background tab, where frames pause).
+	const deltaBatcher = createDeltaBatcher<JsonRpcNotification>(handleNotification, (flush) => {
+		requestAnimationFrame(flush);
+		setTimeout(flush, 100);
+	});
+
 	function handleNotification(msg: JsonRpcNotification) {
 		const p: any = msg.params ?? {};
 		const tid: string | undefined = p.threadId;
 		const affectedThreadId: string | undefined = tid ?? p.thread?.id;
-		const shouldScroll = affectedThreadId === viewedId && isTranscriptAtBottom();
+		// While a jump follows the stream, measuring again would force a layout per delta.
+		const shouldScroll = affectedThreadId === viewedId && (followingBottom() || isTranscriptAtBottom());
 		if (tid && clearsStalledWorkerPrompt(msg.method)) {
 			for (const [sessionId, thread] of Object.entries(threads)) {
 				for (const id of [...thread.order]) {
@@ -1916,20 +1925,34 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		for (const event of events) node.addEventListener(event, cancelBottomJump, { passive: true });
 		return { destroy() { for (const event of events) node.removeEventListener(event, cancelBottomJump); } };
 	}
+	// The jump in progress, if any. Streamed deltas arrive far faster than
+	// frames; a running jump already follows the growing content each frame,
+	// so they join it instead of restarting it (each restart forces a layout).
+	let activeBottomJump: { generation: number; targetId: string | null } | null = null;
+	function followingBottom(): boolean {
+		return activeBottomJump?.generation === bottomJumpGeneration && activeBottomJump.targetId === viewedId;
+	}
 	async function scrollToBottom() {
+		if (followingBottom()) return;
 		const generation = ++bottomJumpGeneration;
 		const targetId = viewedId;
-		await tick();
-		if (!transcriptEl || generation !== bottomJumpGeneration || targetId !== viewedId) return;
-		const viewport = transcriptEl;
-		unseenActivity = false;
-		await settleTranscriptBottom(viewport, {
-			flush: tick,
-			frame: () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-			update: updateTranscriptViewport,
-			cancelled: () => generation !== bottomJumpGeneration || targetId !== viewedId || viewport !== transcriptEl,
-			atEnd: () => virtualTranscript.after === 0
-		});
+		const jump = { generation, targetId };
+		activeBottomJump = jump;
+		try {
+			await tick();
+			if (!transcriptEl || generation !== bottomJumpGeneration || targetId !== viewedId) return;
+			const viewport = transcriptEl;
+			unseenActivity = false;
+			await settleTranscriptBottom(viewport, {
+				flush: tick,
+				frame: () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+				update: updateTranscriptViewport,
+				cancelled: () => generation !== bottomJumpGeneration || targetId !== viewedId || viewport !== transcriptEl,
+				atEnd: () => virtualTranscript.after === 0
+			});
+		} finally {
+			if (activeBottomJump === jump) activeBottomJump = null;
+		}
 	}
 
 	function transcriptRowKey(item: ThreadItem): string {
@@ -5282,6 +5305,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		es.onmessage = (e) => {
 			try {
 				const msg = JSON.parse(e.data) as JsonRpcNotification;
+				if (deltaBatcher.push(msg)) return;
+				deltaBatcher.flush();
 				if (msg.method === 'yacwu/connected') {
 					connected = true;
 					if (streamConnectedBefore) resyncAfterReconnect();

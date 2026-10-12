@@ -56,6 +56,23 @@ export function parseTaskProgress(text: string): TaskProgressEstimate | null {
 	return latest;
 }
 
+const partsCache = new Map<string, { estimate: TaskProgressEstimate | null; visibleText: string }>();
+const PARTS_CACHE_LIMIT = 5000;
+
+/**
+ * A message's progress estimate and visible text, cached by text: the
+ * transcript re-splits every message on each streamed delta, and only the
+ * streaming one has changed.
+ */
+export function taskProgressParts(text: string): { estimate: TaskProgressEstimate | null; visibleText: string } {
+	const cached = partsCache.get(text);
+	if (cached) return cached;
+	const parts = { estimate: parseTaskProgress(text), visibleText: stripTaskProgressMarkers(text) };
+	if (partsCache.size >= PARTS_CACHE_LIMIT) partsCache.clear();
+	partsCache.set(text, parts);
+	return parts;
+}
+
 /** Split progress protocol data out of assistant messages into its own transcript entry. */
 export function separateTaskProgressEntries<T extends { type: string; id: string; text?: string }>(
 	items: T[]
@@ -67,9 +84,8 @@ export function separateTaskProgressEntries<T extends { type: string; id: string
 			result.push(item);
 			continue;
 		}
-		const estimate = parseTaskProgress(item.text);
-		const visibleText = stripTaskProgressMarkers(item.text);
-		if (visibleText || !estimate) result.push({ ...item, text: visibleText });
+		const { estimate, visibleText } = taskProgressParts(item.text);
+		if (visibleText || !estimate) result.push(visibleText === item.text ? item : { ...item, text: visibleText });
 		if (estimate) {
 			const isDuplicate = lastEstimate?.percent === estimate.percent
 				&& lastEstimate.remainingMinutes === estimate.remainingMinutes;
