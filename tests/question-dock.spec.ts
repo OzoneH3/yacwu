@@ -70,3 +70,38 @@ test('the answer box spans the panel and sends with Enter like the message box',
 	await expect.poll(() => sent.length).toBe(1);
 	expect(String(sent[0].text)).toContain('Build it,\nbut smaller');
 });
+
+test("a tool call's questions dock too and are answered to the tool, not as a message", async ({ page }) => {
+	const sent: Record<string, unknown>[] = [];
+	const answered: Record<string, unknown>[] = [];
+	const thread = { id: ID, name: 'question', cwd: '/tmp', host: 'claude', status: { type: 'active', activeFlags: ['waitingOnUserInput'] }, turns: [{ id: 'turn-1', status: 'inProgress', items: [
+		{ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'Set up auth' }] },
+		{ type: 'dynamicToolCall', id: 'ask-1', namespace: 'claude', tool: 'AskUserQuestion', status: 'inProgress', arguments: { questions: [
+			{ id: 'q0', header: 'Auth', question: 'Which auth method do you want?', isOther: false, isSecret: false, options: [{ label: 'OAuth', description: '' }, { label: 'API Key', description: '' }] },
+			{ id: 'q1', header: 'Scope', question: 'Who should it cover?', isOther: false, isSecret: false, options: [{ label: 'Everyone', description: '' }, { label: 'Admins', description: '' }] }
+		] } }
+	] }] };
+	await page.route('**/api/**', async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+		if (path === '/api/threads') return route.fulfill({ json: { data: [thread], defaultCwd: '/tmp' } });
+		if (path === '/api/threads/loaded') return route.fulfill({ json: { data: [ID] } });
+		if (path.endsWith('/model')) return route.fulfill({ json: { model: 'test', effort: 'medium', models: [] } });
+		if (path === `/api/threads/${ID}/message`) { sent.push(route.request().postDataJSON()); return route.fulfill({ json: {} }); }
+		if (path === `/api/threads/${ID}/user-input`) { answered.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); }
+		if (path.startsWith('/api/threads/')) return route.fulfill({ json: { thread } });
+		return route.fulfill({ json: {} });
+	});
+	await page.goto(`/s/${ID}?host=claude`);
+	const panel = page.getByRole('region', { name: /has a question/ });
+	await expect(panel).toContainText('Which auth method do you want?');
+	await panel.getByRole('button', { name: /API Key/ }).click();
+	await expect(panel).toContainText('Who should it cover?');
+	expect(answered).toHaveLength(0);
+	await panel.getByLabel('Other').fill('Admins and auditors');
+	await panel.getByLabel('Other').press('Enter');
+	await expect.poll(() => answered.length).toBe(1);
+	expect(answered[0]).toEqual({ itemId: 'ask-1', answers: { q0: { answers: ['API Key'] }, q1: { answers: ['Admins and auditors'] } } });
+	expect(sent).toHaveLength(0);
+	await expect(panel).toHaveCount(0);
+});

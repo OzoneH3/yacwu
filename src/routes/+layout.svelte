@@ -74,7 +74,7 @@
 	import { coordinatorHandoff, type HandoffFile } from '$lib/coordinator-handoff';
 	import { unconfirmedEchoes } from '$lib/user-echoes';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
-import { detectPromptKind, pendingQuestionsForThread } from '$lib/interactive-choice';
+import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
 	import { createDeltaBatcher } from '$lib/delta-batch';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
@@ -288,7 +288,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let restoringArchivedSessionId = $state<string | null>(null);
 	let deletingArchivedSessionId = $state<string | null>(null);
 	let resolvedInteractiveQuestionIds = $state<Record<string, boolean>>({});
-	let retainedInteractiveQuestions = $state<Array<{ id: string; threadId: string; question: string; options: string[] }>>([]);
+	let retainedInteractiveQuestions = $state<PendingInteractiveQuestion[]>([]);
 	let choiceCustomAnswer = $state('');
 	let choicePromptId = $state<string | null>(null);
 	let instantTooltip = $state<{ text: string; left: number; top: number; wide: boolean } | null>(null);
@@ -430,7 +430,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	});
 	const pendingInteractiveQuestions = $derived.by(() => {
 		if (!activeId || viewedAgentId) return [];
-		const queue: Array<{ id: string; threadId: string; question: string; options: string[] }> = [];
+		const queue: PendingInteractiveQuestion[] = [];
 		const threadIds = [activeId, ...agentsForSession(agents, activeId).map((agent) => agent.id)];
 		for (const threadId of threadIds) {
 			const items = itemsOf(threads[threadId] ?? null);
@@ -2827,8 +2827,43 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	// Answers to a tool call's questions, sent together once all are answered.
+	const toolAnswers: Record<string, Record<string, string[]>> = {};
+
+	async function answerToolQuestion(question: PendingInteractiveQuestion, answer: string) {
+		if (!question.tool) return;
+		const { itemId, questionId, questionIds } = question.tool;
+		const collected = { ...(toolAnswers[itemId] ?? {}), [questionId]: [answer] };
+		toolAnswers[itemId] = collected;
+		resolveInteractiveQuestion(question);
+		if (!questionIds.every((id) => collected[id])) return;
+		delete toolAnswers[itemId];
+		const answers = Object.fromEntries(questionIds.map((id) => [id, { answers: collected[id] }]));
+		let error: string | null = null;
+		try {
+			const res = await fetch(threadApi(question.threadId, '/user-input'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ itemId, answers })
+			});
+			if (!res.ok) error = (await res.json().catch(() => ({}))).error ?? `failed (${res.status})`;
+		} catch (err) {
+			error = err instanceof Error ? err.message : String(err);
+		}
+		if (!error) return;
+		// Ask again: the questions come back so the answer can be retried.
+		const keys = questionIds.map((id) => `${question.threadId}:${itemId}:${id}`);
+		resolvedInteractiveQuestionIds = Object.fromEntries(Object.entries(resolvedInteractiveQuestionIds).filter(([key]) => !keys.includes(key)));
+		addLocalNote(question.threadId, `Could not send your answer: ${error}`, 'err');
+	}
+
 	function answerInteractiveChoice(option: string) {
 		if (!pendingInteractiveChoice || sendingMessage || !option.trim()) return;
+		if (pendingInteractiveChoice.tool) {
+			void answerToolQuestion(pendingInteractiveChoice, option.trim());
+			choiceCustomAnswer = '';
+			return;
+		}
 		retainPendingInteractiveQuestions();
 		input = `I choose: ${option}`;
 		void send(pendingInteractiveChoice);

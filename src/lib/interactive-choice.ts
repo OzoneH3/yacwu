@@ -18,7 +18,29 @@ function withoutFencedCode(text: string): string {
 	}).join('\n');
 }
 
-export interface PendingInteractiveQuestion extends InteractiveChoice { id: string; threadId: string }
+export interface PendingInteractiveQuestion extends InteractiveChoice {
+	id: string;
+	threadId: string;
+	/** Asked through a tool call (Claude's AskUserQuestion): answered to the tool, not as a message. */
+	tool?: { itemId: string; questionId: string; questionIds: string[] };
+}
+
+/** The questions of a tool call still waiting for the user's answer. */
+function toolQuestions(item: { type: string; id: string }): Array<{ id: string; question: string; options: string[] }> {
+	const call = item as { type: string; tool?: unknown; status?: unknown; arguments?: { questions?: unknown } };
+	if (call.type !== 'dynamicToolCall' || call.tool !== 'AskUserQuestion' || call.status !== 'inProgress') return [];
+	const questions = call.arguments?.questions;
+	if (!Array.isArray(questions)) return [];
+	return questions.flatMap((question: any) => {
+		const id = typeof question?.id === 'string' ? question.id : '';
+		const text = typeof question?.question === 'string' ? question.question : '';
+		if (!id || !text) return [];
+		const options = Array.isArray(question.options)
+			? question.options.map((option: any) => String(option?.label ?? '')).filter((label: string) => label && label !== 'Other')
+			: [];
+		return [{ id, question: text, options }];
+	});
+}
 
 /** The dialog and session badge must use the same unresolved questions. */
 export function pendingQuestionsForThread(
@@ -27,7 +49,15 @@ export function pendingQuestionsForThread(
 	resolved: Record<string, boolean>
 ): PendingInteractiveQuestion[] {
 	const lastUser = items.findLastIndex((item) => item.type === 'userMessage');
-	return items.slice(lastUser + 1).flatMap((item) => {
+	return items.slice(lastUser + 1).flatMap((item): PendingInteractiveQuestion[] => {
+		const asked = toolQuestions(item);
+		if (asked.length) {
+			const questionIds = asked.map((question) => question.id);
+			return asked.flatMap((question) => {
+				const id = `${item.id}:${question.id}`;
+				return resolved[`${threadId}:${id}`] ? [] : [{ id, threadId, question: question.question, options: question.options, tool: { itemId: item.id, questionId: question.id, questionIds } }];
+			});
+		}
 		if (item.type !== 'agentMessage' || !item._completed) return [];
 		return parseInteractiveQuestions(String(item.text ?? '')).flatMap((choice, index) => {
 			const id = `${item.id}:${index}`;

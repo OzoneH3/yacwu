@@ -202,6 +202,11 @@ pub opaque type Msg {
   LinkedExit(exit: process.ExitMessage)
   DiagnosticTick
   GetDiagnostics(reply: Subject(Json))
+  AnswerUserInput(
+    item_id: String,
+    answers: Json,
+    reply: Subject(Result(Nil, String)),
+  )
   Ignore
 }
 
@@ -324,6 +329,23 @@ pub fn diagnostic_snapshot(codex: Codex) -> Json {
 }
 
 /// Send a JSON-RPC notification (no response expected).
+/// Answer a question the backend asked the user, under its request id.
+pub fn answer_user_input(
+  codex: Codex,
+  item_id: String,
+  answers: Json,
+) -> Result(Nil, String) {
+  exception.rescue(fn() {
+    process.call(process.named_subject(codex), 10_000, AnswerUserInput(
+      item_id,
+      answers,
+      _,
+    ))
+  })
+  |> result.replace_error("the backend manager is restarting; retry shortly")
+  |> result.flatten
+}
+
 pub fn notify(codex: Codex, method: String, params: Json) -> Nil {
   let _ =
     exception.rescue(fn() {
@@ -492,6 +514,9 @@ type State {
     /// Tracked tickets already written, mapped to their wire ids.
     tickets: Dict(Int, Int),
     lifecycle: List(#(Pid, Subject(Lifecycle))),
+    /// Questions a backend asked the user (`item/tool/requestUserInput`),
+    /// by item id, with the request's wire id to answer under.
+    user_input: Dict(String, Dynamic),
   )
 }
 
@@ -530,6 +555,7 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     generation: 0,
     tickets: dict.new(),
     lifecycle: [],
+    user_input: dict.new(),
   )
 }
 
@@ -610,6 +636,31 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         _, _ -> Nil
       }
       actor.continue(state)
+    }
+    AnswerUserInput(item_id, answers, reply) -> {
+      case dict.get(state.user_input, item_id), state.status {
+        Ok(id), Running(conn) -> {
+          write_line(
+            conn,
+            json.object([
+              #("id", jsonx.to_json(id)),
+              #("result", json.object([#("answers", answers)])),
+            ]),
+          )
+          process.send(reply, Ok(Nil))
+          actor.continue(
+            State(..state, user_input: dict.delete(state.user_input, item_id)),
+          )
+        }
+        Ok(_), _ -> {
+          process.send(reply, Error("the backend is not connected"))
+          actor.continue(state)
+        }
+        Error(_), _ -> {
+          process.send(reply, Error("this question is no longer waiting"))
+          actor.continue(state)
+        }
+      }
     }
     Notify(method, params) -> {
       case state.status {
@@ -1426,11 +1477,14 @@ fn process_line(state: State, line: BitArray) -> State {
         result.is_ok(decode.run(msg, decode.at(["result"], decode.dynamic)))
       let error = decode.run(msg, decode.at(["error"], decode.dynamic))
       let is_response = has_result || result.is_ok(error)
+      // Backends may use string ids for their own requests.
+      let has_id =
+        result.is_ok(decode.run(msg, decode.at(["id"], decode.dynamic)))
       case id, method {
         // Response to one of our requests.
         Ok(id), _ if is_response -> on_response(state, id, msg, error)
         // Server-initiated request (has both id and method) — e.g. approvals.
-        Ok(_), Ok(request_method) ->
+        _, Ok(request_method) if has_id && !is_response ->
           on_server_request(state, line, msg, request_method)
         // Notification.
         _, Ok(method) -> {
@@ -1794,13 +1848,42 @@ fn on_server_request(
   msg: Dynamic,
   method: String,
 ) -> State {
-  let result = case string.contains(method, "requestApproval") {
-    True -> json.object([#("decision", json.string("accept"))])
-    False -> json.object([])
-  }
   let id =
     decode.run(msg, decode.at(["id"], decode.dynamic))
     |> result.unwrap(dynamic.nil())
+  case method {
+    // A question for the user: it waits for their answer (answer_user_input).
+    "item/tool/requestUserInput" ->
+      case decode.run(msg, decode.at(["params", "itemId"], decode.string)) {
+        Ok(item_id) ->
+          broadcast(
+            State(
+              ..state,
+              user_input: dict.insert(state.user_input, item_id, id),
+            ),
+            line,
+          )
+        Error(_) -> reply_server_request(state, line, id, json.object([]))
+      }
+    _ ->
+      reply_server_request(
+        state,
+        line,
+        id,
+        case string.contains(method, "requestApproval") {
+          True -> json.object([#("decision", json.string("accept"))])
+          False -> json.object([])
+        },
+      )
+  }
+}
+
+fn reply_server_request(
+  state: State,
+  line: BitArray,
+  id: Dynamic,
+  result: Json,
+) -> State {
   case state.status {
     Running(conn) | Initializing(conn, _, _) ->
       write_line(
@@ -2011,6 +2094,7 @@ fn fail_all(state: State, message: String) -> State {
     status: NotRunning,
     pending: dict.new(),
     tickets: dict.new(),
+    user_input: dict.new(),
     generation: 0,
     buffer: <<>>,
     decoder: ws.new_decoder(),

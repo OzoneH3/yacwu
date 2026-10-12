@@ -166,3 +166,41 @@ test('project rules reach Claude and Codex sessions per repository', { skip, tim
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test('a question asked through a tool call waits for the user and gets their answer', { skip, timeout: 300_000 }, async () => {
+	const root = mkdtempSync(join(tmpdir(), 'yacwu-ask-'));
+	const server = await startServer(root);
+	const call = async (path, body) => {
+		const response = await fetch(`${server.base}${path}`, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+		return { ok: response.ok, data: await response.json() };
+	};
+	try {
+		const { data: created } = await call('/threads', { host: 'claude', cwd: root });
+		const id = created.thread.id;
+		await call(`/threads/${id}/message`, { text: 'ask user question check <!-- YACWU_ALLOWANCE_RESERVE percent=0 -->' });
+		let question = null;
+		for (let i = 0; i < 60 && !question; i++) {
+			const { data } = await call(`/threads/${id}?turns=1`);
+			question = data.thread.turns.flatMap((turn) => turn.items).find((item) => item.type === 'dynamicToolCall' && item.tool === 'AskUserQuestion' && item.status === 'inProgress');
+			if (!question) await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+		assert.ok(question, 'the question item never appeared');
+		// It waits: no answer was invented for the user.
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		assert.equal((await call(`/threads/${id}?turns=1`)).data.thread.turns.at(-1).status, 'inProgress');
+		const answered = await call(`/threads/${id}/user-input`, { itemId: question.id, answers: { q0: { answers: ['API Key'] } } });
+		assert.ok(answered.ok, JSON.stringify(answered.data));
+		let reply = '';
+		for (let i = 0; i < 60 && !reply.includes('API Key'); i++) {
+			const { data } = await call(`/threads/${id}?turns=1`);
+			reply = data.thread.turns.flatMap((turn) => turn.items).filter((item) => item.type === 'agentMessage').map((item) => item.text).join('\n');
+			if (!reply.includes('API Key')) await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+		assert.ok(reply.includes('API Key'), reply);
+		// A second answer to the same question is refused.
+		assert.equal((await call(`/threads/${id}/user-input`, { itemId: question.id, answers: { q0: { answers: ['OAuth'] } } })).ok, false);
+	} finally {
+		server.stop();
+		rmSync(root, { recursive: true, force: true });
+	}
+});

@@ -583,6 +583,10 @@ fn dispatch(
       use host, cx <- with_codex(ctx, req, Some(id))
       message(ctx, host, cx, req, id)
     }
+    ["api", "threads", id, "user-input"], Post -> {
+      use _host, cx <- with_codex(ctx, req, Some(id))
+      answer_user_input(cx, req)
+    }
     ["api", "threads", id, "interrupt"], Post -> {
       use _, cx <- with_codex(ctx, req, Some(id))
       interrupt(cx, req, id)
@@ -2093,6 +2097,26 @@ fn create_thread_on(
 }
 
 // -- Project rules --------------------------------------------------------------
+
+/// Answer a question the agent asked through a tool call: `itemId` names the
+/// question's item, `answers` maps each question id to `{answers: [...]}`.
+fn answer_user_input(
+  cx: Codex,
+  req: Request(Connection),
+) -> Response(ResponseData) {
+  let body = read_json_body(req)
+  case
+    jsonx.field_string(body, ["itemId"]),
+    decode.run(body, decode.at(["answers"], decode.dynamic))
+  {
+    Ok(item_id), Ok(answers) if item_id != "" ->
+      case codex.answer_user_input(cx, item_id, jsonx.to_json(answers)) {
+        Ok(Nil) -> json_response(200, json.object([#("ok", json.bool(True))]))
+        Error(message) -> json_response(409, error_body(message))
+      }
+    _, _ -> json_response(400, error_body("itemId and answers are required"))
+  }
+}
 
 /// The project a folder belongs to on this machine: its repository's shared
 /// Git directory, so every worktree, and Codex and Claude alike, resolve to
