@@ -52,3 +52,21 @@ test('Escape dismisses the docked question', async ({ page }) => {
 	await page.keyboard.press('Escape');
 	await expect(panel).toHaveCount(0);
 });
+
+test('the answer box spans the panel and sends with Enter like the message box', async ({ page }) => {
+	const sent = await mock(page);
+	const panel = page.getByRole('region', { name: 'Codex has a question' });
+	const answer = panel.getByLabel('Other');
+	await expect(answer).toBeVisible();
+	const [box, label, form] = await Promise.all([answer.boundingBox(), panel.getByText('Other', { exact: true }).boundingBox(), panel.locator('.interactive-choice-other').boundingBox()]);
+	expect(box!.y).toBeGreaterThan(label!.y + label!.height - 1);
+	expect(box!.width).toBeGreaterThan(form!.width - 2);
+	await answer.fill('Build it,');
+	await answer.press('Shift+Enter');
+	await answer.pressSequentially('but smaller');
+	await expect(answer).toHaveValue('Build it,\nbut smaller');
+	expect(sent).toHaveLength(0);
+	await answer.press('Enter');
+	await expect.poll(() => sent.length).toBe(1);
+	expect(String(sent[0].text)).toContain('Build it,\nbut smaller');
+});

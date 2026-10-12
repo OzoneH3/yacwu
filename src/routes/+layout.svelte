@@ -6753,6 +6753,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								bind:value={choiceCustomAnswer}
 								rows="2"
 								placeholder="Type another answer…"
+								enterkeyhint={mobileViewport ? 'enter' : 'send'}
+								onkeydown={(event) => {
+									// Like the message box: Enter sends, Shift+Enter starts a new line.
+									if (event.isComposing || !sendsMessage(event, settings.enterToSend && !mobileViewport)) return;
+									event.preventDefault();
+									if (choiceCustomAnswer.trim() && !sendingMessage) answerInteractiveChoice(choiceCustomAnswer);
+								}}
 							></textarea>
 							<button type="submit" class="mini" disabled={!choiceCustomAnswer.trim() || sendingMessage}>
 								Send answer
@@ -8603,8 +8610,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.interactive-choice-other textarea {
+		box-sizing: border-box;
 		width: 100%;
 		min-height: calc(var(--control-height) * 1.6);
+		max-height: min(12rem, 35dvh);
+		field-sizing: content;
 		padding: var(--space-xs);
 		border: var(--rule-hair) solid var(--color-rule-2);
 		border-radius: var(--radius-input);
@@ -10332,7 +10342,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		stroke-width: 2;
 	}
 
-	textarea {
+	.composer textarea {
 		grid-area: message;
 		min-height: var(--control-height);
 		max-height: min(15rem, 42dvh);
