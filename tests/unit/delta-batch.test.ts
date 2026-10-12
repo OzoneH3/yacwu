@@ -29,13 +29,14 @@ describe('createDeltaBatcher', () => {
 		expect(dispatched).toHaveLength(2);
 	});
 
-	test('other notifications are not queued, and flushing first keeps their order', () => {
-		const { batcher, dispatched } = setup();
+	test('other notifications are not queued, and flush hands over pending deltas at once', () => {
+		const { batcher, dispatched, scheduled } = setup();
 		batcher.push(delta('a1', 'partial'));
-		const completed = { method: 'item/completed', params: { threadId: 't1', item: { id: 'a1' } } };
-		expect(batcher.push(completed)).toBe(false);
-		batcher.flush();
-		dispatched.push(completed);
-		expect(dispatched.map((msg) => msg.method)).toEqual(['item/agentMessage/delta', 'item/completed']);
+		expect(batcher.push({ method: 'item/completed', params: { threadId: 't1', item: { id: 'a1' } } })).toBe(false);
+		expect(batcher.push({ method: 'item/agentMessage/delta', params: { threadId: 't1' } })).toBe(false);
+		batcher.flush(); // the layout does this before handling any other notification
+		expect(dispatched.map((msg) => msg.params?.delta)).toEqual(['partial']);
+		scheduled[0](); // the frame that was scheduled finds nothing left
+		expect(dispatched).toHaveLength(1);
 	});
 });

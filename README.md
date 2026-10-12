@@ -459,11 +459,15 @@ login.
 bun run check        # svelte-check / TypeScript (front-end)
 bun run test:unit    # front-end unit tests (bun test)
 bun run test:server  # backend unit tests (gleeunit)
+bun run test:adapter # Claude adapter and launch-path tests (skipped without the built claude-codex checkout)
 bunx playwright test # end-to-end verification (builds the UI, runs the Gleam server, drives the live app)
 ```
 
 Test servers use a separate temporary usage directory so their collector
 startup events do not invalidate live task recordings or calibration.
+`tests/e2e.spec.ts` drives a real `codex app-server` in your `~/.codex` store
+and sends a short real prompt; run it with a separate `HOME` to keep it
+offline (its model-dependent steps then fail).
 
 ## Architecture
 
