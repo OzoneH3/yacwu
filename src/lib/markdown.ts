@@ -1,4 +1,5 @@
 import { marked, type Token, type Tokens } from 'marked';
+import { textCache } from './text-cache';
 
 export type MarkdownInline =
 	| { type: 'text'; text: string }
@@ -196,9 +197,10 @@ function blockTokens(tokens: Token[]): MarkdownBlock[] {
 	return result;
 }
 
-export function parseCodexMarkdown(markdown: string): MarkdownBlock[] {
-	return blockTokens(marked.lexer(markdown.replace(/^[\u200B-\u200F\uFEFF]/, ''), { gfm: true }));
-}
+/** Parsed once per text: every transcript update re-renders the visible messages. */
+export const parseCodexMarkdown = textCache((markdown: string): MarkdownBlock[] =>
+	blockTokens(marked.lexer(markdown.replace(/^[\u200B-\u200F\uFEFF]/, ''), { gfm: true }))
+);
 
 /** Explicit local Markdown links in display order; ignore images and code paths. */
 export function markdownFileReferences(markdown: string, includeCode = false): Array<{ text: string; requireSeparator: boolean; code?: boolean }> {

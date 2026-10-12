@@ -1,3 +1,5 @@
+import { textCache } from './text-cache';
+
 export interface TaskProgressEstimate {
 	percent: number;
 	remainingMinutes: number | null;
@@ -56,22 +58,15 @@ export function parseTaskProgress(text: string): TaskProgressEstimate | null {
 	return latest;
 }
 
-const partsCache = new Map<string, { estimate: TaskProgressEstimate | null; visibleText: string }>();
-const PARTS_CACHE_LIMIT = 5000;
-
 /**
  * A message's progress estimate and visible text, cached by text: the
  * transcript re-splits every message on each streamed delta, and only the
  * streaming one has changed.
  */
-export function taskProgressParts(text: string): { estimate: TaskProgressEstimate | null; visibleText: string } {
-	const cached = partsCache.get(text);
-	if (cached) return cached;
-	const parts = { estimate: parseTaskProgress(text), visibleText: stripTaskProgressMarkers(text) };
-	if (partsCache.size >= PARTS_CACHE_LIMIT) partsCache.clear();
-	partsCache.set(text, parts);
-	return parts;
-}
+export const taskProgressParts = textCache((text: string): { estimate: TaskProgressEstimate | null; visibleText: string } => ({
+	estimate: parseTaskProgress(text),
+	visibleText: stripTaskProgressMarkers(text)
+}));
 
 /** Split progress protocol data out of assistant messages into its own transcript entry. */
 export function separateTaskProgressEntries<T extends { type: string; id: string; text?: string }>(
