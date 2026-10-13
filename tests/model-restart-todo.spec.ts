@@ -9,6 +9,7 @@ test('model restart stays available with todos and restarts the current task wit
 		(window as any).EventSource = class {
 			onmessage: any; onopen: any; onerror: any;
 			constructor() { (window as any).__events = this; }
+			addEventListener() {}
 			close() {}
 		};
 	});

@@ -371,6 +371,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const RESOLVED_QUESTIONS_KEY = 'yacwu-resolved-questions';
 	const TODO_QUEUES_KEY = 'yacwu-todo-queues';
 	let messageTimestampStore: ReturnType<typeof createMessageTimestampStore> | null = null;
+	/** The event stream pings every 15 s; this much silence means it died. */
+	const STREAM_STALE_MS = 45_000;
 	const RESTART_CONTINUATION_PROMPT =
 		'The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work.';
 	const STOPPED_CONTINUATION_PROMPT =
@@ -5334,43 +5336,69 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const accountUsageTimer = setInterval(() => {
 			if (activeId) void loadAccountUsage(activeHost, true);
 		}, 5 * 60 * 1000);
-		const es = new EventSource('/api/events');
 		/** Every later `yacwu/connected` is a reconnect. */
 		let streamConnectedBefore = false;
-		es.onopen = () => {
-			connected = true;
-			if (activeId) reportDiagnostics(activeId, 'sse_connected');
-		};
-		es.onerror = () => {
-			const wasConnected = connected;
+		// A stream can die without an error (sleep, network change, a proxy):
+		// the browser then waits forever. The server pings every 15 s, so after
+		// 45 s of silence the stream is reopened; its `yacwu/connected` resyncs.
+		let lastStreamAt = Date.now();
+		let es: EventSource;
+		function openEventStream() {
+			lastStreamAt = Date.now();
+			es = new EventSource('/api/events');
+			es.addEventListener('ping', () => { lastStreamAt = Date.now(); });
+			es.onopen = () => {
+				connected = true;
+				if (activeId) reportDiagnostics(activeId, 'sse_connected');
+			};
+			es.onerror = () => {
+				const wasConnected = connected;
+				connected = false;
+				if (wasConnected && activeId) reportDiagnostics(activeId, 'sse_disconnected');
+			};
+			es.onmessage = (e) => {
+				lastStreamAt = Date.now();
+				try {
+					const msg = JSON.parse(e.data) as JsonRpcNotification;
+					if (deltaBatcher.push(msg)) return;
+					deltaBatcher.flush();
+					if (msg.method === 'yacwu/connected') {
+						connected = true;
+						if (streamConnectedBefore) resyncAfterReconnect();
+						streamConnectedBefore = true;
+						checkForNewBuild();
+						void reconcileInterruptedSessions();
+						if (activeId) void loadRelayLog(activeId);
+						return;
+					}
+					if (msg.method === 'yacwu/buildUpdated') {
+						checkForNewBuild();
+						return;
+					}
+					handleNotification(msg);
+				} catch {
+					/* ignore */
+				}
+			};
+		}
+		function reopenStaleStream(limitMs = STREAM_STALE_MS) {
+			if (Date.now() - lastStreamAt < limitMs) return;
+			es.close();
+			if (connected && activeId) reportDiagnostics(activeId, 'sse_disconnected');
 			connected = false;
-			if (wasConnected && activeId) reportDiagnostics(activeId, 'sse_disconnected');
-		};
-		es.onmessage = (e) => {
-			try {
-				const msg = JSON.parse(e.data) as JsonRpcNotification;
-				if (deltaBatcher.push(msg)) return;
-				deltaBatcher.flush();
-				if (msg.method === 'yacwu/connected') {
-					connected = true;
-					if (streamConnectedBefore) resyncAfterReconnect();
-					streamConnectedBefore = true;
-					checkForNewBuild();
-					void reconcileInterruptedSessions();
-					if (activeId) void loadRelayLog(activeId);
-					return;
-				}
-				if (msg.method === 'yacwu/buildUpdated') {
-					checkForNewBuild();
-					return;
-				}
-				handleNotification(msg);
-			} catch {
-				/* ignore */
-			}
-		};
+			openEventStream();
+		}
+		openEventStream();
+		const streamWatchdog = setInterval(() => reopenStaleStream(), 10_000);
+		// Coming back from sleep or a network change: check right away.
+		const checkStreamSoon = () => { if (document.visibilityState === 'visible') reopenStaleStream(20_000); };
+		document.addEventListener('visibilitychange', checkStreamSoon);
+		window.addEventListener('online', checkStreamSoon);
 		return () => {
 			es.close();
+			clearInterval(streamWatchdog);
+			document.removeEventListener('visibilitychange', checkStreamSoon);
+			window.removeEventListener('online', checkStreamSoon);
 			window.removeEventListener('pointerdown', unlockSounds);
 			window.removeEventListener('keydown', unlockSounds);
 			document.removeEventListener('visibilitychange', checkOnVisible);
