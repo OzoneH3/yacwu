@@ -79,6 +79,8 @@ pub fn pending(
 
 fn effort_rank(effort: String) -> Int {
   case effort {
+    "ultra" -> 7
+    "max" -> 6
     "xhigh" -> 5
     "high" -> 4
     "medium" -> 3

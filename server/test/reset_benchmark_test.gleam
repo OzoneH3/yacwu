@@ -45,6 +45,21 @@ pub fn an_announced_reset_is_pending_until_the_week_restarts_test() {
   |> should.equal(Error(Nil))
 }
 
+pub fn the_highest_thinking_levels_come_first_test() {
+  reset_benchmark.plan(
+    [#("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max", "ultra"])],
+    [],
+  )
+  |> should.equal([
+    #("gpt-6.1-sol", "ultra"),
+    #("gpt-6.1-sol", "max"),
+    #("gpt-6.1-sol", "xhigh"),
+    #("gpt-6.1-sol", "high"),
+    #("gpt-6.1-sol", "medium"),
+    #("gpt-6.1-sol", "low"),
+  ])
+}
+
 pub fn plans_unmeasured_combinations_most_costly_first_test() {
   let catalog = [
     #("gpt-6.1-sol", ["low", "medium", "high", "xhigh"]),
