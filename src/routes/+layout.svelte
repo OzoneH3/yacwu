@@ -76,6 +76,7 @@
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
+	import { activityKind, liveActivityLabel, turnTokens } from '$lib/live-activity';
 	import { createDeltaBatcher } from '$lib/delta-batch';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
@@ -105,6 +106,11 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		error: string | null;
 		/** A transient backend notice while it retries (Codex "Reconnecting… 1/5"). */
 		retrying?: string | null;
+		/** The latest sign of progress from the backend, and its kind (see activityKind). */
+		lastActivityAt?: number;
+		lastActivityKind?: string;
+		/** Token totals when the running turn started. */
+		turnStartTokens?: TokenStatistics | null;
 		goal: Goal | null;
 		turnStartedAt: number | null;
 	}
@@ -1363,6 +1369,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return () => window.clearInterval(timer);
 	});
 
+	// Evidence the running turn is moving: its latest update (or one of its
+	// agents'), and the tokens it has used so far.
+	const viewedLiveActivity = $derived.by(() => {
+		activityClock;
+		if (!viewed || viewed.status !== 'running' || !viewedId) return '';
+		let latest = { at: viewed.lastActivityAt ?? null, kind: viewed.lastActivityKind ?? null };
+		for (const agent of agentsForSession(agents, viewedId)) {
+			const at = threads[agent.id]?.lastActivityAt;
+			if (at && (latest.at === null || at > latest.at)) latest = { at, kind: threads[agent.id]?.lastActivityKind ?? null };
+		}
+		return liveActivityLabel(latest.kind, latest.at, turnTokens(viewed.turnStartTokens, viewed.tokenStatistics), activityClock);
+	});
 	const viewedTurnElapsed = $derived.by(() => {
 		activityClock;
 		const started = viewed?.turnStartedAt;
@@ -1653,6 +1671,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		}
 
+		const kind = tid ? activityKind(msg.method) : null;
+		if (tid && kind && threads[tid]) {
+			threads[tid].lastActivityAt = Date.now();
+			threads[tid].lastActivityKind = kind;
+		}
 		// Any turn or item event means a retrying backend got through again.
 		if (tid && threads[tid]?.retrying && (msg.method.startsWith('item/') || msg.method.startsWith('turn/'))) {
 			threads[tid].retrying = null;
@@ -1763,6 +1786,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				t.turnId = p.turn?.id ?? null;
 				if (p.turn?.id) activeTurnBySession[tid] = p.turn.id;
 					t.error = null;
+					t.turnStartTokens = t.tokenStatistics ?? null;
 					touchSession(tid, p.turn?.startedAt);
 				}
 				break;
@@ -6717,6 +6741,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								<span class="activity-spinner" role="img" aria-label="Working" title="Working"></span>
 								{#if viewedTurnElapsed}<span class="working-duration" title="Time this task has been running">{viewedTurnElapsed}</span>{/if}
 								<span class="working-description">{currentWorkDescription(viewedItems)}</span>
+								{#if viewedLiveActivity}<span class="working-live" title="Latest sign of progress from the backend, and tokens used so far this turn">{viewedLiveActivity}</span>{/if}
 							</div>
 						</div>
 					{/if}
@@ -9681,6 +9706,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		max-width: 100%;
 		overflow-wrap: anywhere;
 		color: var(--color-neutral);
+	}
+
+	.working-live {
+		flex-basis: 100%;
+		color: var(--color-muted);
+		font-size: var(--text-xs);
+		font-variant-numeric: tabular-nums;
 	}
 
 	.media-body {
