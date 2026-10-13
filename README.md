@@ -455,7 +455,7 @@ valid session get a plain `401`. `/oauth/logout` signs out.
 | --- | --- |
 | `YACWU_OAUTH_ISSUER` | OIDC issuer; endpoints found via `/.well-known/openid-configuration` |
 | `YACWU_OAUTH_AUTH_URL` / `YACWU_OAUTH_TOKEN_URL` | explicit endpoints (override discovery; both required when no issuer is set) |
-| `YACWU_OAUTH_USERINFO_URL` | userinfo endpoint, used when the provider issues no usable id_token |
+| `YACWU_OAUTH_USERINFO_URL` | userinfo endpoint: where Yacwu reads who logged in (the id_token is used only without one) |
 | `YACWU_OAUTH_CLIENT_ID` / `YACWU_OAUTH_CLIENT_SECRET` | client credentials registered with the provider |
 | `YACWU_OAUTH_SCOPES` | requested scopes (default `openid profile email`) |
 | `YACWU_OAUTH_USER_CLAIM` | claim holding the user identity (default: first of `preferred_username`, `email`, `login`, `sub`) |
