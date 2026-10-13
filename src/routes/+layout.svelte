@@ -76,7 +76,7 @@
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
-	import { activityKind, liveActivityLabel, turnTokens } from '$lib/live-activity';
+	import { activityKind, liveActivityLabel, streamedChars, turnTokenLabel, turnTokens } from '$lib/live-activity';
 	import { createDeltaBatcher } from '$lib/delta-batch';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
@@ -111,6 +111,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		lastActivityKind?: string;
 		/** Token totals when the running turn started. */
 		turnStartTokens?: TokenStatistics | null;
+		/** Characters streamed in the running turn, for a token estimate. */
+		turnStreamChars?: number;
 		goal: Goal | null;
 		turnStartedAt: number | null;
 	}
@@ -1381,7 +1383,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			const at = threads[agent.id]?.lastActivityAt;
 			if (at && (latest.at === null || at > latest.at)) latest = { at, kind: threads[agent.id]?.lastActivityKind ?? null };
 		}
-		return liveActivityLabel(latest.kind, latest.at, turnTokens(viewed.turnStartTokens, viewed.tokenStatistics), activityClock);
+		return liveActivityLabel(latest.kind, latest.at, activityClock);
+	});
+	// Tokens the running turn has used so far, its agents included: reported,
+	// or estimated from what has streamed.
+	const viewedTurnTokens = $derived.by(() => {
+		if (!viewed || viewed.status !== 'running' || !viewedId) return '';
+		const streamed = [viewedId, ...agentsForSession(agents, viewedId).map((agent) => agent.id)]
+			.reduce((sum, id) => sum + (threads[id]?.turnStreamChars ?? 0), 0);
+		return turnTokenLabel(turnTokens(viewed.turnStartTokens, viewed.tokenStatistics), streamed);
 	});
 	const viewedTurnElapsed = $derived.by(() => {
 		activityClock;
@@ -1677,6 +1687,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (tid && kind && threads[tid]) {
 			threads[tid].lastActivityAt = Date.now();
 			threads[tid].lastActivityKind = kind;
+			const chars = streamedChars(msg.method, p);
+			if (chars) threads[tid].turnStreamChars = (threads[tid].turnStreamChars ?? 0) + chars;
 		}
 		// Any turn or item event means a retrying backend got through again.
 		if (tid && threads[tid]?.retrying && (msg.method.startsWith('item/') || msg.method.startsWith('turn/'))) {
@@ -1789,6 +1801,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (p.turn?.id) activeTurnBySession[tid] = p.turn.id;
 					t.error = null;
 					t.turnStartTokens = t.tokenStatistics ?? null;
+					t.turnStreamChars = 0;
 					touchSession(tid, p.turn?.startedAt);
 				}
 				break;
@@ -6766,10 +6779,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						<div class="item agent pending">
 							<div class="body">
 								<span class="working-label">Current activity</span>
+								{#if viewedTurnTokens}<span class="working-tokens" title={viewedTurnTokens.startsWith('~') ? 'Tokens this turn, estimated from the text streamed so far; the backend reports its own count when the turn ends' : 'Tokens this turn, as reported by the backend'}>{viewedTurnTokens}</span>{/if}
 								<span class="activity-spinner" role="img" aria-label="Working" title="Working"></span>
 								{#if viewedTurnElapsed}<span class="working-duration" title="Time this task has been running">{viewedTurnElapsed}</span>{/if}
 								<span class="working-description">{currentWorkDescription(viewedItems)}</span>
-								{#if viewedLiveActivity}<span class="working-live" title="Latest sign of progress from the backend, and tokens used so far this turn">{viewedLiveActivity}</span>{/if}
+								{#if viewedLiveActivity}<span class="working-live" title="Latest sign of progress from the backend">{viewedLiveActivity}</span>{/if}
 							</div>
 						</div>
 					{/if}
@@ -9734,6 +9748,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		max-width: 100%;
 		overflow-wrap: anywhere;
 		color: var(--color-neutral);
+	}
+
+	.working-tokens {
+		color: var(--color-neutral);
+		font-size: var(--text-xs);
+		font-variant-numeric: tabular-nums;
 	}
 
 	.working-live {

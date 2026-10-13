@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 
 // A running turn shows evidence that it is moving even when nothing visible
-// is produced: its latest update and the tokens used so far.
+// is produced: its latest update, and a running token count next to Current
+// activity (reported, or estimated from the streamed text).
 
 const ID = 'live-session';
 
@@ -35,9 +36,13 @@ test('a running turn shows its latest update and tokens used', async ({ page }) 
 		last: { totalTokens, inputTokens: totalTokens, cachedInputTokens: 0, outputTokens: 0 }, modelContextWindow: 200000 } } });
 	await emit(usage(40_000));
 	await emit({ method: 'turn/started', params: { threadId: ID, turn: { id: 't1', status: 'inProgress', items: [] } } });
-	await emit({ method: 'item/reasoning/textDelta', params: { threadId: ID, turnId: 't1', itemId: 'r1', delta: 'hmm' } });
+	await emit({ method: 'item/reasoning/textDelta', params: { threadId: ID, turnId: 't1', itemId: 'r1', delta: 'x'.repeat(400) } });
 	const live = page.locator('.working-live');
+	const tokens = page.locator('.working-tokens');
 	await expect(live).toHaveText('thinking just now');
+	// Nothing reported yet: estimated from the streamed text.
+	await expect(tokens).toHaveText('~100 tokens');
 	await emit(usage(52_400));
-	await expect(live).toHaveText('tokens just now · 12k tokens this turn');
+	await expect(tokens).toHaveText('12k tokens');
+	await expect(live).toHaveText('tokens just now');
 });

@@ -43,8 +43,9 @@ rules locally, and records usage/diagnostic journals on the server.
 - ⏱️ Session bar with task progress, time-left estimates, elapsed time, and
   5-hour / 7-day usage with reset countdowns; quota-stopped sessions keep a
   sidebar wait clock visible while allowance readings refresh
-- 💓 A running task's Current activity shows its latest sign of progress
-  (thinking, writing, a step; its agents count too) and tokens used this turn
+- 💓 A running task's Current activity shows a running token count (estimated
+  from streamed text until the backend reports one) and its latest sign of
+  progress (thinking, writing, a step; its agents count too)
 - 🤝 Multi-agent visibility: switch between a session and its spawned agents,
   with read-only agent transcripts
 - 🧠 Per-session model and reasoning effort, with "Suggest settings" and

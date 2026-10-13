@@ -25,14 +25,28 @@ function compact(tokens: number): string {
 	return String(tokens);
 }
 
-/** "thinking 3s ago · 12.4k tokens this turn" — evidence that a turn is moving. */
-export function liveActivityLabel(kind: string | null, at: number | null, tokens: number | null, now: number): string {
-	const parts: string[] = [];
-	if (kind && at !== null) {
-		const seconds = Math.max(0, Math.round((now - at) / 1000));
-		const ago = seconds < 2 ? 'just now' : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)}m ago`;
-		parts.push(`${kind === 'step' ? 'last update' : kind} ${ago}`);
-	}
-	if (tokens) parts.push(`${compact(tokens)} tokens this turn`);
-	return parts.join(' · ');
+/** Characters of text an event streamed (thinking, writing, command output). */
+export function streamedChars(method: string, params: { delta?: unknown } | undefined): number {
+	if (!['item/agentMessage/delta', 'item/reasoning/textDelta', 'item/reasoning/summaryTextDelta', 'item/commandExecution/outputDelta'].includes(method)) return 0;
+	return typeof params?.delta === 'string' ? params.delta.length : 0;
+}
+
+/**
+ * The running token count for a turn: the backend's own figure when it has
+ * reported one (Codex does as it goes), otherwise an estimate from the text
+ * streamed so far, about four characters a token (Claude reports usage only
+ * when a turn ends).
+ */
+export function turnTokenLabel(reported: number | null, streamed: number): string {
+	if (reported) return `${compact(reported)} tokens`;
+	const estimate = Math.round(streamed / 4);
+	return estimate > 0 ? `~${compact(estimate)} tokens` : '';
+}
+
+/** "thinking 3s ago" — the latest sign that a turn is moving. */
+export function liveActivityLabel(kind: string | null, at: number | null, now: number): string {
+	if (!kind || at === null) return '';
+	const seconds = Math.max(0, Math.round((now - at) / 1000));
+	const ago = seconds < 2 ? 'just now' : seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)}m ago`;
+	return `${kind === 'step' ? 'last update' : kind} ${ago}`;
 }
