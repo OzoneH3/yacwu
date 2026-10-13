@@ -77,7 +77,7 @@
 import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
 	import { activityKind, liveActivityLabel, streamedChars, turnTokenLabel, turnTokens } from '$lib/live-activity';
-	import { announcedGlobalReset, type ResetFeedEntry } from '$lib/reset-feed';
+	import { announcedGlobalReset, expectedResetAt, type ResetFeedEntry } from '$lib/reset-feed';
 	import { workerSummary, type ProcessSample } from '$lib/process-activity';
 	import { createDeltaBatcher } from '$lib/delta-batch';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
@@ -499,7 +499,11 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
 	const activeAccountUsage = $derived(accountUsageByHost[activeHost] ?? null);
-	const announcedReset = $derived(announcedGlobalReset(resetFeed, activityClock));
+	// The current Codex week's start: a reset announced before it has landed.
+	const codexWeekStartedAt = $derived(typeof activeAccountUsage?.sevenDay?.resetsAt === 'number'
+		? (activeAccountUsage.sevenDay.resetsAt - 7 * 24 * 60 * 60) * 1000
+		: null);
+	const announcedReset = $derived(announcedGlobalReset(resetFeed, activityClock, codexWeekStartedAt));
 	const activeHostState = $derived(
 		activeRemote ? (hostStates[activeHost] ?? 'connected') : 'connected'
 	);
@@ -3065,6 +3069,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			const res = await fetch('/api/reset-feed', { signal: AbortSignal.timeout(20_000) });
 			if (res.ok) resetFeed = ((await res.json()).entries ?? []) as ResetFeedEntry[];
 		} catch { /* Keep the last known feed. */ }
+	}
+
+	function fmtResetDue(entry: ResetFeedEntry): string {
+		const due = expectedResetAt(entry);
+		if (due === null) return 'No time given.';
+		const minutes = Math.round((due - Date.now()) / 60_000);
+		const when = new Date(due).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+		if (minutes <= 0) return `Expected by ${when} (due now).`;
+		const left = minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+		return `Expected by ${when} (in ${left}), end of day Pacific time.`;
 	}
 
 	function fmtResetAnnouncement(at: string): string {
@@ -6248,7 +6262,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</button>
 								{/if}
 								{#if !activeClaude && announcedReset}
-									<a class="usage-window reset-announced" href={announcedReset.url} target="_blank" rel="noopener noreferrer" title={`OpenAI announced a global Codex limit reset ${fmtResetAnnouncement(announcedReset.at)}: “${announcedReset.text}” Use what is left of this week's allowance before it lands. (willreset.com)`}>
+									<a class="usage-window reset-announced" href={announcedReset.url} target="_blank" rel="noopener noreferrer" title={`OpenAI announced a global Codex limit reset ${fmtResetAnnouncement(announcedReset.at)}: “${announcedReset.text}” ${fmtResetDue(announcedReset)} Use what is left of this week's allowance before it lands. (willreset.com)`}>
 										⚡ Reset announced
 									</a>
 								{/if}

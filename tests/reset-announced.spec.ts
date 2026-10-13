@@ -18,7 +18,8 @@ test('an announced global reset shows next to Codex usage until it lands', async
 		if (path === '/api/reset-feed') return route.fulfill({ json: { entries: feed } });
 		if (path === '/api/account') return route.fulfill({ json: { rateLimits: {
 			primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 9999999999 },
-			secondary: { usedPercent: 52, windowDurationMins: 10080, resetsAt: 9999999999 } } } });
+			// This week began yesterday, before the announcement.
+			secondary: { usedPercent: 52, windowDurationMins: 10080, resetsAt: Math.floor(Date.now() / 1000) + 6 * 86400 } } } });
 		if (path.endsWith('/model')) return route.fulfill({ json: { model: 'gpt-6.1-sol', effort: 'medium', models: [] } });
 		if (path.startsWith('/api/threads/')) return route.fulfill({ json: { thread } });
 		return route.fulfill({ json: {} });
@@ -28,6 +29,7 @@ test('an announced global reset shows next to Codex usage until it lands', async
 	const notice = page.locator('.reset-announced');
 	await expect(notice).toContainText('Reset announced');
 	await expect(notice).toHaveAttribute('href', 'https://willreset.com/r/1');
+	await expect(notice).toHaveAttribute('data-yacwu-tooltip', /Expected by .+ \(in \d+ (h|min)/);
 
 	feed = [{ kind: 'reset', text: "It's done.", url: 'https://willreset.com/r/2', at: new Date().toISOString() }, preview];
 	await page.reload();
