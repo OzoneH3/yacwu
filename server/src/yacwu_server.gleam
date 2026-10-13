@@ -191,6 +191,7 @@ authentication (e.g. bound to localhost only).",
       )
   }
   router.start_task_recovery(ctx)
+  router.start_reset_benchmark_watch(ctx)
   run_until_shutdown(supervisor_started.pid)
 }
 

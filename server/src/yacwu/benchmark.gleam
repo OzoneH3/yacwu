@@ -113,6 +113,31 @@ pub fn start(
   }
 }
 
+/// Benchmark combinations unattended (see reset_benchmark): any thinking
+/// level, two percentage points each, in the given order.
+pub fn start_auto(
+  registry: hosts.Registry,
+  host: String,
+  cx: Codex,
+  combinations: List(#(String, String)),
+) -> Result(Nil, String) {
+  start_plan(
+    registry,
+    host,
+    cx,
+    list.map(combinations, fn(combination) {
+      Stage(combination.0, combination.1, 2)
+    }),
+    12,
+    20,
+  )
+}
+
+/// The weekly allowance reading: percent used and when it resets.
+pub fn weekly_reading(cx: Codex) -> Result(#(Int, Int), String) {
+  weekly(cx)
+}
+
 pub fn start_batch(
   registry: hosts.Registry,
   host: String,

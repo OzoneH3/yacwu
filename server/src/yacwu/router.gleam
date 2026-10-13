@@ -4,6 +4,7 @@
 import envoy
 import filepath
 import gleam/bit_array
+import gleam/bool
 import gleam/bytes_tree
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
@@ -42,6 +43,7 @@ import yacwu/project_rules
 import yacwu/relay
 import yacwu/relay_core
 import yacwu/remote
+import yacwu/reset_benchmark
 import yacwu/reset_feed
 import yacwu/session_lock
 import yacwu/ssh_config
@@ -4078,4 +4080,82 @@ fn thread_processes(host: String, thread_id: String) -> Response(ResponseData) {
       ),
     ]),
   )
+}
+
+// -- Benchmarks before an announced reset ------------------------------------
+
+type ResetWatch {
+  ResetWatchCheck
+}
+
+/// Watch for an announced global Codex reset (see reset_benchmark), with or
+/// without a browser open: two minutes after start, then every ten minutes.
+pub fn start_reset_benchmark_watch(ctx: Context) -> Nil {
+  case reset_benchmark.enabled() && reset_feed.enabled() {
+    False -> Nil
+    True -> {
+      let _ =
+        process.spawn(fn() {
+          let self = process.new_subject()
+          let _ = process.send_after(self, 120_000, ResetWatchCheck)
+          reset_watch_loop(ctx, self)
+        })
+      Nil
+    }
+  }
+}
+
+fn reset_watch_loop(ctx: Context, self: process.Subject(ResetWatch)) -> Nil {
+  let ResetWatchCheck = process.receive_forever(self)
+  reset_benchmark_check(ctx)
+  let _ = process.send_after(self, 600_000, ResetWatchCheck)
+  reset_watch_loop(ctx, self)
+}
+
+fn reset_benchmark_check(ctx: Context) -> Nil {
+  let now = oauth.now()
+  let started = {
+    use #(_, cx) <- result.try(
+      hosts.resolve(ctx.registry, Some(hosts.local), None)
+      |> result.replace_error(Nil),
+    )
+    use #(used, resets_at) <- result.try(
+      benchmark.weekly_reading(cx) |> result.replace_error(Nil),
+    )
+    use announcement <- result.try(reset_benchmark.pending(
+      reset_feed.entries(now),
+      now,
+      resets_at - 604_800,
+    ))
+    use <- bool.guard(100 - used < reset_benchmark.min_remaining, Error(Nil))
+    use catalog <- result.try(
+      model_state.list_model_choices(cx) |> result.replace_error(Nil),
+    )
+    let combinations =
+      reset_benchmark.plan(
+        list.map(catalog.models, fn(model) { #(model.id, model.efforts) }),
+        reset_benchmark.measured(usage.journal(hosts.local)),
+      )
+    use <- bool.guard(combinations == [], Error(Nil))
+    // Fails quietly while other work runs or a benchmark is already going;
+    // the next check tries again.
+    use _ <- result.try(
+      benchmark.start_auto(ctx.registry, hosts.local, cx, combinations)
+      |> result.replace_error(Nil),
+    )
+    Ok(#(announcement, used, combinations))
+  }
+  case started {
+    Ok(#(announcement, used, combinations)) ->
+      io.println(
+        "yacwu: global Codex reset announced (\""
+        <> announcement.text
+        <> "\"); benchmarking "
+        <> int.to_string(list.length(combinations))
+        <> " unmeasured combinations with "
+        <> int.to_string(100 - used)
+        <> "% of the week left",
+      )
+    Error(_) -> Nil
+  }
 }

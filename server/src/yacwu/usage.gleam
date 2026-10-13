@@ -21,6 +21,11 @@ fn read(label: String) -> String
 @external(erlang, "yacwu_usage", "path")
 fn path(label: String) -> String
 
+/// This host's raw journal (JSON lines), for reading back what was recorded.
+pub fn journal(label: String) -> String {
+  read(label)
+}
+
 @external(erlang, "yacwu_usage", "read_all")
 fn read_all() -> String
 
