@@ -17,6 +17,16 @@ Conversation history stays with the selected backend rather than in a Yacwu
 conversation database. Yacwu additionally keeps browser preferences and session
 rules locally, and records usage/diagnostic journals on the server.
 
+> [!WARNING]
+> Yacwu is built for one person on a trusted machine. Agents run without
+> approval prompts and with full access to the account running Yacwu, so
+> anything that can reach Yacwu can do whatever that account can. Signing in
+> does not separate users: everyone signed in shares the same sessions and
+> files. `start.sh` and the user service turn authentication off; keep Yacwu
+> on `127.0.0.1` (the default) unless you configure authentication, and treat
+> the OAuth login as convenience rather than hardened security (it does not
+> verify ID-token signatures).
+
 ## Features
 
 - 🖥️ Light and dark themes, responsive for desktop and mobile
