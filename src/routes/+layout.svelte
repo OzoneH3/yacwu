@@ -344,6 +344,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let agents = $state<AgentRegistry>({});
 	let activeTurnBySession = $state<Record<string, string>>({});
 	let stoppingSessions = $state<Record<string, boolean>>({});
+	let cancellingAutoResume = $state<Record<string, boolean>>({});
+	let cancelledAutoResumes = $state<Record<string, boolean>>({});
+	const CANCELLED_AUTO_RESUMES_KEY = 'yacwu-cancelled-auto-resumes';
 	let latestWorkOrderBySession = $state<Record<string, string>>({});
 	let agentHistoryLoading = $state(false);
 	// Agent threads whose metadata (nickname/role) was already requested.
@@ -3036,6 +3039,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const reserve = isClaudeSession(id) ? settings.claudeAllowanceReserve : 0;
 		const now = activityClock / 1000;
 		const quotaStop = itemsOf(threads[id] ?? null).slice().reverse().find((item: any) => item.quotaStop && item.resumeAvailable);
+		if (quotaStop && cancelledAutoResumes[`${id}:${quotaStop.id}`]) return null;
 		const blocked = [usage?.fiveHour, usage?.sevenDay].filter((window): window is RateLimitWindow =>
 			Boolean(window) && window!.usedPercent >= 100 - reserve && (window!.resetsAt == null || window!.resetsAt > now));
 		if (blocked.length) {
@@ -3727,6 +3731,29 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			addLocalNote(id, error instanceof Error ? error.message : 'Could not reopen session', 'err');
 		} finally {
 			sendingMessage = false;
+		}
+	}
+
+	async function cancelAutomaticContinuation(sessionId: string, noteId: string) {
+		const key = `${sessionId}:${noteId}`;
+		if (sendingMessage || threads[sessionId]?.status === 'running' || cancellingAutoResume[key]) return;
+		cancellingAutoResume[key] = true;
+		try {
+			const turnId = noteId.startsWith('quota-stop:') ? noteId.slice('quota-stop:'.length) : null;
+			const response = await fetch(threadApi(sessionId, '/interrupt'), {
+				method: 'POST', headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(turnId ? { turnId } : {}), signal: AbortSignal.timeout(10_000)
+			});
+			if (!response.ok) {
+				const data = await response.json().catch(() => ({}));
+				throw new Error(data.error ?? `Could not cancel automatic continuation (${response.status})`);
+			}
+			cancelledAutoResumes[key] = true;
+			try { localStorage.setItem(CANCELLED_AUTO_RESUMES_KEY, JSON.stringify(cancelledAutoResumes)); } catch { /* Cancellation still applies when browser storage is unavailable. */ }
+		} catch (error) {
+			addLocalNote(sessionId, error instanceof Error ? error.message : 'Could not cancel automatic continuation', 'err');
+		} finally {
+			delete cancellingAutoResume[key];
 		}
 	}
 
@@ -5255,6 +5282,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	onMount(() => {
+		try {
+			const saved = JSON.parse(localStorage.getItem(CANCELLED_AUTO_RESUMES_KEY) ?? '{}');
+			if (saved && typeof saved === 'object' && !Array.isArray(saved)) cancelledAutoResumes = Object.fromEntries(Object.entries(saved).filter(([, value]) => value === true).map(([key]) => [key, true] as const));
+		} catch { /* Keep the cancellation confirmation for this page if storage is unavailable. */ }
 		try { messageTimestampStore = createMessageTimestampStore(localStorage); } catch { /* Keep live timestamps for this page if storage is unavailable. */ }
 		void loadHostChoices();
 		applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light', false);
@@ -6750,7 +6781,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								<div class="item note {(item as any).tone}">
 									<span class="gutter">/</span>
 									<div class="body">{(item as any).text}{#if (item as any).resumeAvailable && viewed?.status !== 'running'}
-										<button class="mini ghost stopped-resume" type="button" disabled={sendingMessage} onclick={() => resumeStoppedTask(activeId, (item as any).id)}>Resume</button>
+										<button class="mini ghost stopped-resume" type="button" disabled={sendingMessage || cancellingAutoResume[`${activeId}:${item.id}`]} onclick={() => resumeStoppedTask(activeId, (item as any).id)}>Resume</button>
+										{#if (item as any).quotaStop}
+											{#if cancelledAutoResumes[`${activeId}:${item.id}`]}
+												<span class="stopped-resume" role="status">Automatic continuation cancelled.</span>
+											{:else}
+												<button class="mini ghost stopped-resume" type="button" disabled={sendingMessage || cancellingAutoResume[`${activeId}:${item.id}`]} onclick={() => cancelAutomaticContinuation(activeId, item.id)}>Cancel automatic continuation</button>
+											{/if}
+										{/if}
 									{/if}</div>
 								</div>
 							{:else if item.type === 'relayNotice'}
