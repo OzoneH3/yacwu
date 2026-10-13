@@ -19,6 +19,16 @@ export function installClaudeBackgroundSupport(Runtime, options = {}) {
     if (typeof proto[method] !== 'function') throw new Error(`Claude adapter lacks background compatibility method: ${method}`);
   }
   proto.yacwuBackgroundSupport = true;
+  // Tag the session's Claude process, and so every command it starts, with
+  // its thread: Yacwu finds a session's running processes by this.
+  if (typeof proto.buildOptions === 'function') {
+    const build = proto.buildOptions;
+    proto.buildOptions = function(sdk, context, abort) {
+      const opts = build.call(this, sdk, context, abort);
+      if (opts && context?.threadId) opts.env = { ...process.env, ...(opts.env ?? {}), YACWU_THREAD_ID: String(context.threadId) };
+      return opts;
+    };
+  }
   const system = proto.handleSystem;
   const assistant = proto.handleAssistant;
   const hasPending = proto.hasPendingWorkflowTasks;

@@ -78,6 +78,7 @@ import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQue
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
 	import { activityKind, liveActivityLabel, streamedChars, turnTokenLabel, turnTokens } from '$lib/live-activity';
 	import { announcedGlobalReset, type ResetFeedEntry } from '$lib/reset-feed';
+	import { workerSummary, type ProcessSample } from '$lib/process-activity';
 	import { createDeltaBatcher } from '$lib/delta-batch';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
@@ -1397,6 +1398,31 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			.reduce((sum, id) => sum + (threads[id]?.turnStreamChars ?? 0), 0);
 		return turnTokenLabel(turnTokens(viewed.turnStartTokens, viewed.tokenStatistics), streamed);
 	});
+	// A Claude session's processes on this machine (sampled while it runs):
+	// shows a quiet worker is still busy, or that nothing is running at all.
+	let processSamples = $state<Record<string, { previous: ProcessSample | null; current: ProcessSample }>>({});
+	const viewedWorkers = $derived(viewedId && viewed?.status === 'running' && processSamples[viewedId]
+		? workerSummary(processSamples[viewedId].previous, processSamples[viewedId].current)
+		: null);
+	// The server lists processes only for backends on this machine.
+	const processWatchId = $derived(viewedId && viewed?.status === 'running' && isClaudeSession(viewedId) ? viewedId : null);
+	$effect(() => {
+		const id = processWatchId;
+		if (!id) return;
+		let stopped = false;
+		const sample = async () => {
+			try {
+				const res = await fetch(threadApi(id, '/processes'));
+				if (!res.ok || stopped) return;
+				const data = await res.json();
+				const current: ProcessSample = { at: Date.now(), processes: data.processes ?? [] };
+				processSamples = { ...processSamples, [id]: { previous: processSamples[id]?.current ?? null, current } };
+			} catch { /* Keep the last sample. */ }
+		};
+		void sample();
+		const timer = setInterval(sample, 10_000);
+		return () => { stopped = true; clearInterval(timer); };
+	});
 	const viewedTurnElapsed = $derived.by(() => {
 		activityClock;
 		const started = viewed?.turnStartedAt;
@@ -1629,7 +1655,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		t.order.push(id);
 		t.byId[id] = {
 			type: 'stalledWorkerPrompt', id, workerId, turnId, worker, minutes,
-			text: `${worker} has had no Codex activity for ${minutes} minutes. It may still be reasoning or waiting on a tool; Yacwu has not stopped it.`
+			text: `${worker} has had no activity for ${minutes} minutes. It may still be reasoning or waiting on a tool; Yacwu has not stopped it.`
 		} as any;
 		if (shouldScroll) scrollToBottom();
 	}
@@ -6808,6 +6834,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{#if viewedTurnElapsed}<span class="working-duration" title="Time this task has been running">{viewedTurnElapsed}</span>{/if}
 								<span class="working-description">{currentWorkDescription(viewedItems)}</span>
 								{#if viewedLiveActivity}<span class="working-live" title="Latest sign of progress from the backend">{viewedLiveActivity}</span>{/if}
+								{#if viewedWorkers}<span class="working-live working-processes" title="Processes this session is running on this machine, with their CPU use over the last few seconds">⚙ {viewedWorkers}</span>{/if}
 							</div>
 						</div>
 					{/if}

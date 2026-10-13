@@ -50,6 +50,9 @@ rules locally, and records usage/diagnostic journals on the server.
 - 💓 A running task's Current activity shows a running token count (estimated
   from streamed text until the backend reports one) and its latest sign of
   progress (thinking, writing, a step; its agents count too)
+- ⚙️ A running Claude session also lists the processes it runs on this machine
+  (its busiest workers with their CPU use, or that none is running), so a
+  quiet background worker can be told from a hang
 - 🤝 Multi-agent visibility: switch between a session and its spawned agents,
   with read-only agent transcripts
 - 🧠 Per-session model and reasoning effort, with "Suggest settings" and

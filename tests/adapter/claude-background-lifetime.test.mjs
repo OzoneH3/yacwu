@@ -65,3 +65,10 @@ test('an explicitly finite Monitor remains tracked even when SDK marks it ambien
   await runtime.handleSystem(pending, { subtype: 'task_notification', task_id: 'monitor', status: 'completed', summary: 'Runner finished' });
   assert.equal(runtime.hasPendingWorkflowTasks(pending), false);
 });
+
+test('a session\'s Claude process is tagged with its thread, for finding its processes', options, async () => {
+  const runtime = new NativeClaudeRuntime();
+  const opts = runtime.buildOptions({}, { threadId: 'thread-7', cwd: '/tmp', prompt: '', approvalPolicy: 'never', sandboxMode: 'danger-full-access' }, new AbortController());
+  assert.equal(opts.env.YACWU_THREAD_ID, 'thread-7');
+  assert.equal(opts.env.PATH, process.env.PATH);
+});

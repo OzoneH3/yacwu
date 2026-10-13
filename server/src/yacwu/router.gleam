@@ -598,6 +598,10 @@ fn dispatch(
       use host, cx <- with_codex(ctx, req, Some(id))
       message(ctx, host, cx, req, id)
     }
+    ["api", "threads", id, "processes"], Get -> {
+      use host, _ <- with_codex(ctx, req, Some(id))
+      thread_processes(host, id)
+    }
     ["api", "threads", id, "user-input"], Post -> {
       use _host, cx <- with_codex(ctx, req, Some(id))
       answer_user_input(cx, req)
@@ -4040,4 +4044,38 @@ fn response_text(response: Response(ResponseData)) -> String {
       |> result.unwrap("")
     _ -> ""
   }
+}
+
+// -- Session processes ------------------------------------------------------
+
+@external(erlang, "yacwu_procs", "tagged")
+fn tagged_processes(thread: String) -> List(#(Int, Int, String, Int, Int))
+
+/// The processes a session is running on this machine (its Claude process
+/// and the commands it started), so the page can show that a quiet worker is
+/// still busy. Empty for remote hosts and sessions that are not tagged.
+fn thread_processes(host: String, thread_id: String) -> Response(ResponseData) {
+  let processes = case hosts.is_local(host) {
+    True -> tagged_processes(thread_id)
+    False -> []
+  }
+  json_response(
+    200,
+    json.object([
+      #("at", json.int(oauth.now())),
+      #(
+        "processes",
+        json.array(processes, fn(process) {
+          let #(pid, ppid, command, elapsed, cpu) = process
+          json.object([
+            #("pid", json.int(pid)),
+            #("ppid", json.int(ppid)),
+            #("command", json.string(command)),
+            #("elapsedSeconds", json.int(elapsed)),
+            #("cpuCentiseconds", json.int(cpu)),
+          ])
+        }),
+      ),
+    ]),
+  )
 }
