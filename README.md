@@ -43,6 +43,10 @@ rules locally, and records usage/diagnostic journals on the server.
 - ⏱️ Session bar with task progress, time-left estimates, elapsed time, and
   5-hour / 7-day usage with reset countdowns; quota-stopped sessions keep a
   sidebar wait clock visible while allowance readings refresh
+- ⚡ A global Codex limit reset announced by OpenAI (from the public
+  willreset.com feed) shows next to the Codex usage until it lands, so the
+  rest of the week's allowance can be used first (`YACWU_RESET_FEED=off`
+  turns it off)
 - 💓 A running task's Current activity shows a running token count (estimated
   from streamed text until the backend reports one) and its latest sign of
   progress (thinking, writing, a step; its agents count too)

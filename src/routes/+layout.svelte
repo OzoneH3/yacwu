@@ -77,6 +77,7 @@
 import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
 	import { activityKind, liveActivityLabel, streamedChars, turnTokenLabel, turnTokens } from '$lib/live-activity';
+	import { announcedGlobalReset, type ResetFeedEntry } from '$lib/reset-feed';
 	import { createDeltaBatcher } from '$lib/delta-batch';
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
@@ -333,6 +334,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	// Per host: model id -> the model a usage rate is learned for (see usageModelNames).
 	let usageModelNamesByHost = $state<Record<string, Record<string, string>>>({});
 	let accountUsageByHost = $state<Record<string, AccountUsage>>({});
+	// Announced global Codex resets (willreset.com, via /api/reset-feed).
+	let resetFeed = $state<ResetFeedEntry[]>([]);
 	let accountUsageFetchedAt = $state<Record<string, number>>({});
 	let accountUsagePending = $state<Record<string, boolean>>({});
 	let quotaUsageRefreshRequestedAt: Record<string, number> = {};
@@ -495,6 +498,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
 	const activeAccountUsage = $derived(accountUsageByHost[activeHost] ?? null);
+	const announcedReset = $derived(announcedGlobalReset(resetFeed, activityClock));
 	const activeHostState = $derived(
 		activeRemote ? (hostStates[activeHost] ?? 'connected') : 'connected'
 	);
@@ -3030,6 +3034,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		void loadAccountUsage(key, true);
 	}
 
+	async function loadResetFeed() {
+		try {
+			const res = await fetch('/api/reset-feed', { signal: AbortSignal.timeout(20_000) });
+			if (res.ok) resetFeed = ((await res.json()).entries ?? []) as ResetFeedEntry[];
+		} catch { /* Keep the last known feed. */ }
+	}
+
+	function fmtResetAnnouncement(at: string): string {
+		const minutes = Math.max(0, Math.round((Date.now() - Date.parse(at)) / 60_000));
+		return minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+	}
+
 	async function loadAccountUsage(host: string, force = false) {
 		const key = host || LOCAL_HOST;
 		const lastFetched = accountUsageFetchedAt[key] ?? 0;
@@ -5349,6 +5365,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const accountUsageTimer = setInterval(() => {
 			if (activeId) void loadAccountUsage(activeHost, true);
 		}, 5 * 60 * 1000);
+		void loadResetFeed();
+		const resetFeedTimer = setInterval(() => void loadResetFeed(), 10 * 60 * 1000);
 		/** Every later `yacwu/connected` is a reconnect. */
 		let streamConnectedBefore = false;
 		// A stream can die without an error (sleep, network change, a proxy):
@@ -5423,6 +5441,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			window.removeEventListener('scroll', dismissTooltipOnViewportChange, true);
 			window.removeEventListener('resize', dismissTooltipOnViewportChange);
 			clearInterval(accountUsageTimer);
+			clearInterval(resetFeedTimer);
 			clearInterval(runtimeCheckTimer);
 			for (const timer of usageRefreshTimers.values()) clearTimeout(timer);
 			usageRefreshTimers.clear();
@@ -6201,6 +6220,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true} title={`7-day limit · resets in ${fmtReset(activeAccountUsage.sevenDay.resetsAt)} · open task usage history`}>
 										<strong>7d</strong> {remainingPercent(activeAccountUsage.sevenDay)}% left
 									</button>
+								{/if}
+								{#if !activeClaude && announcedReset}
+									<a class="usage-window reset-announced" href={announcedReset.url} target="_blank" rel="noopener noreferrer" title={`OpenAI announced a global Codex limit reset ${fmtResetAnnouncement(announcedReset.at)}: “${announcedReset.text}” Use what is left of this week's allowance before it lands. (willreset.com)`}>
+										⚡ Reset announced
+									</a>
 								{/if}
 							</div>
 						{/if}
@@ -8250,6 +8274,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.usage-details { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+	.reset-announced { color: var(--color-accent-active); font-weight: 600; text-decoration: none; }
+	.reset-announced:hover, .reset-announced:focus-visible { text-decoration: underline; }
 
 	.session-heading {
 		min-width: 0;

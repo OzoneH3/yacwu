@@ -42,6 +42,7 @@ import yacwu/project_rules
 import yacwu/relay
 import yacwu/relay_core
 import yacwu/remote
+import yacwu/reset_feed
 import yacwu/session_lock
 import yacwu/ssh_config
 import yacwu/static_files
@@ -467,6 +468,15 @@ fn dispatch(
         mist.Bytes(bytes_tree.from_string(usage.shared_history(host))),
       )
     }
+    ["api", "reset-feed"], Get ->
+      case reset_feed.enabled() {
+        True ->
+          json_response(
+            200,
+            reset_feed.to_json(reset_feed.entries(oauth.now())),
+          )
+        False -> json_response(200, reset_feed.to_json([]))
+      }
     ["api", "usage", "benchmark"], Get -> {
       use host, _ <- with_codex(ctx, req, None)
       json_response(200, benchmark.status(host))

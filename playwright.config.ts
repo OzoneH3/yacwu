@@ -39,6 +39,8 @@ export default defineConfig({
 			YACWU_USAGE_DIR: testUsageDir,
 			CODEX_HOME: testCodexHome,
 			XDG_STATE_HOME: testStateHome,
+			// Tests never fetch the public reset feed.
+			YACWU_RESET_FEED: 'off',
 			// Commands run from inside a Yacwu session inherit the live server's
 			// environment. A test server must never attach to its persistent
 			// backend daemons (a single-client daemon would keep switching
