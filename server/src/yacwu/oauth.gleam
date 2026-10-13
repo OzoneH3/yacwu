@@ -350,45 +350,61 @@ pub fn exchange_code(
   }
 }
 
-/// Determine who logged in: the configured claim (or a sensible default
-/// chain) from the id_token if the provider issued one, falling back to the
-/// userinfo endpoint with the access token.
-pub fn resolve_identity(
-  config: Config,
-  endpoints: Endpoints,
+/// Where to read who logged in from.
+pub type IdentitySource {
+  /// The provider's userinfo endpoint, called with the access token: the
+  /// provider authenticates that token itself.
+  FromUserinfo(url: String, access_token: String)
+  /// The id_token's claims, unverified: only for a provider without a
+  /// userinfo endpoint.
+  FromIdToken(token: String)
+}
+
+/// Prefer userinfo: Yacwu does not check id_token signatures, so its claims
+/// are trusted only when the provider offers no userinfo endpoint.
+pub fn identity_source(
   tokens: Dynamic,
-) -> Result(String, String) {
-  let from_id_token =
-    jsonx.field_string(tokens, ["id_token"])
-    |> result.try(jwt_claims)
-    |> result.try(identity_from_claims(_, config.user_claim))
-  case from_id_token {
-    Ok(user) -> Ok(user)
-    Error(_) ->
-      case
-        endpoints.userinfo_url,
-        jsonx.field_string(tokens, ["access_token"])
-      {
-        Some(url), Ok(access_token) -> {
-          use claims <- result.try(
-            get_json(url, [
-              #("authorization", "Bearer " <> access_token),
-            ]),
-          )
-          identity_from_claims(claims, config.user_claim)
-          |> result.replace_error(
-            "no usable identity claim in the userinfo response",
-          )
-        }
-        _, _ ->
+  userinfo_url: Option(String),
+) -> Result(IdentitySource, String) {
+  case userinfo_url, jsonx.field_string(tokens, ["access_token"]) {
+    Some(url), Ok(access_token) -> Ok(FromUserinfo(url, access_token))
+    _, _ ->
+      case jsonx.field_string(tokens, ["id_token"]) {
+        Ok(token) -> Ok(FromIdToken(token))
+        Error(_) ->
           Error("could not determine the user identity from the token response")
       }
   }
 }
 
-/// Decode a JWT's claims without verifying its signature — only ever applied
-/// to id_tokens received directly from the token endpoint over TLS, where the
-/// transport already authenticates the issuer.
+/// Determine who logged in: the configured claim (or a sensible default
+/// chain) from the provider's userinfo endpoint (see identity_source).
+pub fn resolve_identity(
+  config: Config,
+  endpoints: Endpoints,
+  tokens: Dynamic,
+) -> Result(String, String) {
+  use source <- result.try(identity_source(tokens, endpoints.userinfo_url))
+  case source {
+    FromUserinfo(url, access_token) -> {
+      use claims <- result.try(
+        get_json(url, [#("authorization", "Bearer " <> access_token)]),
+      )
+      identity_from_claims(claims, config.user_claim)
+      |> result.replace_error(
+        "no usable identity claim in the userinfo response",
+      )
+    }
+    FromIdToken(token) ->
+      jwt_claims(token)
+      |> result.try(identity_from_claims(_, config.user_claim))
+      |> result.replace_error("no usable identity claim in the id_token")
+  }
+}
+
+/// Decode a JWT's claims without verifying its signature — only for a
+/// provider without a userinfo endpoint (see identity_source), and only to
+/// id_tokens received directly from its token endpoint over TLS.
 pub fn jwt_claims(token: String) -> Result(Dynamic, Nil) {
   case string.split(token, ".") {
     [_, payload, ..] ->

@@ -24,8 +24,9 @@ rules locally, and records usage/diagnostic journals on the server.
 > does not separate users: everyone signed in shares the same sessions and
 > files. `start.sh` and the user service turn authentication off; keep Yacwu
 > on `127.0.0.1` (the default) unless you configure authentication, and treat
-> the OAuth login as convenience rather than hardened security (it does not
-> verify ID-token signatures).
+> the OAuth login as convenience rather than hardened security (it reads who
+> you are from the provider's userinfo endpoint; for a provider without one
+> it falls back to ID-token claims it does not verify).
 
 ## Features
 

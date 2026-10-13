@@ -310,3 +310,17 @@ pub fn jwt_claims_rejects_malformed_tokens_test() {
   assert oauth.jwt_claims("not-a-jwt") == Error(Nil)
   assert oauth.jwt_claims("a.!!notbase64!!.c") == Error(Nil)
 }
+
+pub fn identity_comes_from_userinfo_when_the_provider_has_it_test() {
+  let assert Ok(tokens) =
+    json.parse(
+      "{\"access_token\":\"at\",\"id_token\":\"h.e30.s\"}",
+      decode.dynamic,
+    )
+  assert oauth.identity_source(tokens, Some("https://idp.example.com/userinfo"))
+    == Ok(oauth.FromUserinfo("https://idp.example.com/userinfo", "at"))
+  // Without a userinfo endpoint the (unverified) id_token is all there is.
+  assert oauth.identity_source(tokens, None) == Ok(oauth.FromIdToken("h.e30.s"))
+  let assert Ok(empty) = json.parse("{}", decode.dynamic)
+  let assert Error(_) = oauth.identity_source(empty, None)
+}
