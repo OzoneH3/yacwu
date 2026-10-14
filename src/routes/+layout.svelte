@@ -216,6 +216,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let newMachine = $state(LOCAL_HOST);
 	let newProvider = $state<'codex' | 'claude'>('codex');
 	let hostChoices = $state<HostInfo[]>([]);
+	// The new-session dialog's check of a remote machine, shown under its picker.
+	let hostChecks = $state<Record<string, { state: 'connecting' | 'connected' | 'error'; message?: string }>>({});
 	const claudeHost = $derived(claudeBackendHost(hostChoices));
 	const machineChoices = $derived(hostChoices.filter((host) => host.kind !== 'backend'));
 	const newHost = $derived(sessionTarget(newMachine, newProvider, claudeHost));
@@ -2309,20 +2311,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	 * remote app-server; state updates arrive over the event stream.
 	 */
 	async function loadHostSessions(host: string) {
+		hostChecks = { ...hostChecks, [host]: { state: 'connecting' } };
 		try {
 			const res = await fetch(`/api/threads${hostQuery(host)}`);
 			const data = await res.json();
 			if (!res.ok) {
-				if (newHost === host) createError = data.error ?? `could not reach ${host}`;
+				hostChecks = { ...hostChecks, [host]: { state: 'error', message: data.error ?? `could not reach ${host}` } };
 				return;
 			}
-			if (newHost === host) createError = null;
+			hostChecks = { ...hostChecks, [host]: { state: 'connected' } };
 			hostDefaultCwds[host] = data.defaultCwd ?? '';
 			const fetched: ThreadSummary[] = data.data ?? [];
 			const others = sessions.filter((s) => !fetched.some((f) => f.id === s.id));
 			sessions = [...others, ...fetched];
 		} catch {
-			if (newHost === host) createError = `could not reach ${host}`;
+			hostChecks = { ...hostChecks, [host]: { state: 'error', message: `could not reach ${host}` } };
 		}
 	}
 
@@ -2338,6 +2341,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	/** A remote connection failure, with what to do about the common one. */
+	function hostCheckHint(host: string, message: string): string {
+		if (/codex not found/i.test(message)) {
+			return `Can't use ${host}: Codex isn't installed there, or not on the PATH a non-interactive SSH login sees. Install it on ${host} (npm install -g @openai/codex), sign in once with \`codex login\`, then pick ${host} again.`;
+		}
+		return `Can't connect to ${host}: ${message}`;
+	}
+
 	function onNewHostChange() {
 		if (newMachine !== LOCAL_HOST) newProvider = 'codex';
 		cwdBrowseLoading = false;
@@ -2345,9 +2356,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		newProfile = '';
 		cwdBrowseOpen = false;
 		void loadProfileChoices(newHost);
-		if (isRemoteHost(newHost) && hostDefaultCwds[newHost] === undefined) {
-			void loadHostSessions(newHost);
-		}
+		// Check the machine every time it is picked, so its state is current.
+		if (isRemoteHost(newHost)) void loadHostSessions(newHost);
 	}
 
 	function openCwdBrowser() {
@@ -5835,6 +5845,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{/each}
 						</select>
 					</div>
+					{#if isRemoteHost(newHost) && hostChecks[newHost]}
+						{@const check = hostChecks[newHost]}
+						<p class="host-check" class:error={check.state === 'error'} role="status">
+							{#if check.state === 'connecting'}Connecting to {newHost}…
+							{:else if check.state === 'connected'}Connected to {newHost}.
+							{:else}{hostCheckHint(newHost, check.message ?? '')}{/if}
+						</p>
+					{/if}
 				{/if}
 				{#if claudeHost}
 					<div class="create-row">
@@ -7763,6 +7781,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		color: var(--color-muted);
 		font-size: var(--text-xs);
 		line-height: 1.45;
+	}
+
+	.host-check {
+		margin: 0;
+		color: var(--color-muted);
+		font-size: var(--text-xs);
+	}
+
+	.host-check.error {
+		color: var(--color-error);
 	}
 
 	.create-err {
