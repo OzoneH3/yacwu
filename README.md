@@ -30,6 +30,9 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Copilot folder changes reopen the same conversation; reopen failures retain its
+  history and report an error instead of starting a replacement conversation.
+
 - Copilot uses its own labels in the composer, questions and handoffs; messages sent
   during work are explicitly queued, with drafts retained if queueing fails.
 

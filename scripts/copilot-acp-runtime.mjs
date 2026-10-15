@@ -209,7 +209,7 @@ export class CopilotAcpRuntime {
     this.connection = null;
     /** @type {Promise<AcpConnection> | null} */
     this.starting = null;
-    /** Sessions open in the current Copilot process: id → state. @type {Map<string, {options: any[], models: any, instructions: string | null}>} */
+    /** Sessions open in the current Copilot process: id → state. @type {Map<string, {options: any[], models: any, instructions: string | null, cwd: string}>} */
     this.open = new Map();
     /** Sessions whose history Copilot is replaying (updates are ignored). */
     this.loading = new Set();
@@ -264,17 +264,18 @@ export class CopilotAcpRuntime {
       await handlers.onEvent({ type: 'notice', level: 'warning', message: 'Copilot cannot fork a conversation; this copy starts a fresh Copilot conversation without the earlier context.' });
       sessionId = null;
     }
-    if (sessionId && !this.open.has(sessionId)) {
+    const previous = sessionId ? this.open.get(sessionId) : null;
+    if (sessionId && (!previous || previous.cwd !== context.cwd)) {
+      if (this.bySession.has(sessionId)) throw new Error('Cannot change the folder of a running Copilot session. Stop its task first.');
       const loading = sessionId;
       const replay = { instructions: /** @type {string | null} */ (null) };
       this.loading.add(loading);
       this.replays.set(loading, replay);
       try {
         const result = await connection.request('session/load', { sessionId, cwd: context.cwd, mcpServers: [] });
-        this.open.set(sessionId, { options: result?.configOptions ?? [], models: result?.models ?? null, instructions: replay.instructions });
+        this.open.set(sessionId, { options: result?.configOptions ?? [], models: result?.models ?? null, instructions: replay.instructions ?? previous?.instructions ?? null, cwd: context.cwd });
       } catch (error) {
-        await handlers.onEvent({ type: 'notice', level: 'warning', message: `Copilot could not reopen its earlier conversation (${error instanceof Error ? error.message : String(error)}); continuing in a fresh one without that context.` });
-        sessionId = null;
+        throw new Error(`Copilot could not reopen conversation ${loading}: ${error instanceof Error ? error.message : String(error)}. Its history is retained; retry reopening it. No replacement conversation was started.`);
       } finally {
         this.loading.delete(loading);
         this.replays.delete(loading);
@@ -283,7 +284,7 @@ export class CopilotAcpRuntime {
     if (!sessionId) {
       const result = await connection.request('session/new', { cwd: context.cwd, mcpServers: [] });
       sessionId = String(result.sessionId);
-      this.open.set(sessionId, { options: result?.configOptions ?? [], models: result?.models ?? null, instructions: null });
+      this.open.set(sessionId, { options: result?.configOptions ?? [], models: result?.models ?? null, instructions: null, cwd: context.cwd });
       if (!internal) await handlers.onEvent({ type: 'session', claudeSessionId: sessionId });
     }
     return sessionId;
