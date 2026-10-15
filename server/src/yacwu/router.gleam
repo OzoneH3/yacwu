@@ -713,21 +713,15 @@ fn with_codex(
 /// running. Never connects anything.
 /// The model a new session starts with when none is chosen.
 fn default_model(host: String) -> String {
-  case is_claude_backend(host) {
-    True -> defaults.new_claude_session_model
-    False -> defaults.new_session_model
+  case backends.provider_of(host) {
+    Ok("claude") -> defaults.new_claude_session_model
+    Ok("copilot") -> defaults.new_copilot_session_model
+    _ -> defaults.new_session_model
   }
 }
 
 fn is_claude_backend(host: String) -> Bool {
-  case list.find(backends.discover(), fn(entry) { entry.name == host }) {
-    Ok(entry) ->
-      string.contains(string.lowercase(entry.name), "claude")
-      || list.any(entry.command, fn(arg) {
-        string.contains(string.lowercase(arg), "claude")
-      })
-    Error(_) -> False
-  }
+  backends.provider_of(host) == Ok("claude")
 }
 
 fn list_hosts(ctx: Context) -> Response(ResponseData) {
@@ -759,17 +753,7 @@ fn list_hosts(ctx: Context) -> Response(ResponseData) {
           _, False -> json.string("remote")
         }),
         #("provider", case backend {
-          Ok(entry) -> {
-            let is_claude =
-              string.contains(string.lowercase(entry.name), "claude")
-              || list.any(entry.command, fn(arg) {
-                string.contains(string.lowercase(arg), "claude")
-              })
-            json.string(case is_claude {
-              True -> "claude"
-              False -> entry.name
-            })
-          }
+          Ok(entry) -> json.string(backends.provider(entry))
           Error(_) -> json.string("codex")
         }),
         #("state", case hosts.is_local(host) {
@@ -3743,9 +3727,10 @@ fn relay_peers(
                     #("host", json.string(peer_host)),
                     #(
                       "provider",
-                      json.string(case is_claude_backend(peer_host) {
-                        True -> "claude"
-                        False -> "codex"
+                      json.string(case backends.provider_of(peer_host) {
+                        Ok("claude") -> "claude"
+                        Ok("copilot") -> "copilot"
+                        _ -> "codex"
                       }),
                     ),
                     #(

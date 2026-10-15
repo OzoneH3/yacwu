@@ -83,7 +83,7 @@ import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQue
 import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskProgress, turnEstimateBias, separateTaskProgressEntries, stripTaskProgressMarkers, withTaskProgressInstructions } from '$lib/task-progress';
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, loadArchiveCatalog } from '$lib/archive';
-import { claudeBackendHost, sessionTarget } from '$lib/session-target';
+import { backendProviders, providerLabel, sessionTarget } from '$lib/session-target';
 import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity, usageModelNames } from '$lib/model-display';
 import { createMessageTimestampStore } from '$lib/message-timestamps';
 
@@ -214,13 +214,13 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	} | null>(null);
 	// Host picker: local plus the remote machines found in ~/.ssh/config.
 	let newMachine = $state(LOCAL_HOST);
-	let newProvider = $state<'codex' | 'claude'>('codex');
+	let newProvider = $state('codex');
 	let hostChoices = $state<HostInfo[]>([]);
 	// The new-session dialog's check of a remote machine, shown under its picker.
 	let hostChecks = $state<Record<string, { state: 'connecting' | 'connected' | 'error'; message?: string }>>({});
-	const claudeHost = $derived(claudeBackendHost(hostChoices));
+	const newProviders = $derived(backendProviders(hostChoices));
 	const machineChoices = $derived(hostChoices.filter((host) => host.kind !== 'backend'));
-	const newHost = $derived(sessionTarget(newMachine, newProvider, claudeHost));
+	const newHost = $derived(sessionTarget(newMachine, newProvider, hostChoices));
 	// Live connection state per remote host, fed by yacwu/host/status events.
 	let hostStates = $state<Record<string, string>>({});
 	let hostDefaultCwds = $state<Record<string, string>>({});
@@ -5854,12 +5854,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</p>
 					{/if}
 				{/if}
-				{#if claudeHost}
+				{#if newProviders.length}
 					<div class="create-row">
 						<label for="new-provider">Provider</label>
 						<select id="new-provider" class="profile-input" bind:value={newProvider} onchange={onNewHostChange}>
 							<option value="codex">Codex</option>
-							<option value="claude" disabled={newMachine !== LOCAL_HOST}>Claude</option>
+							{#each newProviders as provider (provider)}
+								<option value={provider} disabled={newMachine !== LOCAL_HOST}>{providerLabel(provider)}</option>
+							{/each}
 						</select>
 					</div>
 				{/if}
@@ -7223,7 +7225,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</button>
 					</div>
 					<div class="archive-filter-controls">
-						<label>Provider <select aria-label="Archived session provider" bind:value={archiveFilter} disabled={deletingAllArchives}><option value="all">All</option><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
+						<label>Provider <select aria-label="Archived session provider" bind:value={archiveFilter} disabled={deletingAllArchives}><option value="all">All</option><option value="codex">Codex</option>{#each backendProviders(hostChoices) as provider (provider)}<option value={provider}>{providerLabel(provider)}</option>{/each}</select></label>
 						<button class="mini archive-delete" type="button" disabled={archivedSessionsLoading || Boolean(restoringArchivedSessionId || deletingArchivedSessionId) || !visibleArchivedSessions.length} onclick={deleteAllArchivedSessions}>{deletingAllArchives ? 'Deleting…' : 'Delete all'}</button>
 					</div>
 					{#if archiveNotice}<p class="archive-browser-empty" role={archiveNotice.tone === 'error' ? 'alert' : 'status'}>{archiveNotice.message}</p>{/if}

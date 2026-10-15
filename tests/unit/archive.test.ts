@@ -38,3 +38,11 @@ test('archive provider labels match the backend', () => {
 	expect(archiveProviderLabel(thread('a', 'anthropic'), hosts)).toBe('Claude');
 	expect(archiveProviderLabel(thread('a', 'remote'), hosts)).toBe('Codex · remote');
 });
+
+test('Copilot backend sessions are labelled and filtered as Copilot', () => {
+	const withCopilot: HostInfo[] = [...hosts, { name: 'gh', kind: 'backend', provider: 'copilot', state: 'disconnected' }];
+	const sessions = [thread('a', 'anthropic'), thread('b', 'gh'), thread('c', 'local')];
+	expect(archiveProviderLabel(thread('b', 'gh'), withCopilot)).toBe('Copilot');
+	expect(filterArchives(sessions, withCopilot, 'copilot').map((session) => session.id)).toEqual(['b']);
+	expect(filterArchives(sessions, withCopilot, 'codex').map((session) => session.id)).toEqual(['c']);
+});

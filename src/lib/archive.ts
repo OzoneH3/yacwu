@@ -1,14 +1,23 @@
 import { LOCAL_HOST, type HostInfo, type ThreadSummary } from './protocol';
+import { BACKEND_AGENTS, providerLabel } from './session-target';
+
+/** The agent that ran a session: a backend's provider, otherwise Codex. */
+export function archiveProvider(session: ThreadSummary, hosts: HostInfo[]): string {
+	const host = session.host || LOCAL_HOST;
+	const target = hosts.find((entry) => entry.name === host);
+	return target?.provider && BACKEND_AGENTS.includes(target.provider) ? target.provider : 'codex';
+}
 
 export function archiveProviderLabel(session: ThreadSummary, hosts: HostInfo[]): string {
 	const host = session.host || LOCAL_HOST;
-	const target = hosts.find((entry) => entry.name === host);
-	return target?.provider === 'claude' ? 'Claude' : host === LOCAL_HOST ? 'Codex' : `Codex · ${host}`;
+	const provider = archiveProvider(session, hosts);
+	return provider !== 'codex' ? providerLabel(provider) : host === LOCAL_HOST ? 'Codex' : `Codex · ${host}`;
 }
 
-export type ArchiveFilter = 'all' | 'codex' | 'claude';
+/** 'all', or a provider: 'codex', 'claude', 'copilot', … */
+export type ArchiveFilter = string;
 export function filterArchives(sessions: ThreadSummary[], hosts: HostInfo[], filter: ArchiveFilter): ThreadSummary[] {
-	return sessions.filter((session) => filter === 'all' || (archiveProviderLabel(session, hosts) === 'Claude' ? 'claude' : 'codex') === filter);
+	return sessions.filter((session) => filter === 'all' || archiveProvider(session, hosts) === filter);
 }
 
 /** Include unopened local providers without connecting disconnected SSH machines. */

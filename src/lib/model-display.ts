@@ -11,8 +11,14 @@ export interface ModelChoiceSummary {
 	displayName: string;
 }
 
+/** Copilot's models (ids "copilot/…") are billed by premium requests, so
+ * none of the Claude or Codex ratings and rules below apply to them. */
+export function isCopilotModel(choice: ModelChoiceSummary): boolean {
+	return choice.id.startsWith('copilot/');
+}
+
 export function isClaudeModelCatalog(choices: ModelChoiceSummary[]): boolean {
-	return choices.some((choice) => /claude|^(?:sonnet|opus|haiku|fable|mythos)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
+	return choices.some((choice) => !isCopilotModel(choice) && /claude|^(?:sonnet|opus|haiku|fable|mythos)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
 }
 
 // Reviewed 2026-10-08. These are Yacwu estimates, not benchmark percentages or
@@ -64,7 +70,7 @@ export function claudeModelIdentity(choice: ModelChoiceSummary): string {
 }
 
 export function modelDisplayProfile(choice: ModelChoiceSummary | null): ModelDisplayProfile | null {
-	if (!choice) return null;
+	if (!choice || isCopilotModel(choice)) return null;
 	// A concrete ID is authoritative; floating aliases need a resolved name.
 	const match = claudeVersion.exec(choice.id) ?? claudeVersion.exec(choice.displayName);
 	if (match) {

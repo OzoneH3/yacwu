@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { filterAndSortModelChoices, modelDisplayProfile, usageModelNames } from '../../src/lib/model-display';
+import { filterAndSortModelChoices, isClaudeModelCatalog, modelDisplayProfile, usageModelNames } from '../../src/lib/model-display';
 
 const models = [
 	{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
@@ -105,4 +105,16 @@ test('usage model names merge aliases by display name only', () => {
 		{ id: 'haiku', displayName: 'Claude Haiku 4.5' },
 		{ id: 'claude-haiku-5-5', displayName: 'Claude Haiku 5.5' }
 	])).toEqual({ default: 'Claude Opus 5.5', opus: 'Claude Opus 5.5', haiku: 'Claude Haiku 4.5', 'claude-haiku-5-5': 'Claude Haiku 5.5' });
+});
+
+test('Copilot catalogs keep every model, in Copilot order, without Claude or Codex ratings', () => {
+	const copilot = [
+		{ id: 'copilot/auto', displayName: 'Copilot · auto' },
+		{ id: 'copilot/claude-sonnet-4.5', displayName: 'Copilot · Claude Sonnet 4.5' },
+		{ id: 'copilot/claude-opus-5-5', displayName: 'Copilot · Claude Opus 5.5' },
+		{ id: 'copilot/gpt-5.6-sol', displayName: 'Copilot · GPT-5.6 Sol' }
+	];
+	expect(isClaudeModelCatalog(copilot)).toBe(false);
+	expect(copilot.map(modelDisplayProfile)).toEqual([null, null, null, null]);
+	expect(filterAndSortModelChoices(copilot)).toEqual(copilot);
 });

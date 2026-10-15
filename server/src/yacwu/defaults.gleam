@@ -14,6 +14,9 @@ pub const new_session_model = "gpt-6.1-sol"
 /// Claude sessions name their model explicitly: "default" floats with Claude
 /// Code's account default, so usage could not tell which model it measured.
 pub const new_claude_session_model = "claude-opus-5-5"
+
+/// Copilot sessions start on Copilot's own model choice.
+pub const new_copilot_session_model = "copilot/auto"
 pub const new_session_effort = "medium"
 
 pub fn thread_defaults() -> List(#(String, Json)) {

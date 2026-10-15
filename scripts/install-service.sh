@@ -23,6 +23,11 @@ for tool in bun gleam node; do
   command -v "$tool" >/dev/null || { echo "install-service: $tool is not on PATH" >&2; exit 1; }
 done
 
+backends="claude=node ./scripts/claude-backend.mjs ./claude-codex/dist/src/adapter.mjs"
+if command -v copilot >/dev/null; then
+  backends="$backends;copilot=node ./scripts/copilot-backend.mjs ./claude-codex/dist/src/adapter.mjs"
+fi
+
 mkdir -p "$unit_dir"
 cat >"$unit" <<EOF
 [Unit]
@@ -35,7 +40,7 @@ WorkingDirectory=$root
 Environment="PATH=$PATH"
 Environment=YACWU_INSECURE_SKIP_AUTH=1
 Environment=YACWU_PERSISTENT_BACKENDS=1
-Environment="YACWU_BACKENDS=claude=node ./scripts/claude-backend.mjs ./claude-codex/dist/src/adapter.mjs"
+Environment="YACWU_BACKENDS=$backends"
 EnvironmentFile=-%h/.config/yacwu/service.env
 ExecStart=$(command -v bun) run start
 Restart=always

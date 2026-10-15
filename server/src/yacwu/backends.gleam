@@ -84,6 +84,38 @@ pub fn command(name: String) -> Result(List(String), Nil) {
   })
 }
 
+/// Which agent a backend runs: "copilot" or "claude" when its name says so,
+/// else when its command does, otherwise the backend's own name. In the
+/// command only a file name counts for Copilot (its command also names the
+/// claude-codex adapter it reuses, and folders may be called anything).
+pub fn provider(backend: Backend) -> String {
+  let name = string.lowercase(backend.name)
+  let args = list.map(backend.command, string.lowercase)
+  let file_names = list.map(args, filepath.base_name)
+  let any_contains = fn(values, word) {
+    list.any(values, string.contains(_, word))
+  }
+  case
+    string.contains(name, "copilot"),
+    string.contains(name, "claude"),
+    any_contains(file_names, "copilot"),
+    any_contains(args, "claude")
+  {
+    True, _, _, _ -> "copilot"
+    _, True, _, _ -> "claude"
+    _, _, True, _ -> "copilot"
+    _, _, _, True -> "claude"
+    _, _, _, _ -> backend.name
+  }
+}
+
+/// The provider of the configured backend named `host`.
+pub fn provider_of(host: String) -> Result(String, Nil) {
+  discover()
+  |> list.find(fn(backend) { backend.name == host })
+  |> result.map(provider)
+}
+
 /// Anchor explicit relative paths before the manager changes to session cwd.
 pub fn resolve_command(command: List(String), root: String) -> List(String) {
   list.map(command, fn(arg) {

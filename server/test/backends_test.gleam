@@ -116,3 +116,22 @@ pub fn without_configuration_only_local_is_local_test() {
   assert hosts.is_local("local")
   assert !hosts.is_local("claude")
 }
+
+pub fn provider_names_the_agent_a_backend_runs_test() {
+  use <- with_env(
+    "anthropic=node ./scripts/claude-backend.mjs ./claude-codex/dist/src/adapter.mjs;gh=node ./scripts/copilot-backend.mjs ./claude-codex/dist/src/adapter.mjs;mini=codex-mini app-server",
+  )
+  assert backends.provider_of("anthropic") == Ok("claude")
+  // The Copilot backend reuses the claude-codex adapter; it is still Copilot.
+  assert backends.provider_of("gh") == Ok("copilot")
+  assert backends.provider_of("mini") == Ok("mini")
+  assert backends.provider_of("local") == Error(Nil)
+}
+
+pub fn folder_names_do_not_decide_the_provider_test() {
+  use <- with_env(
+    "anthropic=node /home/me/copilot-work/claude-codex/dist/src/adapter.mjs;agent=node /srv/claude-tools/scripts/copilot-backend.mjs /srv/claude-codex/dist/src/adapter.mjs",
+  )
+  assert backends.provider_of("anthropic") == Ok("claude")
+  assert backends.provider_of("agent") == Ok("copilot")
+}

@@ -116,6 +116,7 @@ rules locally, and records usage/diagnostic journals on the server.
   a newer build is deployed
 - 🔁 Alternative backends via `YACWU_BACKENDS`, such as
   [claude-codex](https://github.com/fuergaosi233/claude-codex)
+- 🐙 GitHub Copilot sessions through Copilot CLI's ACP server
 - 🌐 Remote machines over SSH with a persistent app-server and full feature
   parity (see [docs/remote.md](docs/remote.md))
 - 🗄️ No storage layer — the backend is the source of truth
@@ -348,6 +349,30 @@ usage meter.
 Navigating into a folder in the new-session directory browser selects that
 folder as the working directory, including for local Claude backends. You do
 not need a second confirmation click before starting the session.
+
+#### GitHub Copilot
+
+GitHub Copilot CLI runs as a backend through its Agent Client Protocol server
+(`copilot --acp`, a public preview). The Copilot launcher reuses the
+claude-codex adapter for sessions and history, with Copilot doing the work:
+
+```bash
+npm install -g @github/copilot && copilot login
+YACWU_BACKENDS="claude=…;copilot=node ./scripts/copilot-backend.mjs ./claude-codex/dist/src/adapter.mjs" bun run start
+```
+
+Copilot then appears under Provider next to Codex and Claude, on this
+computer. The model picker lists the account's Copilot models (read once a
+day from an empty session, without a prompt) plus "auto", Copilot's own
+choice and the default. Sessions keep their Copilot conversation across
+restarts. Commands, edits, reads, plans and token counts show as in other
+sessions. Full-access sessions turn on Copilot's allow-all; others ask before
+each tool. Messages sent while Copilot works go in as the next prompt of the
+same task, since ACP cannot add input to a running prompt. Not available:
+Copilot's premium-request allowance (ACP does not report it), forks with the
+earlier conversation, and Yacwu's model ratings. Session records live in
+`$XDG_STATE_HOME/yacwu/copilot-adapter`; deleting an archived session also
+removes Copilot's copy. `YACWU_COPILOT_CLI` selects another `copilot` binary.
 
 For a deployable artifact, `cd server && gleam export erlang-shipment`
 produces a self-contained BEAM release (needs only Erlang on the target), and
