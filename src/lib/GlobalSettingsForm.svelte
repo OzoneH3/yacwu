@@ -1,8 +1,11 @@
 <script lang="ts">
+	import AccountLimitsSettings from './AccountLimitsSettings.svelte';
 	import { clampSetting, defaultSettings, settingRanges, type GlobalSettings } from './settings';
 
 	let {
 		settings,
+		claudeEnabled = false,
+		copilotEnabled = false,
 		theme,
 		onchange,
 		onthemechange,
@@ -11,6 +14,8 @@
 		onsoundpreview
 	}: {
 		settings: GlobalSettings;
+		claudeEnabled?: boolean;
+		copilotEnabled?: boolean;
 		theme: 'light' | 'dark';
 		onchange: (settings: GlobalSettings) => void;
 		onthemechange: (theme: 'light' | 'dark') => void;
@@ -82,6 +87,7 @@
 		<p class="description">Stored on the server for every browser and kept across restarts. Turning it off refuses new messages to sessions without their own choice and drops ones still queued for them.{#if relayStatus} <span role="status">{relayStatus}</span>{/if}</p>
 	</section>
 
+	{#if claudeEnabled}
 	<section aria-labelledby="settings-claude">
 		<h3 id="settings-claude">Claude progress</h3>
 		<label class="check"><input type="checkbox" checked={settings.claudeTimeCalibration} onchange={(e) => set('claudeTimeCalibration', e.currentTarget.checked)} /> Correct time-left estimates from elapsed progress</label>
@@ -94,14 +100,9 @@
 		<p class="description note">Applies to prompts sent from now on.</p>
 	</section>
 
-	<section aria-labelledby="settings-allowance">
-		<h3 id="settings-allowance">Claude allowance lockout</h3>
-		<label class="row">
-			<span>Stop and block Claude tasks at</span>
-			<span class="number"><input type="number" aria-label="Lockout at % remaining" min={settingRanges.claudeAllowanceReserve.min} max={settingRanges.claudeAllowanceReserve.max} value={settings.claudeAllowanceReserve} onchange={(e) => setNumber('claudeAllowanceReserve', e)} /> % remaining</span>
-		</label>
-		<p class="description note">Applies to the 5-hour and 7-day allowance. Running tasks are interrupted and new ones refused once either has this much or less left. 0 turns the lockout off. Takes effect with the next prompt to each session.</p>
-	</section>
+	{/if}
+
+	<AccountLimitsSettings {claudeEnabled} {copilotEnabled} claudeReserve={settings.claudeAllowanceReserve} onclaudechange={(value) => set('claudeAllowanceReserve', value)} />
 
 	<section aria-labelledby="settings-monitoring">
 		<h3 id="settings-monitoring">Monitoring</h3>

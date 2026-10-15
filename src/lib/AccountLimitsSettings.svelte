@@ -1,5 +1,7 @@
 <script lang="ts">
  import { onMount } from 'svelte';
+ import { clampSetting, settingRanges } from './settings';
+ let { claudeEnabled, copilotEnabled, claudeReserve, onclaudechange }: { claudeEnabled: boolean; copilotEnabled: boolean; claudeReserve: number; onclaudechange: (value: number) => void } = $props();
  let codex = $state(0), copilot = $state(0);
  let loading = $state(true), saving = $state(false), loaded = $state(false);
  let status = $state('');
@@ -26,13 +28,20 @@
 </script>
 <section aria-labelledby="settings-account-limits">
  <h3 id="settings-account-limits">Account usage limits</h3>
- <p>Saved on this server for all browsers and sessions. Reaching a limit stops running tasks and blocks new prompts and queued messages. 0 disables that provider’s limit.</p>
+ <p>Reaching a limit stops running tasks and blocks new prompts and queued messages. 0 disables that provider’s limit.</p>
+ {#if claudeEnabled}
+  <label>Claude reserve (% remaining)<input type="number" min={settingRanges.claudeAllowanceReserve.min} max={settingRanges.claudeAllowanceReserve.max} value={claudeReserve} onchange={event => onclaudechange(clampSetting('claudeAllowanceReserve', event.currentTarget.value))} /></label>
+  <p>Applies to the 5-hour and 7-day allowance. Saved immediately in this browser; takes effect with the next prompt to each session.</p>
+ {/if}
+ <p>{copilotEnabled ? 'Codex and Copilot limits are' : 'The Codex limit is'} saved on this server for all browsers and sessions.</p>
  <form onsubmit={save}>
   <fieldset disabled={loading || saving || !loaded}>
    <label>Codex reserve (% remaining)<input type="number" min="0" max="100" step="1" required bind:value={codex} /></label>
    <p>Keep this percentage of either Codex allowance window unused.</p>
+   {#if copilotEnabled}
    <label>Copilot credit limit (used this cycle)<input type="number" min="0" max="1000000000" step="1" required bind:value={copilot} /></label>
    <p>Stop at this billing-cycle account credit total, including usage outside Yacwu. Uses the GitHub CLI account shown in the session; it may differ from the Copilot CLI login.</p>
+   {/if}
    <button type="submit">{saving ? 'Saving…' : 'Save account limits'}</button>
   </fieldset>
  </form>

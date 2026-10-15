@@ -90,8 +90,8 @@ test('Claude prompts carry the allowance lockout percentage, hidden from the tra
 	const posted = await mock(page, 'claude');
 	await page.goto('/s/settings-a');
 	await openSettings(page);
-	await page.getByLabel('Lockout at % remaining').fill('20');
-	await page.getByLabel('Lockout at % remaining').press('Tab');
+	await page.getByLabel('Claude reserve (% remaining)').fill('20');
+	await page.getByLabel('Claude reserve (% remaining)').press('Tab');
 	await page.getByRole('button', { name: 'Close settings' }).click();
 	await page.locator('.composer textarea').fill('Check the build');
 	await page.locator('.composer textarea').press('Enter');

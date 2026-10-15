@@ -14,7 +14,6 @@
 	import ProjectRulesEditor from '$lib/ProjectRulesEditor.svelte';
 	import type { ProjectRulesState } from '$lib/project-rules';
 	import GlobalSettingsForm from '$lib/GlobalSettingsForm.svelte';
-	import AccountLimitsSettings from '$lib/AccountLimitsSettings.svelte';
 	import { clampSetting, defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings } from '$lib/settings';
 	import {
 		applyRelayEvent,
@@ -5593,8 +5592,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			</button>
 		</div>
 		{#if settingsOpen}
-			<GlobalSettingsForm {settings} {theme} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} relayDefault={relayAcceptByDefault} onrelaydefaultchange={setRelayAcceptByDefault} onsoundpreview={(volume) => { soundPlayer.unlock(); soundPlayer.preview(volume); }} />
-			<AccountLimitsSettings />
+			<GlobalSettingsForm {settings} {theme} claudeEnabled={hostChoices.some(host => host.provider === 'claude')} copilotEnabled={hostChoices.some(host => host.provider === 'copilot')} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} relayDefault={relayAcceptByDefault} onrelaydefaultchange={setRelayAcceptByDefault} onsoundpreview={(volume) => { soundPlayer.unlock(); soundPlayer.preview(volume); }} />
 		{/if}
 	</div>
 </dialog>

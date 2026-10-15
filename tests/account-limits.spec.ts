@@ -5,6 +5,7 @@ test('account usage limits save on the server and survive browser storage being 
  await page.route('**/api/**', async route => {
   const path = new URL(route.request().url()).pathname;
   if (path === '/api/account/limits') return route.continue();
+  if (path === '/api/hosts') return route.fulfill({ json: { hosts: [{ name: 'local', provider: 'codex', kind: 'local' }, { name: 'copilot', provider: 'copilot', kind: 'backend' }] } });
   if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
   if (path === '/api/threads') return route.fulfill({ json: { data: [], defaultCwd: '/project' } });
   return route.fulfill({ json: {} });
@@ -55,3 +56,39 @@ test('account stop notifications explain why a task was interrupted', async ({ p
  await page.evaluate(() => (window as any).__sse.onmessage({ data: JSON.stringify({ method: 'yacwu/accountLimit/stopped', params: { threadId: 'limit-session', reason: 'Codex allowance reserve reached (15% remaining).' } }) }));
  await expect(page.getByText('Task stopped. Codex allowance reserve reached (15% remaining).', { exact: true })).toBeVisible();
 });
+
+
+for (const providers of [[], ['claude'], ['copilot'], ['claude', 'copilot']]) {
+ test(`usage limits are grouped and only enabled providers appear: ${providers.join(',') || 'Codex only'}`, async ({ page }) => {
+  test.setTimeout(15000);
+  const hosts = [{ name: 'local', kind: 'local', provider: 'codex' }, ...providers.map(provider => ({ name: `custom-${provider}`, kind: 'backend', provider, state: 'disconnected' }))];
+  let limits = { codexReservePercent: 12, copilotCreditLimit: 3000 };
+  await page.route('**/api/**', async route => {
+   const path = new URL(route.request().url()).pathname;
+   if (path === '/api/hosts') return route.fulfill({ json: { hosts } });
+   if (path === '/api/account/limits') {
+    if (route.request().method() === 'POST') limits = route.request().postDataJSON();
+    return route.fulfill({ json: limits });
+   }
+   if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+   if (path === '/api/threads') return route.fulfill({ json: { data: [], defaultCwd: '/project' } });
+   return route.fulfill({ json: {} });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const section = dialog.locator('section[aria-labelledby="settings-account-limits"]');
+  await expect(section.getByLabel('Codex reserve (% remaining)', { exact: true })).toHaveValue('12', { timeout: 4000 });
+  await expect(dialog.getByRole('heading', { name: 'Account usage limits', exact: true })).toHaveCount(1);
+  await expect(dialog.getByRole('heading', { name: 'Claude allowance lockout', exact: true })).toHaveCount(0);
+  await expect(section.getByLabel('Claude reserve (% remaining)', { exact: true })).toHaveCount(providers.includes('claude') ? 1 : 0);
+  await expect(section.getByLabel('Copilot credit limit (used this cycle)', { exact: true })).toHaveCount(providers.includes('copilot') ? 1 : 0);
+  await expect(dialog.getByRole('heading', { name: 'Claude progress', exact: true })).toHaveCount(providers.includes('claude') ? 1 : 0);
+  if (!providers.includes('claude')) await expect(dialog).not.toContainText('Claude');
+  if (!providers.includes('copilot')) await expect(dialog).not.toContainText('Copilot');
+  await section.getByLabel('Codex reserve (% remaining)', { exact: true }).fill('14');
+  await section.getByRole('button', { name: 'Save account limits', exact: true }).click();
+  await expect(section.getByText('Account limits saved on the server.', { exact: true })).toBeVisible();
+  expect(limits).toEqual({ codexReservePercent: 14, copilotCreditLimit: 3000 });
+ });
+}
