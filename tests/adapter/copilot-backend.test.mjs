@@ -53,9 +53,9 @@ function backend(env) {
 		listeners.add(listener);
 	});
 	/** Run one turn to its end; its items and the turn/completed notification. */
-	const turn = async (threadId, text) => {
+	const turn = async (threadId, text, extra = {}) => {
 		const from = notes.length;
-		const started = await request('turn/start', { threadId, input: [{ type: 'text', text }] });
+		const started = await request('turn/start', { threadId, input: [{ type: 'text', text }], ...extra });
 		const completed = await next((m, i) => m.method === 'turn/completed' && m.params.turn.id === started.turn.id);
 		const mine = notes.slice(from);
 		return { started, completed, items: mine.filter((m) => m.method === 'item/completed').map((m) => m.params.item), notes: mine };
@@ -82,11 +82,16 @@ test('Copilot sessions run, resume after a restart, and stop through the ACP run
 	let server = await connect(env);
 	try {
 		const { data: models } = await server.request('model/list', {});
-		assert.deepEqual(models.map((m) => [m.id, m.displayName]), [['copilot/auto', 'Copilot · auto'], ['copilot/gpt-5', 'Copilot · GPT-5'], ['copilot/claude-sonnet-4.5', 'Copilot · Claude Sonnet 4.5']]);
+		// Each model once, usable ones only, priced, with its own thinking levels.
+		assert.deepEqual(models.map((m) => [m.id, m.displayName, m.description, m.supportedReasoningEfforts.map((e) => e.reasoningEffort).join(','), m.defaultReasoningEffort]), [
+			['copilot/auto', 'Auto · Copilot picks · 1x', 'Copilot chooses a model for each prompt', '', null],
+			['copilot/gpt-5', 'GPT-5 · 1x', '1 premium request per prompt', 'none,low,medium,high', 'medium'],
+			['copilot/claude-sonnet-4.5', 'Claude Sonnet 4.5 · 15x', '15 premium requests per prompt', 'low,medium,high,xhigh,max', 'high']
+		]);
 		assert.equal(existsSync(join(root, 'state/yacwu/copilot-adapter/copilot-models.json')), true, 'model list is cached in the Copilot adapter home');
 
 		const { thread } = await server.request('thread/start', { cwd, model: 'copilot/gpt-5', approvalPolicy: 'never', sandbox: 'danger-full-access', developerInstructions: 'RULE-X' });
-		const first = await server.turn(thread.id, 'run a tool');
+		const first = await server.turn(thread.id, 'run a tool', { effort: 'none' });
 		assert.equal(first.completed.params.turn.status, 'completed');
 		const command = first.items.find((item) => item.type === 'commandExecution');
 		assert.equal(command?.command, 'echo hi');
@@ -103,6 +108,7 @@ test('Copilot sessions run, resume after a restart, and stop through the ACP run
 		assert.ok(sent.some((m) => m.method === 'session/set_config_option' && m.params.configId === 'model' && m.params.value === 'gpt-5'), 'the chosen model is selected');
 		assert.ok(sent.some((m) => m.method === 'session/set_config_option' && m.params.configId === 'allow_all' && m.params.value === 'on'), 'full access turns on allow-all');
 		assert.match(prompts()[0].params.prompt[0].text, /^<yacwu-instructions>[\s\S]*RULE-X/);
+		assert.ok(sent.some((m) => m.method === 'session/set_config_option' && m.params.configId === 'reasoning_effort' && m.params.value === 'none'), 'Copilot\'s "none" thinking level reaches it');
 
 		const second = await server.turn(thread.id, 'hello again');
 		assert.equal(second.items.find((item) => item.type === 'agentMessage')?.text, 'Echo: hello again');
@@ -153,7 +159,9 @@ test('without full access, Copilot asks Yacwu before running a tool', { skip, ti
 		assert.equal(result.completed.params.turn.status, 'completed');
 		assert.ok(server.notes.some((m) => m.id != null && /approval/i.test(m.method)), 'Yacwu was asked to approve the command');
 		assert.deepEqual(logOf(log).find((m) => m.permissionAnswer)?.permissionAnswer, { outcome: { outcome: 'selected', optionId: 'allow_once' } });
-		assert.ok(!logOf(log).some((m) => m.method === 'session/set_config_option' && m.params.configId === 'model'), 'auto leaves Copilot\'s model choice alone');
+		// Copilot opens sessions on the account's default model, so auto is selected explicitly.
+		const session = logOf(log).find((m) => m.method === 'session/prompt').params.sessionId;
+		assert.deepEqual(logOf(log).filter((m) => m.method === 'session/set_config_option' && m.params.sessionId === session && m.params.configId === 'model').map((m) => m.params.value), ['auto']);
 	} finally {
 		await server.stop();
 		rmSync(root, { recursive: true, force: true });

@@ -84,7 +84,7 @@ import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskPr
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, loadArchiveCatalog } from '$lib/archive';
 import { backendProviders, providerLabel, sessionTarget } from '$lib/session-target';
-import { filterAndSortModelChoices, modelDisplayProfile, isClaudeModelCatalog, claudeModelIdentity, usageModelNames } from '$lib/model-display';
+import { filterAndSortModelChoices, isCopilotModel, modelDisplayProfile, modelPickerGroups, isClaudeModelCatalog, claudeModelIdentity, usageModelNames } from '$lib/model-display';
 import { createMessageTimestampStore } from '$lib/message-timestamps';
 
 	let { children } = $props();
@@ -707,6 +707,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	}
 
 	function thinkingCostLabel(effort: string) {
+		// Copilot reports no allowance, so there is no cost to learn.
+		if (activeConfig?.model && isCopilotModel({ id: activeConfig.model, displayName: '' })) return '';
 		const model = activeConfig?.model ? usageModelName(activeHost, activeConfig.model) : null;
 		const rate = activeUsageAnalysis?.rates.find((rate) => rate.model === model && rate.effort === effort);
 		const fiveHourRate = activeFiveHourUsageAnalysis?.rates.find((rate) => rate.model === model && rate.effort === effort);
@@ -7147,11 +7149,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											{#if activeConfig.model !== 'default' && !activeModels.some((choice) => choice.id === activePickerModel)}
 												<option value={activeConfig.model} disabled>{activeModelChoice?.displayName ?? activeConfig.model} · current</option>
 											{/if}
-							{#each activeModels as choice (choice.id)}
+							{#snippet modelOption(choice: (typeof activeModels)[number])}
 								{@const profile = modelDisplayProfile(choice)}
 								<option value={choice.id} title={profile?.estimateBasis}>
 									{choice.displayName || choice.id}{profile ? ` · Cap ~${profile.capability} · ${profile.efficiency} · ${profile.valueRating.toFixed(1)}` : ''}
 								</option>
+							{/snippet}
+							{#each modelPickerGroups(activeModels) as group (group.label ?? '')}
+								{#if group.label}
+									<optgroup label={group.label}>
+										{#each group.choices as choice (choice.id)}{@render modelOption(choice)}{/each}
+									</optgroup>
+								{:else}
+									{#each group.choices as choice (choice.id)}{@render modelOption(choice)}{/each}
+								{/if}
 							{/each}
 									</select>
 									</div>
@@ -7170,7 +7181,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{/if}
 								{#if activeConfig && activeEfforts.length > 0}
 									<div class="effort">
-										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)} <span class="thinking-cost">{thinkingCostLabel(activeConfig.effort)}</span></span>
+										<span class="effort-label" aria-hidden="true">{effortLabel(activeConfig.effort)}{#if thinkingCostLabel(activeConfig.effort)} <span class="thinking-cost">{thinkingCostLabel(activeConfig.effort)}</span>{/if}</span>
 										<svg class="composer-select-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 											<path d="m6 9 6 6 6-6" />
 										</svg>
@@ -7182,7 +7193,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											onchange={(event) => setComposerEffort(event.currentTarget)}
 										>
 											{#each activeEfforts as choice (choice)}
-												<option value={choice}>{effortLabel(choice)} · {thinkingCostLabel(choice)}</option>
+												<option value={choice}>{effortLabel(choice)}{thinkingCostLabel(choice) ? ` · ${thinkingCostLabel(choice)}` : ''}</option>
 											{/each}
 										</select>
 									</div>

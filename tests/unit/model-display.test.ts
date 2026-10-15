@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { filterAndSortModelChoices, isClaudeModelCatalog, modelDisplayProfile, usageModelNames } from '../../src/lib/model-display';
+import { filterAndSortModelChoices, isClaudeModelCatalog, modelDisplayProfile, modelPickerGroups, usageModelNames } from '../../src/lib/model-display';
 
 const models = [
 	{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
@@ -117,4 +117,19 @@ test('Copilot catalogs keep every model, in Copilot order, without Claude or Cod
 	expect(isClaudeModelCatalog(copilot)).toBe(false);
 	expect(copilot.map(modelDisplayProfile)).toEqual([null, null, null, null]);
 	expect(filterAndSortModelChoices(copilot)).toEqual(copilot);
+});
+
+test('Copilot models are grouped by maker after auto; other catalogs stay one list', () => {
+	const copilot = [
+		{ id: 'copilot/auto', displayName: 'Auto · Copilot picks' },
+		{ id: 'copilot/claude-opus-5.5', displayName: 'Claude Opus 5.5 · 15x' },
+		{ id: 'copilot/claude-haiku-4.5', displayName: 'Claude Haiku 4.5 · 0.33x' },
+		{ id: 'copilot/gpt-6.1-sol', displayName: 'GPT-6.1 Sol · 1x' },
+		{ id: 'copilot/gemini-4-argon', displayName: 'Gemini 4 Argon · 1x' },
+		{ id: 'copilot/grok-4.7', displayName: 'Grok 4.7 · 1x' },
+		{ id: 'copilot/mai-code-1.1-flash', displayName: 'MAI-Code-1.1-Flash · 1x' },
+		{ id: 'copilot/someone-new', displayName: 'Someone New · 1x' }
+	];
+	expect(modelPickerGroups(copilot).map((group) => [group.label, group.choices.length])).toEqual([[null, 1], ['Claude', 2], ['OpenAI', 1], ['Google', 1], ['xAI', 1], ['Microsoft', 1], ['Other', 1]]);
+	expect(modelPickerGroups(models).map((group) => group.label)).toEqual([null]);
 });

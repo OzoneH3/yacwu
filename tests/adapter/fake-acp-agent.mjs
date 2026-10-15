@@ -14,9 +14,20 @@ const log = process.env.FAKE_ACP_LOG;
 const historyPath = process.env.FAKE_ACP_HISTORY;
 /** Sessions' user messages survive restarts, so session/load can replay them. */
 const history = historyPath && existsSync(historyPath) ? JSON.parse(readFileSync(historyPath, 'utf8')) : {};
-const options = () => [
+// Copilot's own shapes: "auto" twice, cost metadata, a model the account
+// may not use, and thinking levels that depend on the selected model.
+const models = [
+	{ value: 'auto', name: 'Auto', description: 'Let Copilot pick the best model' },
+	{ value: 'auto', name: 'Auto', description: 'Auto', _meta: { copilotUsage: '1x', copilotEnablement: 'enabled' } },
+	{ value: 'gpt-5', name: 'GPT-5', description: 'GPT-5', _meta: { copilotUsage: '1x', copilotEnablement: 'enabled', copilotPriceCategory: 'medium' } },
+	{ value: 'claude-sonnet-4.5', name: 'Claude Sonnet 4.5', description: 'Claude Sonnet 4.5', _meta: { copilotUsage: '15x', copilotEnablement: 'enabled', copilotPriceCategory: 'high' } },
+	{ value: 'secret-model', name: 'Secret', description: 'Secret', _meta: { copilotUsage: '1x', copilotEnablement: 'disabled' } }
+];
+const efforts = { auto: null, 'gpt-5': [['none', 'low', 'medium', 'high'], 'medium'], 'claude-sonnet-4.5': [['low', 'medium', 'high', 'xhigh', 'max'], 'high'] };
+const options = (model = 'claude-sonnet-4.5') => [
 	{ type: 'select', id: 'mode', category: 'mode', currentValue: 'https://agentclientprotocol.com/protocol/session-modes#agent', options: [{ value: 'https://agentclientprotocol.com/protocol/session-modes#agent', name: 'Agent' }, { value: 'https://agentclientprotocol.com/protocol/session-modes#plan', name: 'Plan' }] },
-	{ type: 'select', id: 'model', category: 'model', currentValue: 'claude-sonnet-4.5', options: [{ value: 'gpt-5', name: 'GPT-5' }, { value: 'claude-sonnet-4.5', name: 'Claude Sonnet 4.5' }] },
+	{ type: 'select', id: 'model', category: 'model', currentValue: model, options: models },
+	...(efforts[model] ? [{ type: 'select', id: 'reasoning_effort', category: 'thought_level', currentValue: efforts[model][1], options: efforts[model][0].map((value) => ({ value, name: value })) }] : []),
 	{ type: 'select', id: 'allow_all', category: 'permissions', currentValue: 'off', options: [{ value: 'on', name: 'On' }, { value: 'off', name: 'Off' }] }
 ];
 const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
@@ -26,6 +37,8 @@ const waiting = new Map();
 const ask = (method, params) => new Promise((resolve) => { const id = nextId++; waiting.set(id, resolve); send({ id, method, params }); });
 const cancelled = new Map();
 const cwds = new Map();
+/** Each session's selected model. */
+const selected = new Map();
 
 createInterface({ input: process.stdin }).on('line', async (line) => {
 	const message = JSON.parse(line);
@@ -48,7 +61,10 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
 		return send({ id, result: { configOptions: options() } });
 	}
 	if (method === 'session/close') return send({ id, result: {} });
-	if (method === 'session/set_config_option') return send({ id, result: { configOptions: options().map((o) => o.id === params.configId ? { ...o, currentValue: params.value } : o) } });
+	if (method === 'session/set_config_option') {
+		if (params.configId === 'model') selected.set(params.sessionId, params.value);
+		return send({ id, result: { configOptions: options(selected.get(params.sessionId)).map((o) => o.id === params.configId ? { ...o, currentValue: params.value } : o) } });
+	}
 	if (method === 'session/cancel') { cancelled.get(params.sessionId)?.(); return; }
 	if (method === 'session/prompt') {
 		const sessionId = params.sessionId;

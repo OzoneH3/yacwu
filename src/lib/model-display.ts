@@ -17,6 +17,30 @@ export function isCopilotModel(choice: ModelChoiceSummary): boolean {
 	return choice.id.startsWith('copilot/');
 }
 
+const copilotMakers: Array<[RegExp, string]> = [
+	[/^claude-/, 'Claude'],
+	[/^(?:gpt-|o\d)/, 'OpenAI'],
+	[/^gemini-/, 'Google'],
+	[/^grok-/, 'xAI'],
+	[/^mai-/, 'Microsoft']
+];
+
+/**
+ * Picker sections: Copilot's models by maker (its "auto" first, unlabelled);
+ * any other catalog is one unlabelled section, as listed.
+ */
+export function modelPickerGroups<T extends ModelChoiceSummary>(choices: T[]): Array<{ label: string | null; choices: T[] }> {
+	const groups: Array<{ label: string | null; choices: T[] }> = [];
+	for (const choice of choices) {
+		const id = choice.id.replace(/^copilot\//, '');
+		const label = !isCopilotModel(choice) || id === 'auto' ? null : copilotMakers.find(([pattern]) => pattern.test(id))?.[1] ?? 'Other';
+		const group = groups.find((entry) => entry.label === label);
+		if (group) group.choices.push(choice);
+		else groups.push({ label, choices: [choice] });
+	}
+	return groups;
+}
+
 export function isClaudeModelCatalog(choices: ModelChoiceSummary[]): boolean {
 	return choices.some((choice) => !isCopilotModel(choice) && /claude|^(?:sonnet|opus|haiku|fable|mythos)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
 }

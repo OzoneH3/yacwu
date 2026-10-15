@@ -362,9 +362,11 @@ YACWU_BACKENDS="claude=…;copilot=node ./scripts/copilot-backend.mjs ./claude-c
 ```
 
 Copilot then appears under Provider next to Codex and Claude, on this
-computer. The model picker lists the account's Copilot models (read once a
-day from an empty session, without a prompt) plus "auto", Copilot's own
-choice and the default. Sessions keep their Copilot conversation across
+computer. The model picker lists the models the account may use, grouped by
+maker after "auto" (Copilot's own choice, the default), each named with its
+premium-request multiplier ("Claude Opus 5.5 · 15x") and offering its own
+thinking levels, from "none" to "max". The list is read once a day from an
+empty session, without a prompt. Sessions keep their Copilot conversation across
 restarts. Commands, edits, reads, plans and token counts show as in other
 sessions. Full-access sessions turn on Copilot's allow-all; others ask before
 each tool. Messages sent while Copilot works go in as the next prompt of the

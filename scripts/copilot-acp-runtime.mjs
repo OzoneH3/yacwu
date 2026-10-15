@@ -148,18 +148,40 @@ export function toolUses(call) {
   return [{ toolUseId: id, toolName: title, input: raw }];
 }
 
-/** Model choices from a session/new or session/load result. */
+/**
+ * Model choices from a session/new or session/load result, once each (Copilot
+ * lists "auto" twice), with Copilot's cost multiplier ("15x" premium
+ * requests per prompt), price category and whether the account may use it.
+ */
 export function sessionModels(/** @type {any} */ result) {
   const option = (result?.configOptions ?? []).find((/** @type {any} */ o) => o.category === 'model' || o.id === 'model');
-  if (option) {
-    const flat = (option.options ?? []).flatMap((/** @type {any} */ o) => Array.isArray(o.options) ? o.options : [o]);
-    return { current: option.currentValue ?? null, models: flat.map((/** @type {any} */ o) => ({ id: String(o.value), name: String(o.name ?? o.value), description: String(o.description ?? '') })) };
+  const entries = option
+    ? (option.options ?? []).flatMap((/** @type {any} */ o) => Array.isArray(o.options) ? o.options : [o]).map((/** @type {any} */ o) => ({ id: o.value, name: o.name, description: o.description, meta: o._meta }))
+    : (result?.models?.availableModels ?? []).map((/** @type {any} */ m) => ({ id: m.modelId, name: m.name, description: m.description, meta: m._meta }));
+  /** @type {Map<string, {id: string, name: string, description: string, usage: string | null, price: string | null, enabled: boolean}>} */
+  const models = new Map();
+  for (const entry of entries) {
+    const id = String(entry.id ?? '');
+    if (!id) continue;
+    const previous = models.get(id);
+    const meta = entry.meta ?? {};
+    models.set(id, {
+      id,
+      name: String(previous?.name ?? entry.name ?? id),
+      description: String(previous?.description || entry.description || ''),
+      usage: typeof meta.copilotUsage === 'string' ? meta.copilotUsage : previous?.usage ?? null,
+      price: typeof meta.copilotPriceCategory === 'string' ? meta.copilotPriceCategory : previous?.price ?? null,
+      enabled: meta.copilotEnablement == null ? previous?.enabled ?? true : meta.copilotEnablement === 'enabled'
+    });
   }
-  const listed = result?.models;
-  if (listed?.availableModels) {
-    return { current: listed.currentModelId ?? null, models: listed.availableModels.map((/** @type {any} */ m) => ({ id: String(m.modelId), name: String(m.name ?? m.modelId), description: String(m.description ?? '') })) };
-  }
-  return { current: null, models: [] };
+  return { current: option?.currentValue ?? result?.models?.currentModelId ?? null, models: [...models.values()] };
+}
+
+/** The thinking levels a session offers for its current model, and the preset one. */
+export function sessionEfforts(/** @type {any} */ configOptions) {
+  const option = (configOptions ?? []).find((/** @type {any} */ o) => o.category === 'thought_level');
+  if (!option) return { efforts: [], defaultEffort: null };
+  return { efforts: (option.options ?? []).map((/** @type {any} */ o) => String(o.value)), defaultEffort: option.currentValue ?? null };
 }
 
 /** The command that starts Copilot's ACP server. */
@@ -193,6 +215,8 @@ export class CopilotAcpRuntime {
     this.loading = new Set();
     /** Instructions found in a replayed history, by session. @type {Map<string, {instructions: string | null}>} */
     this.replays = new Map();
+    /** Thinking level each thread's latest turn asked for, as Yacwu named it. @type {Map<string, string>} */
+    this.requestedEffort = new Map();
     /** @type {Map<string, any>} running turns by thread */
     this.turns = new Map();
     /** @type {Map<string, any>} the same turns by Copilot session */
@@ -281,11 +305,12 @@ export class CopilotAcpRuntime {
       return true;
     };
     const model = typeof context.model === 'string' && context.model.startsWith(MODEL_PREFIX) ? context.model.slice(MODEL_PREFIX.length) : null;
-    if (model && model !== 'auto' && !await set((o) => o.category === 'model' || o.id === 'model', model) && state.models?.availableModels?.some((/** @type {any} */ m) => m.modelId === model) && state.models.currentModelId !== model) {
+    if (model && !await set((o) => o.category === 'model' || o.id === 'model', model) && state.models?.availableModels?.some((/** @type {any} */ m) => m.modelId === model) && state.models.currentModelId !== model) {
       await connection.request('session/set_model', { sessionId, modelId: model });
       state.models.currentModelId = model;
     }
-    if (context.effort) await set((o) => o.category === 'thought_level', context.effort);
+    const effort = this.requestedEffort.get(context.threadId) ?? context.effort;
+    if (effort) await set((o) => o.category === 'thought_level', effort);
     await set((o) => o.category === 'mode' || o.id === 'mode', context.planMode ? PLAN_MODE : AGENT_MODE);
     const fullAccess = context.approvalPolicy === 'never' || context.sandboxMode === 'danger-full-access';
     await set((o) => o.id === 'allow_all', fullAccess ? 'on' : 'off');
@@ -496,18 +521,31 @@ export class CopilotAcpRuntime {
 }
 
 /**
- * Copilot's models for the model picker, read from a throwaway session
- * (no prompt is sent). Ids carry MODEL_PREFIX; "auto" lets Copilot choose.
+ * Copilot's models for the model picker, read from a throwaway session (no
+ * prompt is sent): each usable model with its cost and, by selecting it in
+ * that session, the thinking levels it offers.
  * @param {{command?: string[], env?: NodeJS.ProcessEnv, cwd: string, timeoutMs?: number}} options
  */
-export async function discoverCopilotModels({ command, env, cwd, timeoutMs = 20_000 }) {
+export async function discoverCopilotModels({ command, env, cwd, timeoutMs = 60_000 }) {
   const connection = new AcpConnection({ command: command ?? copilotCommand(env), env, onRequest: async () => ({ outcome: { outcome: 'cancelled' } }), onUpdate: () => {} });
   const timer = setTimeout(() => connection.kill(), timeoutMs);
   try {
     const init = await connection.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'yacwu', version: '1' } });
     const created = await connection.request('session/new', { cwd, mcpServers: [] });
+    const { current, models } = sessionModels(created);
+    const modelOption = (created.configOptions ?? []).find((/** @type {any} */ o) => o.category === 'model' || o.id === 'model');
+    const usable = models.filter((model) => model.enabled);
+    const described = [];
+    for (const model of usable) {
+      let efforts = { efforts: /** @type {string[]} */ ([]), defaultEffort: /** @type {string | null} */ (null) };
+      if (modelOption) {
+        const selected = await connection.request('session/set_config_option', { sessionId: created.sessionId, configId: modelOption.id, value: model.id }).catch(() => null);
+        if (selected) efforts = sessionEfforts(selected.configOptions);
+      }
+      described.push({ ...model, ...efforts });
+    }
     if (init?.agentCapabilities?.sessionCapabilities?.close) await connection.request('session/close', { sessionId: created.sessionId }).catch(() => {});
-    return sessionModels(created);
+    return { current, models: described };
   } finally {
     clearTimeout(timer);
     connection.kill();

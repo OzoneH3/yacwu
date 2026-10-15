@@ -16,13 +16,59 @@ import { CopilotAcpRuntime, MODEL_PREFIX, discoverCopilotModels } from './copilo
 import { deleteArchivedThread, isConversationId } from './claude-thread-delete.mjs';
 
 const MODELS_MAX_AGE_MS = 24 * 3600_000;
+/** Bump when the cached model list gains fields, so older caches are re-read. */
+const MODELS_CACHE_VERSION = 2;
 
-/** Model picker entries: Copilot's own choice first, then each model. @param {Array<{id: string, name: string, description: string}>} models */
+/**
+ * @typedef {{id: string, name: string, description?: string, usage?: string | null, price?: string | null,
+ *   enabled?: boolean, efforts?: string[], defaultEffort?: string | null}} CopilotModel
+ */
+
+/** "15x" → "15 premium requests per prompt". @param {string | null | undefined} usage */
+export function usageNote(usage) {
+  const match = /^(\d+(?:\.\d+)?)x$/.exec(usage ?? '');
+  if (!match) return '';
+  const count = Number(match[1]);
+  return count === 0 ? 'No premium requests' : `${match[1]} premium request${count === 1 ? '' : 's'} per prompt`;
+}
+
+/**
+ * Model picker entries, each model once and usable ones only: "auto"
+ * (Copilot picks, the default) first, then Copilot's own order. Names carry
+ * the cost multiplier, so the price is visible where the model is chosen.
+ * @param {CopilotModel[]} models
+ */
 export function pickerModels(models) {
+  const usable = models.filter((m) => m.enabled !== false);
+  const auto = usable.find((m) => m.id === 'auto');
   return [
-    { id: `${MODEL_PREFIX}auto`, sdkModel: `${MODEL_PREFIX}auto`, displayName: 'Copilot · auto', description: 'Copilot picks the model', isDefault: true },
-    ...models.filter((m) => m.id !== 'auto').map((m) => ({ id: `${MODEL_PREFIX}${m.id}`, sdkModel: `${MODEL_PREFIX}${m.id}`, displayName: `Copilot · ${m.name}`, description: m.description, isDefault: false }))
+    { id: `${MODEL_PREFIX}auto`, sdkModel: `${MODEL_PREFIX}auto`, displayName: `Auto · Copilot picks${auto?.usage ? ` · ${auto.usage}` : ''}`, description: 'Copilot chooses a model for each prompt', isDefault: true, efforts: auto?.efforts ?? [], defaultEffort: auto?.defaultEffort ?? null },
+    ...usable.filter((m) => m.id !== 'auto').map((m) => ({
+      id: `${MODEL_PREFIX}${m.id}`,
+      sdkModel: `${MODEL_PREFIX}${m.id}`,
+      displayName: m.usage ? `${m.name} · ${/^0(?:\.0+)?x$/.test(m.usage) ? 'free' : m.usage}` : m.name,
+      description: usageNote(m.usage) || m.description || '',
+      isDefault: false,
+      efforts: m.efforts ?? [],
+      defaultEffort: m.defaultEffort ?? null
+    }))
   ];
+}
+
+const EFFORT_NOTES = /** @type {Record<string, string>} */ ({ none: 'No reasoning', low: 'Minimal reasoning', medium: 'Balanced reasoning and speed', high: 'More thorough reasoning', xhigh: 'Extensive reasoning', max: 'Maximum reasoning' });
+
+/** The app-server model/list answer: each model with the thinking levels it really offers. @param {ReturnType<typeof pickerModels>} entries */
+export function modelListResult(entries) {
+  return {
+    data: entries.map((entry) => ({
+      id: entry.id, model: entry.id, displayName: entry.displayName, description: entry.description,
+      upgrade: null, upgradeInfo: null, availabilityNux: null, hidden: false,
+      supportedReasoningEfforts: entry.efforts.map((effort) => ({ reasoningEffort: effort, description: EFFORT_NOTES[effort] ?? effort })),
+      defaultReasoningEffort: entry.defaultEffort ?? (entry.efforts.includes('medium') ? 'medium' : entry.efforts[0] ?? null),
+      inputModalities: ['text', 'image'], supportsPersonality: false, additionalSpeedTiers: [], isDefault: entry.isDefault
+    })),
+    nextCursor: null
+  };
 }
 
 export function copilotHome(env = process.env) {
@@ -58,14 +104,20 @@ async function main() {
 
   // The adapter re-reads CLAUDE_CODEX_MODELS on every model/list.
   const cachePath = join(home, 'copilot-models.json');
-  const useModels = (/** @type {any[]} */ models) => { process.env.CLAUDE_CODEX_MODELS = JSON.stringify(pickerModels(models)); };
+  /** @type {ReturnType<typeof pickerModels>} */
+  let entries = [];
+  const useModels = (/** @type {CopilotModel[]} */ models) => {
+    entries = pickerModels(models);
+    process.env.CLAUDE_CODEX_MODELS = JSON.stringify(entries.map(({ efforts, defaultEffort, ...entry }) => entry));
+  };
   const refresh = () => discoverCopilotModels({ cwd: home }).then(({ models }) => {
     if (!models.length) return;
     useModels(models);
-    writeFileSync(cachePath, JSON.stringify({ at: Date.now(), models }));
+    writeFileSync(cachePath, JSON.stringify({ version: MODELS_CACHE_VERSION, at: Date.now(), models }));
   }, (error) => console.error(`[yacwu copilot] Model list unavailable: ${error instanceof Error ? error.message : String(error)}`));
   let cached = null;
   try { cached = JSON.parse(readFileSync(cachePath, 'utf8')); } catch { /* none yet */ }
+  if (cached?.version !== MODELS_CACHE_VERSION) cached = null;
   useModels(cached?.models ?? []);
   if (!cached) await refresh();
   else if (Date.now() - cached.at > MODELS_MAX_AGE_MS) void refresh();
@@ -74,7 +126,8 @@ async function main() {
   const [{ SessionStore }, { CodexClaudeAppServer }, { startStdioTransport }] = await Promise.all([load('store.mjs'), load('server.mjs'), load('transports.mjs')]);
   const store = new SessionStore();
   store.recoverStaleInProgressTurns();
-  const server = new CodexClaudeAppServer(store, new CopilotAcpRuntime());
+  const runtime = new CopilotAcpRuntime();
+  const server = new CodexClaudeAppServer(store, runtime);
   const dispatch = server.dispatch;
   server.dispatch = async function (/** @type {any} */ peer, /** @type {string} */ method, /** @type {any} */ params) {
     if (method === 'thread/delete') {
@@ -83,6 +136,10 @@ async function main() {
       this.clearThreadState?.(threadId);
       return result;
     }
+    if (method === 'model/list') return modelListResult(entries);
+    // The adapter only knows Claude's thinking levels and drops Copilot's
+    // "none"; the runtime takes the level as Yacwu asked for it.
+    if (method === 'turn/start' && typeof params?.threadId === 'string' && typeof params?.effort === 'string') runtime.requestedEffort.set(params.threadId, params.effort);
     if (method === 'account/rateLimits/read') {
       // ACP does not report Copilot's premium request allowance.
       const rateLimits = { limitId: 'copilot', limitName: 'GitHub Copilot', primary: null, secondary: null, credits: null, planType: null, rateLimitReachedType: null };
