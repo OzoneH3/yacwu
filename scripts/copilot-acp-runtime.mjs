@@ -211,6 +211,12 @@ export class CopilotAcpRuntime {
     this.starting = null;
     /** Sessions open in the current Copilot process: id → state. @type {Map<string, {options: any[], models: any, instructions: string | null, cwd: string}>} */
     this.open = new Map();
+    /** Current context occupancy, never accumulated into billable usage. @type {Map<string, {used: number, size: number}>} */
+    this.contextUsage = new Map();
+    /** @type {Map<string, string>} Copilot session → Yacwu thread. */
+    this.contextThreads = new Map();
+    /** @type {(threadId: string, usage: {used: number, size: number}) => void} */
+    this.onContextUsage = () => {};
     /** Sessions whose history Copilot is replaying (updates are ignored). */
     this.loading = new Set();
     /** Instructions found in a replayed history, by session. @type {Map<string, {instructions: string | null}>} */
@@ -264,6 +270,7 @@ export class CopilotAcpRuntime {
       await handlers.onEvent({ type: 'notice', level: 'warning', message: 'Copilot cannot fork a conversation; this copy starts a fresh Copilot conversation without the earlier context.' });
       sessionId = null;
     }
+    if (sessionId && !internal) this.contextThreads.set(sessionId, context.threadId);
     const previous = sessionId ? this.open.get(sessionId) : null;
     if (sessionId && (!previous || previous.cwd !== context.cwd)) {
       if (this.bySession.has(sessionId)) throw new Error('Cannot change the folder of a running Copilot session. Stop its task first.');
@@ -284,6 +291,7 @@ export class CopilotAcpRuntime {
     if (!sessionId) {
       const result = await connection.request('session/new', { cwd: context.cwd, mcpServers: [] });
       sessionId = String(result.sessionId);
+      if (!internal) this.contextThreads.set(sessionId, context.threadId);
       this.open.set(sessionId, { options: result?.configOptions ?? [], models: result?.models ?? null, instructions: null, cwd: context.cwd });
       if (!internal) await handlers.onEvent({ type: 'session', claudeSessionId: sessionId });
     }
@@ -403,6 +411,16 @@ export class CopilotAcpRuntime {
 
   /** @param {string} sessionId @param {any} update */
   update(sessionId, update) {
+    if (update.sessionUpdate === 'usage_update') {
+      const threadId = this.contextThreads.get(sessionId);
+      const { used, size } = update;
+      if (threadId && Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(size) && size > 0) {
+        const usage = { used, size };
+        this.contextUsage.set(threadId, usage);
+        this.onContextUsage(threadId, usage);
+      }
+      return;
+    }
     if (this.loading.has(sessionId)) {
       const replay = this.replays.get(sessionId);
       const text = update.sessionUpdate === 'user_message_chunk' ? contentText(update.content) : '';

@@ -13,6 +13,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CopilotAcpRuntime, MODEL_PREFIX, discoverCopilotModels } from './copilot-acp-runtime.mjs';
+import { createCopilotAccountReader } from './copilot-account.mjs';
 import { deleteArchivedThread, isConversationId } from './claude-thread-delete.mjs';
 
 const MODELS_MAX_AGE_MS = 24 * 3600_000;
@@ -123,6 +124,10 @@ async function main() {
   store.recoverStaleInProgressTurns();
   const runtime = new CopilotAcpRuntime();
   const server = new CodexClaudeAppServer(store, runtime);
+  runtime.onContextUsage = (threadId, usage) => server.notifyThread(threadId, {
+    method: 'yacwu/contextUsage/updated', params: { threadId, ...usage }
+  });
+  const readAccount = createCopilotAccountReader();
   const dispatch = server.dispatch;
   server.dispatch = async function (/** @type {any} */ peer, /** @type {string} */ method, /** @type {any} */ params) {
     if (method === 'thread/delete') {
@@ -136,11 +141,16 @@ async function main() {
     // "none"; the runtime takes the level as Yacwu asked for it.
     if (method === 'turn/start' && typeof params?.threadId === 'string' && typeof params?.effort === 'string') runtime.requestedEffort.set(params.threadId, params.effort);
     if (method === 'account/rateLimits/read') {
-      // ACP does not report Copilot's premium request allowance.
-      const rateLimits = { limitId: 'copilot', limitName: 'GitHub Copilot', primary: null, secondary: null, credits: null, planType: null, rateLimitReachedType: null };
+      // ACP does not report account usage; gh can optionally supply explicit credits.
+      const rateLimits = { limitId: 'copilot', limitName: 'GitHub Copilot', primary: null, secondary: null, credits: null, planType: null, rateLimitReachedType: null, copilotUsage: await readAccount() };
       return { rateLimits, rateLimitsByLimitId: { copilot: rateLimits } };
     }
-    return dispatch.call(this, peer, method, params);
+    const result = await dispatch.call(this, peer, method, params);
+    if (method === 'thread/read' || method === 'thread/resume') {
+      const usage = runtime.contextUsage.get(params?.threadId);
+      if (usage) this.notify(peer, { method: 'yacwu/contextUsage/updated', params: { threadId: params.threadId, ...usage } });
+    }
+    return result;
   };
   let stopping = false;
   const shutdown = async () => {

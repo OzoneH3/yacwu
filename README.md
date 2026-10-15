@@ -30,6 +30,8 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Copilot shows live context occupancy and optional GitHub CLI account credits, with
+  the account name and any reported finite allowance; task estimates stay separate.
 - Copilot hides less capable models only when another costs no more across the
   published credit rates and context tiers; unpriced choices remain available.
 - Copilot folder changes reopen the same conversation; reopen failures retain its
@@ -390,10 +392,18 @@ models sort by ordinary input credit price, then capability. These prices stay
 separate from allowance cost learning. The list is read once a day from an
 empty session, without a prompt. Sessions keep their Copilot conversation across
 restarts. Commands, edits, reads, plans and token counts show as in other
-sessions. Full-access sessions turn on Copilot's allow-all; others ask before
+sessions. Live ACP context occupancy updates the session token meter, including
+compaction, without being counted as task spending. If `gh` is signed in on the
+backend host, Yacwu optionally reads explicit credit usage from GitHub's internal
+Copilot account endpoint, cached for five minutes. It labels the GitHub CLI login
+(which may differ from the Copilot CLI login), shows any finite allowance returned,
+and otherwise says no cap was reported; organization budgets may still apply.
+Authentication failures, unavailable fields and legacy request counts display no
+account credit reading. This internal endpoint can change. Full-access sessions
+turn on Copilot's allow-all; others ask before
 each tool. Messages sent while Copilot works go in as the next prompt of the
 same task, since ACP cannot add input to a running prompt. Not available:
-Copilot's premium-request allowance (ACP does not report it), forks with the
+an account allowance through ACP alone, forks with the
 earlier conversation, and Yacwu's model ratings. Session records live in
 `$XDG_STATE_HOME/yacwu/copilot-adapter`; deleting an archived session also
 removes Copilot's copy. `YACWU_COPILOT_CLI` selects another `copilot` binary.

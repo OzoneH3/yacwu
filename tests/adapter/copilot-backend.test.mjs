@@ -78,9 +78,16 @@ test('Copilot sessions run, resume after a restart, and stop through the ACP run
 	const cwd = join(root, 'project');
 	mkdirSync(cwd);
 	const log = join(root, 'acp.jsonl');
-	const env = { HOME: root, XDG_STATE_HOME: join(root, 'state'), CODEX_HOME: join(root, 'codex'), COPILOT_HOME: join(root, 'copilot'), YACWU_COPILOT_CLI: `${process.execPath} ${fakeAgent}`, FAKE_ACP_LOG: log, FAKE_ACP_HISTORY: join(root, 'history.json') };
+ const bin = join(root, 'bin');
+ mkdirSync(bin);
+ writeFileSync(join(bin, 'gh'), `#!${process.execPath}
+process.stdout.write(JSON.stringify({login:'test-account',quota_reset_date:'2026-11-01',quota_snapshots:{premium_interactions:{token_based_billing:true,credits_used:1913,unlimited:true,entitlement:0}}}));
+`, { mode: 0o755 });
+	const env = { PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_STATE_HOME: join(root, 'state'), CODEX_HOME: join(root, 'codex'), COPILOT_HOME: join(root, 'copilot'), YACWU_COPILOT_CLI: `${process.execPath} ${fakeAgent}`, FAKE_ACP_LOG: log, FAKE_ACP_HISTORY: join(root, 'history.json') };
 	let server = await connect(env);
 	try {
+		const quota = await server.request('account/rateLimits/read', {});
+		assert.deepEqual(quota.rateLimits.copilotUsage, { login: 'test-account', used: 1913, max: null, unlimited: true, resetAt: '2026-11-01' });
 		const { data: models } = await server.request('model/list', {});
 		// Each model once, usable ones only, priced, with its own thinking levels.
 		assert.deepEqual(models.map((m) => [m.id, m.displayName, m.description, m.supportedReasoningEfforts.map((e) => e.reasoningEffort).join(','), m.defaultReasoningEffort]), [
@@ -100,6 +107,10 @@ test('Copilot sessions run, resume after a restart, and stop through the ACP run
 		assert.ok(first.notes.some((m) => m.method === 'turn/plan/updated' && m.params.plan[0]?.step === 'Say hi'), 'Copilot plans become the turn plan');
 		assert.ok(first.notes.some((m) => m.method === 'thread/tokenUsage/updated' && m.params.tokenUsage.last.totalTokens > 0), 'token usage is reported');
 
+  assert.ok(first.notes.some(m => m.method === 'yacwu/contextUsage/updated' && m.params.used === 53000 && m.params.size === 200000), 'live context is forwarded without token cost fields');
+  const beforeRead = server.notes.length;
+  await server.request('thread/read', { threadId: thread.id });
+  assert.ok(server.notes.slice(beforeRead).some(m => m.method === 'yacwu/contextUsage/updated' && m.params.used === 53000), 'context is replayed when opening a thread');
 		let sent = logOf(log);
 		const sessions = sent.filter((m) => m.method === 'session/new');
 		const prompts = () => logOf(log).filter((m) => m.method === 'session/prompt');

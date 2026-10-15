@@ -1,8 +1,9 @@
 <script lang="ts">
+ import { copilotAccountLabel, copilotAccountTitle, type CopilotAccountUsage } from './copilot-account';
  import { onMount } from 'svelte';
  import type { UsageTask } from './usage-analysis';
  import { copilotTaskCredits, creditLabel, creditTitle, COPILOT_RATE_CARD_DATE } from './copilot-credits';
- let { tasks, host, sessionId, onclose, onrefresh }: { tasks: UsageTask[]; host: string; sessionId: string | null; onclose: () => void; onrefresh: () => Promise<void> } = $props();
+ let { account, tasks, host, sessionId, onclose, onrefresh }: { account: CopilotAccountUsage | null; tasks: UsageTask[]; host: string; sessionId: string | null; onclose: () => void; onrefresh: () => Promise<void> } = $props();
  let dialog = $state<HTMLDialogElement>();
  let onlySession = $state(true);
  let loading = $state(false);
@@ -13,7 +14,7 @@
 
 <dialog bind:this={dialog} aria-labelledby="copilot-credit-title" oncancel={onclose} onclick={event => { if (event.target === dialog) onclose(); }}>
  <header><h2 id="copilot-credit-title">Copilot task credits</h2><button type="button" onclick={refresh} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button><button type="button" onclick={onclose} aria-label="Close credit history">×</button></header>
- <p>Account allowance unavailable. These task estimates are not your account balance.</p>
+ <p title={copilotAccountTitle(account)}>{copilotAccountLabel(account)}. These task estimates are not your account balance.</p>
  <p class="meta">Rates dated {COPILOT_RATE_CARD_DATE}. Cache-write splits and per-request context tiers are not available in current recordings, so estimates may be ranges. Recorded descendant work is included. Incomplete rows show known subtotals.</p>
  <label><input type="checkbox" bind:checked={onlySession} /> This session</label>
  <div class="table-wrap"><table>

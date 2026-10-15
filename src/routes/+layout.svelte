@@ -65,6 +65,7 @@
 	import FolderBrowser from '$lib/FolderBrowser.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
 	import CopilotCreditHistory from '$lib/CopilotCreditHistory.svelte';
+	import { copilotAccountUsage, copilotAccountLabel, copilotAccountTitle, type CopilotAccountUsage } from '$lib/copilot-account';
 	import { copilotTaskCredits, creditLabel, creditTitle } from '$lib/copilot-credits';
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { analyzeUsage, RATE_LABEL } from '$lib/usage-analysis';
@@ -100,6 +101,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	}
 
 	interface ThreadState {
+		liveContextReported?: boolean;
 		tokenStatistics?: TokenStatistics;
 		order: string[];
 		byId: Record<string, ThreadItem>;
@@ -172,6 +174,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	}
 
 	interface AccountUsage {
+		copilot?: CopilotAccountUsage | null;
 		fiveHour: RateLimitWindow | null;
 	sevenDay: RateLimitWindow | null;
 	}
@@ -1973,14 +1976,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				}
 				break;
 			}
+			case 'yacwu/contextUsage/updated': {
+				if (tid && Number.isSafeInteger(p.used) && p.used >= 0 && Number.isSafeInteger(p.size) && p.size > 0) {
+					const t = ensureThread(tid);
+					t.tokens = p.used;
+					t.contextWindow = p.size;
+					t.liveContextReported = true;
+				}
+				break;
+			}
 			case 'thread/tokenUsage/updated': {
 				if (tid) {
 					const t = ensureThread(tid);
 					const statistics = reportedTokenStatistics(p.tokenUsage);
 					if (statistics) t.tokenStatistics = statistics;
 					const tokens = currentContextTokens(p.tokenUsage);
-					if (tokens !== null) t.tokens = tokens;
-					t.contextWindow = p.tokenUsage?.modelContextWindow ?? t.contextWindow;
+					if (tokens !== null && !t.liveContextReported) t.tokens = tokens;
+					if (!t.liveContextReported) t.contextWindow = p.tokenUsage?.modelContextWindow ?? t.contextWindow;
 				}
 				break;
 			}
@@ -3146,6 +3158,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					typeof (value as RateLimitWindow).windowDurationMins === 'number'
 			);
 			accountUsageByHost[key] = {
+				copilot: copilotAccountUsage(data.rateLimits?.copilotUsage),
 				fiveHour: windows.find((window) => window.windowDurationMins === 300) ?? null,
 				sevenDay: windows.find((window) => window.windowDurationMins === 10_080) ?? null
 			};
@@ -6249,8 +6262,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if projectRuleStatus[activeId] === 'outdated'}
 						<span class="fact rules-outdated" title="This session started with an older version of the project rules. Rule changes apply to new sessions; see Session details.">Rules outdated</span>
 					{/if}
-					{#if active?.tokens}
-						<span class="fact tokens" title={`${active.tokens.toLocaleString()} tokens used`}>{fmtTokens(active.tokens)} tok</span>
+					{#if active?.tokens != null}
+						<span class="fact tokens" title={active.liveContextReported ? `${active.tokens.toLocaleString()} / ${active.contextWindow?.toLocaleString()} tokens in context` : `${active.tokens.toLocaleString()} tokens used`}>{fmtTokens(active.tokens)} tok</span>
 					{/if}
 				</div>
 				<div class="session-state">
@@ -6333,7 +6346,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<p>{sessionContextLine}</p>
 						<div class="session-bar-right">
 						{#if activeCopilot}
-							<span class="usage-window" title="The current Copilot connection does not provide a verified account credit allowance.">Account allowance unavailable</span>
+							<span class="usage-window" title={copilotAccountTitle(activeAccountUsage?.copilot)}>{copilotAccountLabel(activeAccountUsage?.copilot)}</span>
 							<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true}>Task credits</button>
 						{/if}
 						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
@@ -7310,7 +7323,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 {#if usageHistoryOpen && activeId}
 	{#key `${activeHost}:${activeId}`}
 		{#if activeCopilot}
-			<CopilotCreditHistory tasks={activeUsageAnalysis?.tasks ?? []} host={activeHost} sessionId={activeId} onclose={() => usageHistoryOpen = false} onrefresh={() => refreshTaskUsage(activeHost)} />
+			<CopilotCreditHistory account={activeAccountUsage?.copilot ?? null} tasks={activeUsageAnalysis?.tasks ?? []} host={activeHost} sessionId={activeId} onclose={() => usageHistoryOpen = false} onrefresh={async () => { await Promise.all([refreshTaskUsage(activeHost), loadAccountUsage(activeHost, true)]); }} />
 		{:else}
 		<UsageHistory host={activeHost} sessionId={activeId} models={activeModels} modelNames={usageModelNamesByHost[activeHost] ?? {}} selectedModel={activeConfig?.model} selectedEffort={activeConfig?.effort} onclose={() => usageHistoryOpen = false} />
 		{/if}

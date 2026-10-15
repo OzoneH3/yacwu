@@ -83,6 +83,7 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
 			return send({ id, result: { stopReason: 'end_turn' } });
 		}
 		if (text.includes('tool')) {
+			update(sessionId, { sessionUpdate: 'usage_update', used: 53000, size: 200000 });
 			update(sessionId, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Thinking about it' } });
 			update(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'call_1', title: 'Say hi', kind: 'execute', status: 'pending', rawInput: { command: 'echo hi', description: 'Say hi' } });
 			const answer = await ask('session/request_permission', { sessionId, toolCall: { toolCallId: 'call_1', title: 'Say hi', kind: 'execute', rawInput: { command: 'echo hi' } }, options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow once' }, { optionId: 'reject_once', kind: 'reject_once', name: 'Deny' }] });
