@@ -304,10 +304,14 @@ export class CopilotAcpRuntime {
       state.options = result?.configOptions ?? state.options.map((/** @type {any} */ o) => o === option ? { ...o, currentValue: value } : o);
       return true;
     };
-    const model = typeof context.model === 'string' && context.model.startsWith(MODEL_PREFIX) ? context.model.slice(MODEL_PREFIX.length) : null;
-    if (model && !await set((o) => o.category === 'model' || o.id === 'model', model) && state.models?.availableModels?.some((/** @type {any} */ m) => m.modelId === model) && state.models.currentModelId !== model) {
-      await connection.request('session/set_model', { sessionId, modelId: model });
-      state.models.currentModelId = model;
+    const requestedModel = typeof context.model === 'string' && context.model.startsWith(MODEL_PREFIX) ? context.model.slice(MODEL_PREFIX.length) : null;
+    const model = !requestedModel || /^(?:auto|default)$/i.test(requestedModel) ? 'gpt-6-luna' : requestedModel;
+    if (!await set((o) => o.category === 'model' || o.id === 'model', model)) {
+      if (!state.models?.availableModels?.some((/** @type {any} */ m) => m.modelId === model)) throw new Error(`Copilot model is unavailable: ${model}`);
+      if (state.models.currentModelId !== model) {
+        await connection.request('session/set_model', { sessionId, modelId: model });
+        state.models.currentModelId = model;
+      }
     }
     const effort = this.requestedEffort.get(context.threadId) ?? context.effort;
     if (effort) await set((o) => o.category === 'thought_level', effort);

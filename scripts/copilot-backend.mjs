@@ -33,26 +33,21 @@ export function usageNote(usage) {
 }
 
 /**
- * Model picker entries, each model once and usable ones only: "auto"
- * (Copilot picks, the default) first, then Copilot's own order. Names carry
- * the cost multiplier, so the price is visible where the model is chosen.
+ * Explicit usable models, each once, with GPT-6 Luna as the default.
+ * Names carry Copilot's fixed multiplier, not learned allowance costs.
  * @param {CopilotModel[]} models
  */
 export function pickerModels(models) {
   const usable = models.filter((m) => m.enabled !== false);
-  const auto = usable.find((m) => m.id === 'auto');
-  return [
-    { id: `${MODEL_PREFIX}auto`, sdkModel: `${MODEL_PREFIX}auto`, displayName: `Auto · Copilot picks${auto?.usage ? ` · ${auto.usage}` : ''}`, description: 'Copilot chooses a model for each prompt', isDefault: true, efforts: auto?.efforts ?? [], defaultEffort: auto?.defaultEffort ?? null },
-    ...usable.filter((m) => m.id !== 'auto').map((m) => ({
+  return usable.filter((m) => !/^(?:auto|default)$/i.test(m.id)).map((m) => ({
       id: `${MODEL_PREFIX}${m.id}`,
       sdkModel: `${MODEL_PREFIX}${m.id}`,
       displayName: m.usage ? `${m.name} · ${/^0(?:\.0+)?x$/.test(m.usage) ? 'free' : m.usage}` : m.name,
       description: usageNote(m.usage) || m.description || '',
-      isDefault: false,
+      isDefault: m.id === 'gpt-6-luna',
       efforts: m.efforts ?? [],
       defaultEffort: m.defaultEffort ?? null
-    }))
-  ];
+    }));
 }
 
 const EFFORT_NOTES = /** @type {Record<string, string>} */ ({ none: 'No reasoning', low: 'Minimal reasoning', medium: 'Balanced reasoning and speed', high: 'More thorough reasoning', xhigh: 'Extensive reasoning', max: 'Maximum reasoning' });
@@ -97,8 +92,8 @@ async function main() {
   const stateRoot = process.env.XDG_STATE_HOME || join(homedir(), '.local/state');
   process.env.CLAUDE_CODEX_HOME ||= join(stateRoot, 'yacwu/copilot-adapter');
   process.env.CLAUDE_CODEX_DISABLE_CODEX_PROXY = '1';
-  process.env.CLAUDE_CODEX_DEFAULT_MODEL ||= `${MODEL_PREFIX}auto`;
-  process.env.CLAUDE_CODEX_SUMMARY_MODEL ||= `${MODEL_PREFIX}auto`;
+  process.env.CLAUDE_CODEX_DEFAULT_MODEL ||= `${MODEL_PREFIX}gpt-6-luna`;
+  process.env.CLAUDE_CODEX_SUMMARY_MODEL ||= `${MODEL_PREFIX}gpt-6-luna`;
   const home = process.env.CLAUDE_CODEX_HOME;
   mkdirSync(home, { recursive: true });
 

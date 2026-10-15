@@ -107,19 +107,19 @@ test('usage model names merge aliases by display name only', () => {
 	])).toEqual({ default: 'Claude Opus 5.5', opus: 'Claude Opus 5.5', haiku: 'Claude Haiku 4.5', 'claude-haiku-5-5': 'Claude Haiku 5.5' });
 });
 
-test('Copilot catalogs keep every model, in Copilot order, without Claude or Codex ratings', () => {
-	const copilot = [
-		{ id: 'copilot/auto', displayName: 'Copilot · auto' },
-		{ id: 'copilot/claude-sonnet-4.5', displayName: 'Copilot · Claude Sonnet 4.5' },
-		{ id: 'copilot/claude-opus-5-5', displayName: 'Copilot · Claude Opus 5.5' },
-		{ id: 'copilot/gpt-5.6-sol', displayName: 'Copilot · GPT-5.6 Sol' }
-	];
-	expect(isClaudeModelCatalog(copilot)).toBe(false);
-	expect(copilot.map(modelDisplayProfile)).toEqual([null, null, null, null]);
-	expect(filterAndSortModelChoices(copilot)).toEqual(copilot);
+test('Copilot hides Auto and dominated GPT and Claude models within their own makers', () => {
+ const copilot = [
+  { id: 'copilot/auto', displayName: 'Auto · Copilot picks' },
+  ...['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-sol', 'gpt-6-sol', 'claude-sonnet-5.5', 'claude-sonnet-4.5', 'claude-opus-5.5', 'grok-4.7'].map(id => ({ id: `copilot/${id}`, displayName: id }))
+ ];
+ expect(isClaudeModelCatalog(copilot)).toBe(false);
+ expect(copilot.map(modelDisplayProfile)).toEqual(copilot.map(() => null));
+ expect(filterAndSortModelChoices(copilot).map(choice => choice.id)).toEqual([
+  'copilot/gpt-6-luna', 'copilot/gpt-6.1-sol', 'copilot/claude-sonnet-5.5', 'copilot/claude-opus-5.5', 'copilot/grok-4.7'
+ ]);
 });
 
-test('Copilot models are grouped by maker after auto; other catalogs stay one list', () => {
+test('Copilot models are grouped by maker without auto; other catalogs stay one list', () => {
 	const copilot = [
 		{ id: 'copilot/auto', displayName: 'Auto · Copilot picks' },
 		{ id: 'copilot/claude-opus-5.5', displayName: 'Claude Opus 5.5 · 15x' },
@@ -130,6 +130,6 @@ test('Copilot models are grouped by maker after auto; other catalogs stay one li
 		{ id: 'copilot/mai-code-1.1-flash', displayName: 'MAI-Code-1.1-Flash · 1x' },
 		{ id: 'copilot/someone-new', displayName: 'Someone New · 1x' }
 	];
-	expect(modelPickerGroups(copilot).map((group) => [group.label, group.choices.length])).toEqual([[null, 1], ['Claude', 2], ['OpenAI', 1], ['Google', 1], ['xAI', 1], ['Microsoft', 1], ['Other', 1]]);
+	expect(modelPickerGroups(copilot).map((group) => [group.label, group.choices.length])).toEqual([['Claude', 2], ['OpenAI', 1], ['Google', 1], ['xAI', 1], ['Microsoft', 1], ['Other', 1]]);
 	expect(modelPickerGroups(models).map((group) => group.label)).toEqual([null]);
 });

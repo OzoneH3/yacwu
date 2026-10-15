@@ -84,7 +84,6 @@ test('Copilot sessions run, resume after a restart, and stop through the ACP run
 		const { data: models } = await server.request('model/list', {});
 		// Each model once, usable ones only, priced, with its own thinking levels.
 		assert.deepEqual(models.map((m) => [m.id, m.displayName, m.description, m.supportedReasoningEfforts.map((e) => e.reasoningEffort).join(','), m.defaultReasoningEffort]), [
-			['copilot/auto', 'Auto · Copilot picks · 1x', 'Copilot chooses a model for each prompt', '', null],
 			['copilot/gpt-5', 'GPT-5 · 1x', '1 premium request per prompt', 'none,low,medium,high', 'medium'],
 			['copilot/claude-sonnet-4.5', 'Claude Sonnet 4.5 · 15x', '15 premium requests per prompt', 'low,medium,high,xhigh,max', 'high']
 		]);
@@ -154,14 +153,14 @@ test('without full access, Copilot asks Yacwu before running a tool', { skip, ti
 	const log = join(root, 'acp.jsonl');
 	const server = await connect({ HOME: root, XDG_STATE_HOME: join(root, 'state'), CODEX_HOME: join(root, 'codex'), YACWU_COPILOT_CLI: `${process.execPath} ${fakeAgent}`, FAKE_ACP_LOG: log });
 	try {
-		const { thread } = await server.request('thread/start', { cwd: root, model: 'copilot/auto', approvalPolicy: 'on-request', sandbox: 'workspace-write' });
+		const { thread } = await server.request('thread/start', { cwd: root, model: 'copilot/gpt-5', approvalPolicy: 'on-request', sandbox: 'workspace-write' });
 		const result = await server.turn(thread.id, 'run a tool');
 		assert.equal(result.completed.params.turn.status, 'completed');
 		assert.ok(server.notes.some((m) => m.id != null && /approval/i.test(m.method)), 'Yacwu was asked to approve the command');
 		assert.deepEqual(logOf(log).find((m) => m.permissionAnswer)?.permissionAnswer, { outcome: { outcome: 'selected', optionId: 'allow_once' } });
-		// Copilot opens sessions on the account's default model, so auto is selected explicitly.
+		// Select the explicit model rather than Copilot's account default.
 		const session = logOf(log).find((m) => m.method === 'session/prompt').params.sessionId;
-		assert.deepEqual(logOf(log).filter((m) => m.method === 'session/set_config_option' && m.params.sessionId === session && m.params.configId === 'model').map((m) => m.params.value), ['auto']);
+		assert.deepEqual(logOf(log).filter((m) => m.method === 'session/set_config_option' && m.params.sessionId === session && m.params.configId === 'model').map((m) => m.params.value), ['gpt-5']);
 	} finally {
 		await server.stop();
 		rmSync(root, { recursive: true, force: true });
@@ -194,7 +193,7 @@ test('the real Copilot CLI runs a turn with a shell command', { skip: skip || (c
 	const server = await connect({ HOME: root, XDG_STATE_HOME: join(root, 'state'), CODEX_HOME: join(root, 'codex'), COPILOT_HOME: join(root, 'copilot'), YACWU_COPILOT_CLI: cli, COPILOT_OFFLINE: 'true', COPILOT_AUTO_UPDATE: 'false', COPILOT_PROVIDER_BASE_URL: `http://127.0.0.1:${provider.address().port}/v1`, COPILOT_PROVIDER_API_KEY: 'fake-provider-key-123', COPILOT_MODEL: 'claude-sonnet-4.5' });
 	try {
 		writeFileSync(join(root, 'README'), 'x\n');
-		const { thread } = await server.request('thread/start', { cwd: root, model: 'copilot/auto', approvalPolicy: 'never', sandbox: 'danger-full-access' });
+		const { thread } = await server.request('thread/start', { cwd: root, model: 'copilot/gpt-5', approvalPolicy: 'never', sandbox: 'danger-full-access' });
 		const result = await server.turn(thread.id, 'run the echo');
 		assert.equal(result.completed.params.turn.status, 'completed');
 		const command = result.items.find((item) => item.type === 'commandExecution');

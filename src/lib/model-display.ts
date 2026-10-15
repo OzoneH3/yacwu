@@ -11,8 +11,8 @@ export interface ModelChoiceSummary {
 	displayName: string;
 }
 
-/** Copilot's models (ids "copilot/…") are billed by premium requests, so
- * none of the Claude or Codex ratings and rules below apply to them. */
+/** Copilot uses fixed pricing: never display subscription estimates or learn
+ * allowance costs for its models. Static picker filtering is applied separately. */
 export function isCopilotModel(choice: ModelChoiceSummary): boolean {
 	return choice.id.startsWith('copilot/');
 }
@@ -26,14 +26,15 @@ const copilotMakers: Array<[RegExp, string]> = [
 ];
 
 /**
- * Picker sections: Copilot's models by maker (its "auto" first, unlabelled);
+ * Picker sections: Copilot's explicit models by maker;
  * any other catalog is one unlabelled section, as listed.
  */
 export function modelPickerGroups<T extends ModelChoiceSummary>(choices: T[]): Array<{ label: string | null; choices: T[] }> {
 	const groups: Array<{ label: string | null; choices: T[] }> = [];
 	for (const choice of choices) {
 		const id = choice.id.replace(/^copilot\//, '');
-		const label = !isCopilotModel(choice) || id === 'auto' ? null : copilotMakers.find(([pattern]) => pattern.test(id))?.[1] ?? 'Other';
+		if (isCopilotModel(choice) && /^(?:auto|default)$/i.test(id)) continue;
+		const label = !isCopilotModel(choice) ? null : copilotMakers.find(([pattern]) => pattern.test(id))?.[1] ?? 'Other';
 		const group = groups.find((entry) => entry.label === label);
 		if (group) group.choices.push(choice);
 		else groups.push({ label, choices: [choice] });
@@ -108,6 +109,16 @@ export function modelDisplayProfile(choice: ModelChoiceSummary | null): ModelDis
 
 /** Hide known dominated choices and rank the remaining tradeoffs, best first. */
 export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices: T[]): T[] {
+	if (choices.some(isCopilotModel)) {
+		// Reuse static rankings within each maker. Keep original Copilot entries
+		// and prices; these profiles never enter cost learning or rated displays.
+		const copilot = modelPickerGroups(choices.filter(isCopilotModel)).flatMap(group => {
+			const originals = new Map(group.choices.map(choice => [choice.id.slice('copilot/'.length), choice]));
+			const ranked = filterAndSortModelChoices(group.choices.map(choice => ({ ...choice, id: choice.id.slice('copilot/'.length) })));
+			return ranked.map(choice => originals.get(choice.id)!);
+		});
+		return [...copilot, ...filterAndSortModelChoices(choices.filter(choice => !isCopilotModel(choice)))];
+	}
 	// Claude adapters can advertise a Codex proxy too. Keep their picker
 	// provider-specific rather than offering unsafe cross-provider switches.
 	const hasClaudeModels = isClaudeModelCatalog(choices);

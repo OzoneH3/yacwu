@@ -2474,7 +2474,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				return (await res.json()) as { profile?: string | null };
 			})
 		]);
-		const model = modelResult.status === 'fulfilled' ? modelResult.value : null;
+		let model = modelResult.status === 'fulfilled' ? modelResult.value : null;
+		if (model && /^copilot\/(?:auto|default)$/i.test(model.model) && model.models.some(choice => choice.id === 'copilot/gpt-6-luna')) {
+			const migrated = await postCmd(id, 'model', { model: 'copilot/gpt-6-luna' });
+			if (migrated.ok) model = migrated.data as ModelState;
+		}
 		if (model) rememberEfforts(id, model);
 		const profile = profileResult.status === 'fulfilled' ? profileResult.value.profile ?? null : previous?.profile ?? null;
 		if (!model && !previous) return;
