@@ -133,3 +133,15 @@ test('Copilot models are grouped by maker without auto; other catalogs stay one 
 	expect(modelPickerGroups(copilot).map((group) => [group.label, group.choices.length])).toEqual([['Claude', 2], ['OpenAI', 1], ['Google', 1], ['xAI', 1], ['Microsoft', 1], ['Other', 1]]);
 	expect(modelPickerGroups(models).map((group) => group.label)).toEqual([null]);
 });
+
+test('Copilot prefixes are removed from labels while IDs, fixed prices and filtering are preserved', () => {
+ const choices = [
+  { id: 'copilot/gpt-6-luna', displayName: 'Copilot · GPT-6 Luna · 0.33x' },
+  { id: 'copilot/gpt-5.6-luna', displayName: 'Copilot · GPT-5.6 Luna · 0.33x' },
+  { id: 'copilot/claude-sonnet-5.5', displayName: 'Copilot · Claude Sonnet 5.5 · 1x' },
+  { id: 'copilot/claude-sonnet-5', displayName: 'Copilot · Claude Sonnet 5 · 1x' }
+ ];
+ expect(filterAndSortModelChoices(choices)).toEqual([choices[0], choices[2]].map(choice => ({ ...choice, displayName: choice.displayName.replace(/^Copilot · /, '') })));
+ expect(choices[0].displayName).toBe('Copilot · GPT-6 Luna · 0.33x');
+ expect(filterAndSortModelChoices(choices).map(modelDisplayProfile)).toEqual([null, null]);
+});

@@ -17,6 +17,12 @@ export function isCopilotModel(choice: ModelChoiceSummary): boolean {
 	return choice.id.startsWith('copilot/');
 }
 
+/** Strip the redundant provider label without changing backend routing IDs or prices. */
+export function normalizeModelChoice<T extends ModelChoiceSummary>(choice: T): T {
+	if (!isCopilotModel(choice)) return choice;
+	return { ...choice, displayName: choice.displayName.replace(/^copilot(?:\s*[·:/|—–-]\s*|\s+)/i, '').trim() };
+}
+
 const copilotMakers: Array<[RegExp, string]> = [
 	[/^claude-/, 'Claude'],
 	[/^(?:gpt-|o\d)/, 'OpenAI'],
@@ -109,6 +115,7 @@ export function modelDisplayProfile(choice: ModelChoiceSummary | null): ModelDis
 
 /** Hide known dominated choices and rank the remaining tradeoffs, best first. */
 export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices: T[]): T[] {
+	choices = choices.map(normalizeModelChoice);
 	if (choices.some(isCopilotModel)) {
 		// Reuse static rankings within each maker. Keep original Copilot entries
 		// and prices; these profiles never enter cost learning or rated displays.

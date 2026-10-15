@@ -84,7 +84,7 @@ import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskPr
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, loadArchiveCatalog } from '$lib/archive';
 import { backendProviders, providerLabel, sessionTarget } from '$lib/session-target';
-import { filterAndSortModelChoices, isCopilotModel, modelDisplayProfile, modelPickerGroups, isClaudeModelCatalog, claudeModelIdentity, usageModelNames } from '$lib/model-display';
+import { normalizeModelChoice, filterAndSortModelChoices, isCopilotModel, modelDisplayProfile, modelPickerGroups, isClaudeModelCatalog, claudeModelIdentity, usageModelNames } from '$lib/model-display';
 import { createMessageTimestampStore } from '$lib/message-timestamps';
 
 	let { children } = $props();
@@ -2491,7 +2491,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	/** Cache the catalog and reasoning efforts the session's current model accepts. */
 	function rememberEfforts(id: string, settings: ModelState) {
-		sessionModels[id] = settings.models;
+		sessionModels[id] = settings.models.map(normalizeModelChoice);
 		// Learn which ids name the same model; re-analyze usage once new names arrive.
 		const host = sessionHost(id);
 		const names = usageModelNames(settings.models ?? []);

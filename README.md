@@ -30,6 +30,8 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Copilot model labels omit the redundant provider prefix while preserving fixed prices.
+
 - New Codex and Copilot sessions default to explicit GPT-6 Luna; Copilot omits Auto
   and hides dominated GPT/Claude choices without adding cost learning.
 
