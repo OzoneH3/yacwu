@@ -14,6 +14,7 @@ test('Copilot models are grouped by maker with their own thinking levels', async
 		{ id: 'copilot/gpt-6-sol', displayName: 'GPT-6 Sol · 1x', efforts: ['low', 'medium'], defaultEffort: 'medium' },
 		{ id: 'copilot/claude-sonnet-5.5', displayName: 'Claude Sonnet 5.5 · 1x', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
 		{ id: 'copilot/gpt-6.1-sol', displayName: 'GPT-6.1 Sol · 1x', efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' },
+		...['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5-mini'].map(id => ({ id: `copilot/${id}`, displayName: id, efforts: ['low', 'medium'], defaultEffort: 'medium' })),
 		{ id: 'copilot/grok-4.7', displayName: 'Grok 4.7 · 1x', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high' }
 	].map(choice => ({ ...choice, displayName: `Copilot · ${choice.displayName}` }));
 	let settings = { model: 'copilot/auto', effort: 'medium', models };

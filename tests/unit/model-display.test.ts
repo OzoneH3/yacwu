@@ -145,3 +145,14 @@ test('Copilot prefixes are removed from labels while IDs, fixed prices and filte
  expect(choices[0].displayName).toBe('Copilot · GPT-6 Luna · 0.33x');
  expect(filterAndSortModelChoices(choices).map(modelDisplayProfile)).toEqual([null, null]);
 });
+
+test('legacy bare GPT names are hidden when a current GPT replacement is offered, without inventing ratings', () => {
+ const legacy = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5-mini'].map(id => ({ id, displayName: id }));
+ const current = { id: 'gpt-6-luna', displayName: 'GPT-6 Luna' };
+ const future = { id: 'gpt-6.2-custom', displayName: 'Future custom model' };
+ expect(filterAndSortModelChoices([...legacy, current, future])).toEqual([current, future]);
+ expect(filterAndSortModelChoices(legacy)).toEqual(legacy);
+ expect(legacy.map(modelDisplayProfile)).toEqual(legacy.map(() => null));
+ const copilot = [...legacy, current, future].map(choice => ({ ...choice, id: `copilot/${choice.id}` }));
+ expect(filterAndSortModelChoices(copilot).map(choice => choice.id)).toEqual(['copilot/gpt-6-luna', 'copilot/gpt-6.2-custom']);
+});

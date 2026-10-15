@@ -30,6 +30,8 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Legacy GPT names such as bare GPT-5.5 are hidden when a current GPT-6 option is offered.
+
 - Copilot model labels omit the redundant provider prefix while preserving fixed prices.
 
 - New Codex and Copilot sessions default to explicit GPT-6 Luna; Copilot omits Auto

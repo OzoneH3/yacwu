@@ -84,6 +84,11 @@ const profiles: Array<[RegExp, ModelDisplayProfile]> = [
 	[/gpt 6(?:\.0)? astra/, { capability: 100, efficiency: 'Moderate/low', valueRating: 1 }]
 ];
 
+// Explicit picker policy for old catalog IDs without Terra/Sol/Luna suffixes.
+// Keep these available on older backends that offer no current replacement.
+// This does not assign capability scores or change Copilot's fixed pricing.
+const legacyGptModelIds = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5-mini']);
+
 const efficiencyRank: Record<string, number> = {
 	Exceptional: 5,
 	Excellent: 4,
@@ -133,8 +138,10 @@ export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices:
 		? choices.filter((choice) => !/^(?:gpt|o[1-9])(?:[-\s.]|$)/i.test(choice.id)
 			&& !/^gpt(?:[-\s.]|$)/i.test(choice.displayName))
 		: choices;
+	const hasCurrentGpt = providerChoices.some(choice => /^gpt-6(?:\.\d+)?-(?:luna|sol|astra)$/.test(choice.id));
 	const uniqueChoices = new Map<string, T>();
 	for (const choice of providerChoices) {
+		if (hasCurrentGpt && legacyGptModelIds.has(choice.id)) continue;
 		if (hasClaudeModels && choice.id === 'default') continue;
 		const key = hasClaudeModels ? claudeModelIdentity(choice) : choice.id;
 		const previous = uniqueChoices.get(key);
