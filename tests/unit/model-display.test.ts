@@ -110,7 +110,7 @@ test('usage model names merge aliases by display name only', () => {
 test('Copilot hides Auto and dominated GPT and Claude models within their own makers', () => {
  const copilot = [
   { id: 'copilot/auto', displayName: 'Auto · Copilot picks' },
-  ...['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-sol', 'gpt-6-sol', 'claude-sonnet-5.5', 'claude-sonnet-4.5', 'claude-opus-5.5', 'grok-4.7'].map(id => ({ id: `copilot/${id}`, displayName: id }))
+  ...['gpt-6-luna', 'gpt-5.6-luna', 'gpt-6.1-sol', 'gpt-6-sol', 'claude-sonnet-5.5', 'claude-sonnet-4.6', 'claude-opus-5.5', 'grok-4.7'].map(id => ({ id: `copilot/${id}`, displayName: id }))
  ];
  expect(isClaudeModelCatalog(copilot)).toBe(false);
  expect(copilot.map(modelDisplayProfile)).toEqual(copilot.map(() => null));
@@ -155,4 +155,23 @@ test('legacy bare GPT names are hidden when a current GPT replacement is offered
  expect(legacy.map(modelDisplayProfile)).toEqual(legacy.map(() => null));
  const copilot = [...legacy, current, future].map(choice => ({ ...choice, id: `copilot/${choice.id}` }));
  expect(filterAndSortModelChoices(copilot).map(choice => choice.id)).toEqual(['copilot/gpt-6-luna', 'copilot/gpt-6.2-custom']);
+});
+
+
+test('Copilot compares fixed credits rather than subscription efficiency and keeps unknown prices', () => {
+ const choices = ['claude-haiku-4.5', 'claude-sonnet-5.5', 'claude-opus-5.5', 'claude-sonnet-4.5'].map(id => ({ id: `copilot/${id}`, displayName: id }));
+ const ids = filterAndSortModelChoices(choices).map(c => c.id);
+ // Haiku costs less; Sonnet is more capable. Unpriced Sonnet 4.5 remains available.
+ expect(ids).toContain('copilot/claude-haiku-4.5');
+ expect(ids).toContain('copilot/claude-sonnet-5.5');
+ expect(ids).toContain('copilot/claude-sonnet-4.5');
+});
+
+test('credit comparison handles context thresholds, cached input and unknown write prices', async () => {
+ const { copilotRatesNoHigher } = await import('../../src/lib/copilot-credits');
+ expect(copilotRatesNoHigher('copilot/gpt-6.1-sol', 'copilot/gpt-6-sol')).toBe(true);
+ expect(copilotRatesNoHigher('copilot/gpt-6-sol', 'copilot/gpt-6.1-sol')).toBe(false);
+ expect(copilotRatesNoHigher('copilot/claude-haiku-5.5', 'copilot/gpt-6-luna')).toBe(false);
+ expect(copilotRatesNoHigher('copilot/unknown', 'copilot/gpt-6-luna')).toBe(false);
+ expect(copilotRatesNoHigher('copilot/gpt-6-luna', 'copilot/gpt-5.5')).toBe(false);
 });

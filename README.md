@@ -30,6 +30,8 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Copilot hides less capable models only when another costs no more across the
+  published credit rates and context tiers; unpriced choices remain available.
 - Copilot folder changes reopen the same conversation; reopen failures retain its
   history and report an error instead of starting a replacement conversation.
 
@@ -381,9 +383,11 @@ Copilot then appears under Provider next to Codex and Claude, on this
 computer. The model picker lists the models the account may use, grouped by
 maker, with Auto removed and GPT-6 Luna as the explicit default, each named with its
 premium-request multiplier ("Claude Opus 5.5 · 15x") and offering its own
-thinking levels, from "none" to "max". Older GPT/Claude options use the same
-static capability/efficiency hiding rule within each maker; Copilot fixed pricing
-stays separate from allowance cost learning. The list is read once a day from an
+thinking levels, from "none" to "max". Copilot compares capability estimates
+against fixed AI-credit prices within each maker, across token categories and context tiers; unpriced choices remain available.
+The older bare GPT IDs are hidden when GPT-6 replacements are offered. Visible
+models sort by ordinary input credit price, then capability. These prices stay
+separate from allowance cost learning. The list is read once a day from an
 empty session, without a prompt. Sessions keep their Copilot conversation across
 restarts. Commands, edits, reads, plans and token counts show as in other
 sessions. Full-access sessions turn on Copilot's allow-all; others ask before

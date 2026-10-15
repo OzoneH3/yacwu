@@ -54,6 +54,24 @@ function modelKey(model: string) {
   .replace(/^(claude-(?:haiku|sonnet|opus|fable)-\d+)-(\d+)(?=-|$)/, '$1.$2');
 }
 
+/** Ordinary input rate, for stable price ordering within a maker. */
+export function copilotInputRate(model: string): number | null {
+ return rates[modelKey(model)]?.base[0] ?? null;
+}
+
+/** Compare the full rate cards; missing cache-write rates cannot prove dominance. */
+export function copilotRatesNoHigher(other: string, model: string): boolean {
+ const a = rates[modelKey(other)], b = rates[modelKey(model)];
+ if (!a || !b) return false;
+ const contexts = [0, ...[a.threshold, b.threshold].filter((n): n is number => n !== undefined).map(n => n + 1)];
+ return contexts.every(context => {
+  const ar = context > (a.threshold ?? Infinity) ? a.long ?? a.base : a.base;
+  const br = context > (b.threshold ?? Infinity) ? b.long ?? b.base : b.base;
+  return ar.every((price, index) => price === null || br[index] === null
+   ? price === br[index] : price <= br[index]!);
+ });
+}
+
 /** A token-based estimate, not GitHub's account balance or an invoice. */
 export function copilotTaskCredits(tasks: UsageTask[], task: UsageTask): CopilotCreditEstimate {
  let low = 0, high = 0, priced = 0, incomplete = false;

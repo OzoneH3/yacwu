@@ -9,7 +9,7 @@ test('Copilot models are grouped by maker with their own thinking levels', async
 	const models = [
 		{ id: 'copilot/auto', displayName: 'Auto · Copilot picks · 1x', efforts: [], defaultEffort: 'medium' },
 		{ id: 'copilot/claude-opus-5.5', displayName: 'Claude Opus 5.5 · 15x', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' },
-		{ id: 'copilot/claude-sonnet-4.5', displayName: 'Claude Sonnet 4.5 · 1x', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
+		{ id: 'copilot/claude-sonnet-4.6', displayName: 'Claude Sonnet 4.6 · 1x', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },
 		{ id: 'copilot/gpt-6-luna', displayName: 'GPT-6 Luna · 0.33x', efforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' },
 		{ id: 'copilot/gpt-6-sol', displayName: 'GPT-6 Sol · 1x', efforts: ['low', 'medium'], defaultEffort: 'medium' },
 		{ id: 'copilot/claude-sonnet-5.5', displayName: 'Claude Sonnet 5.5 · 1x', efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' },

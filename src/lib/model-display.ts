@@ -1,3 +1,5 @@
+import { copilotInputRate, copilotRatesNoHigher } from './copilot-credits';
+
 export interface ModelDisplayProfile {
 	capability: number;
 	efficiency: string;
@@ -12,7 +14,7 @@ export interface ModelChoiceSummary {
 }
 
 /** Copilot uses fixed pricing: never display subscription estimates or learn
- * allowance costs for its models. Static picker filtering is applied separately. */
+ * allowance costs for its models. Credit-based picker filtering is applied separately. */
 export function isCopilotModel(choice: ModelChoiceSummary): boolean {
 	return choice.id.startsWith('copilot/');
 }
@@ -122,12 +124,18 @@ export function modelDisplayProfile(choice: ModelChoiceSummary | null): ModelDis
 export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices: T[]): T[] {
 	choices = choices.map(normalizeModelChoice);
 	if (choices.some(isCopilotModel)) {
-		// Reuse static rankings within each maker. Keep original Copilot entries
-		// and prices; these profiles never enter cost learning or rated displays.
+		// Capability estimates are shared; cost dominance uses Copilot's fixed
+		// credit card across every token category and context tier, not allowance ratings.
 		const copilot = modelPickerGroups(choices.filter(isCopilotModel)).flatMap(group => {
-			const originals = new Map(group.choices.map(choice => [choice.id.slice('copilot/'.length), choice]));
-			const ranked = filterAndSortModelChoices(group.choices.map(choice => ({ ...choice, id: choice.id.slice('copilot/'.length) })));
-			return ranked.map(choice => originals.get(choice.id)!);
+			const hasCurrentGpt = group.choices.some(c => /^copilot\/gpt-6(?:\.\d+)?-(?:luna|sol|astra)$/.test(c.id));
+			const scored = group.choices.filter(c => !hasCurrentGpt || !legacyGptModelIds.has(c.id.slice(8)))
+				.map((choice, index) => ({ choice, index, profile: modelDisplayProfile({ ...choice, id: choice.id.slice(8) }) }));
+			return scored.filter(a => !a.profile || !scored.some(b => b.choice.id !== a.choice.id && b.profile
+				&& b.profile.capability >= a.profile!.capability && copilotRatesNoHigher(b.choice.id, a.choice.id)
+				&& (b.profile.capability > a.profile!.capability || !copilotRatesNoHigher(a.choice.id, b.choice.id))))
+				.sort((a, b) => (copilotInputRate(a.choice.id) ?? Infinity) - (copilotInputRate(b.choice.id) ?? Infinity)
+					|| (b.profile?.capability ?? -1) - (a.profile?.capability ?? -1) || a.index - b.index)
+				.map(a => a.choice);
 		});
 		return [...copilot, ...filterAndSortModelChoices(choices.filter(choice => !isCopilotModel(choice)))];
 	}
