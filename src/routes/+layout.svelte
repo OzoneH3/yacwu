@@ -64,6 +64,8 @@
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import FolderBrowser from '$lib/FolderBrowser.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
+	import CopilotCreditHistory from '$lib/CopilotCreditHistory.svelte';
+	import { copilotTaskCredits, creditLabel, creditTitle } from '$lib/copilot-credits';
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { analyzeUsage, RATE_LABEL } from '$lib/usage-analysis';
 	import { summarizeTaskAllowances, projectTaskUsage, formatAllowancePercent, type TaskUsageSummary } from '$lib/task-usage';
@@ -487,6 +489,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const activeSettingsChangedDuringTurn = $derived(activeModelChangedDuringTurn || activeEffortChangedDuringTurn);
 	const activeModels = $derived(activeId ? filterAndSortModelChoices(sessionModels[activeId] ?? []) : []);
 	const activeClaude = $derived(isClaudeModelCatalog(activeModels));
+	const activeCopilot = $derived(Boolean(activeConfig?.model?.startsWith('copilot/')) || hostChoices.some(host => host.name === activeHost && host.provider === 'copilot'));
 	const activeEfforts = $derived(activeId ? (modelEfforts[activeId] ?? []) : []);
 	const activeModelChoice = $derived.by(() => {
 		const choice = activeConfig && activeId
@@ -661,6 +664,11 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		const task = activeUsageAnalysis?.tasks.find((task) => task.threadId === activeId && task.host === activeHost && task.turnId === active?.turnId);
 		return task && activeUsageAnalysis ? summarizeTaskAllowances(activeUsageAnalysis.tasks, task, activeFiveHourUsageAnalysis?.tasks ?? []) : null;
 	});
+	const activeTaskCredits = $derived.by(() => {
+		if (!activeCopilot || !activeUsageAnalysis) return null;
+		const task = activeUsageAnalysis.tasks.find(task => task.host === activeHost && task.threadId === activeId && task.turnId === active?.turnId);
+		return task ? copilotTaskCredits(activeUsageAnalysis.tasks, task) : null;
+	});
 	const projectedTaskUsage = $derived(projectTaskUsage(activeTaskUsage, activeTaskProgress, activityClock));
 	const projectedFiveHourTaskUsage = $derived(projectTaskUsage(activeTaskUsage?.fiveHour ?? null, activeTaskProgress, activityClock));
 	const completedUsageByItem = $derived.by(() => {
@@ -673,7 +681,10 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		for (const task of activeUsageAnalysis.tasks) {
 			if (task.host !== activeHost || task.threadId !== viewedId || task.endedAt === null) continue;
 			const itemId = finals.get(task.turnId);
-			if (itemId) result[itemId] = summarizeTaskAllowances(activeUsageAnalysis.tasks, task, activeFiveHourUsageAnalysis?.tasks ?? []);
+			if (itemId) {
+				result[itemId] = summarizeTaskAllowances(activeUsageAnalysis.tasks, task, activeFiveHourUsageAnalysis?.tasks ?? []);
+				if (activeCopilot) result[itemId].credits = copilotTaskCredits(activeUsageAnalysis.tasks, task);
+			}
 		}
 		return result;
 	});
@@ -6281,7 +6292,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{/if}
 				</div>
 			</header>
-			{#if sessionContextLine || activeClaude || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
+			{#if sessionContextLine || activeClaude || activeCopilot || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
 				<div class="original-prompt" aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
 					{#if active?.status === 'running' && !viewedAgentId}
 						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
@@ -6292,11 +6303,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else}
 								<span>Estimating…</span>
 							{/if}
+							{#if activeCopilot}
+								<span class="task-cost" title={creditTitle(activeTaskCredits)}>{creditLabel(activeTaskCredits)}</span>
+							{:else}
 							<span class="task-cost" title={projectedTaskUsage
 								? `Projected total weekly allowance from ${projectedTaskUsage.basis === 'progress' ? 'estimated completion' : 'elapsed time and time remaining'}. ${formatAllowancePercent(activeTaskUsage?.percent ?? null)} used so far; ${formatAllowancePercent(projectedTaskUsage.remaining)} estimated remaining. Includes recorded agent work.`
 								: activeTaskUsage ? taskUsageTitle(activeTaskUsage) : 'Waiting for task usage recording and sufficient calibration.'}>
 								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : activeTaskUsage?.knownPercent !== null && activeTaskUsage?.knownPercent !== undefined ? `${formatAllowancePercent(activeTaskUsage.knownPercent)} week · incomplete` : 'Cost learning…'}{#if activeTaskUsage?.knownPercent != null && activeTaskUsage.provisional} · early{/if}
 							</span>
+							{/if}
 							{#if activeTaskUsage?.fiveHour?.knownPercent != null}
 								<span class="task-cost" title={taskUsageTitle(activeTaskUsage)}>{projectedFiveHourTaskUsage ? `${formatAllowancePercent(projectedFiveHourTaskUsage.total)} 5h total${activeTaskUsage.fiveHour.provisional ? ' · early' : ''}` : fiveHourCostLabel(activeTaskUsage.fiveHour)}</span>
 							{/if}
@@ -6306,6 +6321,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if activeTodoQueue?.tasks.length}<span class="todo-position">[{activeTodoPosition}/{activeTodoTotal}]</span>{/if}
 					<p>{sessionContextLine}</p>
 						<div class="session-bar-right">
+						{#if activeCopilot}
+							<span class="usage-window" title="The current Copilot connection does not provide a verified account credit allowance.">Account allowance unavailable</span>
+							<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true}>Task credits</button>
+						{/if}
 						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
 							<div class="usage-limits" aria-label={`${activeClaude ? 'Claude' : 'Codex'} usage remaining`}>
 								{#if activeAccountUsage.fiveHour}
@@ -6659,7 +6678,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 											<time class="agent-time" datetime={time.iso} title={time.full}>{time.label}</time>
 										{/if}
 										{#if typeof turnDuration === 'number'}<span class="agent-duration" title="Time taken for this task">{formatDuration(turnDuration)}</span>{/if}
-										{#if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? taskUsage.knownPercent !== null ? `${formatAllowancePercent(taskUsage.knownPercent)} week (incomplete${taskUsage.provisional ? ', early' : ''})` : 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {#if fiveHourCostLabel(taskUsage.fiveHour)}{fiveHourCostLabel(taskUsage.fiveHour)} · {/if}{taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
+										{#if activeCopilot && taskUsage?.credits}<span class="agent-usage" title={creditTitle(taskUsage.credits)}>{creditLabel(taskUsage.credits)}</span>{:else if taskUsage}<span class="agent-usage" title={taskUsageTitle(taskUsage)}>{taskUsage.percent === null ? taskUsage.knownPercent !== null ? `${formatAllowancePercent(taskUsage.knownPercent)} week (incomplete${taskUsage.provisional ? ', early' : ''})` : 'Allowance learning' : `${formatAllowancePercent(taskUsage.percent)} week${taskUsage.provisional ? ' (early)' : ''}`} · {#if fiveHourCostLabel(taskUsage.fiveHour)}{fiveHourCostLabel(taskUsage.fiveHour)} · {/if}{taskUsage.partial ? '≥' : ''}{taskUsage.tokens.toLocaleString()} tokens{taskUsage.runningAgents ? ' · agents running' : ''}</span>{/if}
 										<button
 											type="button"
 											class="copy-agent"
@@ -7279,7 +7298,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 {#if usageHistoryOpen && activeId}
 	{#key `${activeHost}:${activeId}`}
+		{#if activeCopilot}
+			<CopilotCreditHistory tasks={activeUsageAnalysis?.tasks ?? []} host={activeHost} sessionId={activeId} onclose={() => usageHistoryOpen = false} onrefresh={() => refreshTaskUsage(activeHost)} />
+		{:else}
 		<UsageHistory host={activeHost} sessionId={activeId} models={activeModels} modelNames={usageModelNamesByHost[activeHost] ?? {}} selectedModel={activeConfig?.model} selectedEffort={activeConfig?.effort} onclose={() => usageHistoryOpen = false} />
+		{/if}
 	{/key}
 {/if}
 

@@ -1,7 +1,9 @@
+import type { CopilotCreditEstimate } from './copilot-credits';
 import type { UsageTask } from './usage-analysis';
 import type { TaskProgressEstimate } from './task-progress';
 
 export interface TaskUsageSummary {
+	credits?: CopilotCreditEstimate;
 	fiveHour?: TaskUsageSummary;
 	tokens: number;
 	partial: boolean;
@@ -24,8 +26,8 @@ export function summarizeTaskAllowances(tasks: UsageTask[], task: UsageTask, fiv
 	return summary;
 }
 
-/** Charge only descendant turns begun under this prompt, never another session. */
-export function summarizeTaskUsage(tasks: UsageTask[], task: UsageTask): TaskUsageSummary {
+/** Recorded turns belonging to one task, including its descendants. */
+export function contributingTaskTurns(tasks: UsageTask[], task: UsageTask): UsageTask[] {
 	const parents = new Map(tasks.filter((other) => other.host === task.host && other.parentThreadId)
 		.map((other) => [other.threadId, other.parentThreadId!]));
 	const isDescendant = (id: string) => {
@@ -36,9 +38,14 @@ export function summarizeTaskUsage(tasks: UsageTask[], task: UsageTask): TaskUsa
 		}
 		return false;
 	};
-	const included = tasks.filter((other) => other === task || (other.host === task.host
+	return tasks.filter((other) => other === task || (other.host === task.host
 		&& other.startedAt >= task.startedAt && other.startedAt < (task.endedAt ?? Infinity)
 		&& isDescendant(other.threadId)));
+}
+
+/** Charge only descendant turns begun under this prompt, never another session. */
+export function summarizeTaskUsage(tasks: UsageTask[], task: UsageTask): TaskUsageSummary {
+	const included = contributingTaskTurns(tasks, task);
 	const partial = included.some((other) => other.partialTokens);
 	const estimated = !partial && included.every((other) => other.estimate !== null || other.tokens.totalTokens === 0)
 		&& included.some((other) => other.estimate !== null);

@@ -30,6 +30,9 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Copilot tasks show estimated credits used and a credit-history view; uncertain cache/context
+  pricing is shown as a range, and unavailable account allowances are stated explicitly.
+
 - Legacy GPT names such as bare GPT-5.5 are hidden when a current GPT-6 option is offered.
 
 - Copilot model labels omit the redundant provider prefix while preserving fixed prices.
