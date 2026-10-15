@@ -30,6 +30,10 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Settings can stop Codex work at a remaining-allowance percentage and Copilot work
+  at a billing-cycle credit total; limits are saved and enforced on the server
+  across sessions and browsers, with both off by default.
+
 - Copilot shows live context occupancy and optional GitHub CLI account credits, with
   the account name and any reported finite allowance; task estimates stay separate.
 - Copilot hides less capable models only when another costs no more across the

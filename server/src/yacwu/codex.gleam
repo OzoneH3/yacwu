@@ -39,6 +39,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import yacwu/account_limits
+import yacwu/backends
 import yacwu/diagnostics
 import yacwu/jsonx
 import yacwu/oauth
@@ -482,6 +484,7 @@ type State {
     next_id: Int,
     pending: Dict(Int, Pending),
     account_cache: Dict(String, #(Int, Reply)),
+    limit_stops: Dict(String, #(String, Int)),
     account_waiters: Dict(String, List(Subject(Reply))),
     next_usage_at: Int,
     subscribers: List(#(Pid, Subject(String))),
@@ -530,6 +533,7 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     next_id: 1,
     pending: dict.new(),
     account_cache: dict.new(),
+    limit_stops: dict.new(),
     account_waiters: dict.new(),
     next_usage_at: 0,
     subscribers: [],
@@ -785,7 +789,7 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       actor.continue(state)
     }
     DiagnosticTick -> {
-      let state = sample_usage(state)
+      let state = sample_usage(state) |> enforce_account_limits
       let at = oauth.now()
       let _ = diagnostics.rotate_stderr(state.label)
       let snapshot = state_diagnostics(state, at)
@@ -890,6 +894,95 @@ fn state_diagnostics(state: State, at: Int) -> Json {
     #("eventLog", json.string(events)),
     #("stderrLog", json.string(stderr)),
   ])
+}
+
+fn account_provider(state: State) -> String {
+  let provider = case state.transport {
+    Local(command) | LocalDaemon(_, command) ->
+      backends.provider(backends.Backend(state.label, command))
+    _ -> "codex"
+  }
+  case provider {
+    "copilot" | "claude" -> provider
+    _ -> "codex"
+  }
+}
+
+fn account_limit_reason(state: State) -> Option(String) {
+  let limits = account_limits.load(account_limits.path())
+  let #(at, data) = case
+    dict.get(state.account_cache, "account/rateLimits/read")
+  {
+    Ok(#(at, Ok(data))) -> #(at, data)
+    _ -> #(0, dynamic.nil())
+  }
+  account_limits.reason(limits, account_provider(state), data, at, oauth.now())
+}
+
+fn enforce_account_limits(state: State) -> State {
+  case state.status, account_limit_reason(state) {
+    Running(conn), Some(reason) ->
+      list.fold(dict.to_list(state.activity), state, fn(state, entry) {
+        let #(thread, activity) = entry
+        let now = oauth.now()
+        let retry = case dict.get(state.limit_stops, thread) {
+          Ok(#(turn, at)) -> turn != activity.turn || now - at >= 30
+          Error(_) -> True
+        }
+        case activity.turn != "" && retry {
+          False -> state
+          True -> {
+            let state =
+              State(
+                ..state,
+                limit_stops: dict.insert(state.limit_stops, thread, #(
+                  activity.turn,
+                  now,
+                )),
+              )
+            let _ =
+              diagnostics.record(
+                state.label,
+                oauth.now(),
+                "account_limit_stop",
+                [
+                  #("threadId", json.string(thread)),
+                  #("reason", json.string(reason)),
+                ],
+              )
+            let state =
+              broadcast(
+                state,
+                bit_array.from_string(
+                  json.to_string(
+                    json.object([
+                      #("method", json.string("yacwu/accountLimit/stopped")),
+                      #(
+                        "params",
+                        json.object([
+                          #("threadId", json.string(thread)),
+                          #("reason", json.string(reason)),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                ),
+              )
+            send_request(
+              state,
+              conn,
+              "turn/interrupt",
+              json.object([
+                #("threadId", json.string(thread)),
+                #("turnId", json.string(activity.turn)),
+              ]),
+              Discard,
+            )
+          }
+        }
+      })
+    _, _ -> state
+  }
 }
 
 /// Sample the shared weekly quota; avoid stacking reads if Codex is unresponsive.
@@ -1041,6 +1134,20 @@ fn on_request(state: State, request: Queued) -> actor.Next(State, Msg) {
 /// `Expire` may still be in the mailbox behind the event that made the
 /// connection ready.
 fn dispatch_queued(state: State, conn: Conn, request: Queued) -> State {
+  let blocked = case request.method {
+    "turn/start" | "turn/steer" -> account_limit_reason(state)
+    _ -> None
+  }
+  case blocked {
+    Some(reason) -> {
+      fail_queued([request], reason)
+      state
+    }
+    None -> dispatch_allowed(state, conn, request)
+  }
+}
+
+fn dispatch_allowed(state: State, conn: Conn, request: Queued) -> State {
   let Queued(method, params, waiter) = request
   case waiter {
     Plain(reply) -> send_request(state, conn, method, params, Caller(reply))
@@ -1491,6 +1598,20 @@ fn process_line(state: State, line: BitArray) -> State {
           let at = oauth.now()
           usage.notification(state.label, method, msg)
           let state = case method {
+            "account/rateLimits/updated" -> {
+              case jsonx.field(msg, ["params"]) {
+                Ok(data) ->
+                  State(
+                    ..state,
+                    account_cache: dict.insert(
+                      state.account_cache,
+                      "account/rateLimits/read",
+                      #(at, Ok(data)),
+                    ),
+                  )
+                Error(_) -> state
+              }
+            }
             "turn/started" | "turn/completed" -> sample_usage(state)
             _ -> state
           }
@@ -1521,6 +1642,11 @@ fn process_line(state: State, line: BitArray) -> State {
                 |> result.unwrap("")
               }),
             )
+          let state = case method {
+            "turn/started" | "account/rateLimits/updated" ->
+              enforce_account_limits(state)
+            _ -> state
+          }
           case method {
             "turn/started"
             | "turn/completed"
@@ -1740,6 +1866,7 @@ fn on_response(
           }
           let state = State(..state, pending: dict.delete(state.pending, id))
           track_resumed(state, method, thread, reply_to, reply)
+          |> enforce_account_limits
         }
         // Most often the answer to a tracked request that already expired.
         Error(_) -> {

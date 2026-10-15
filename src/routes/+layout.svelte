@@ -14,6 +14,7 @@
 	import ProjectRulesEditor from '$lib/ProjectRulesEditor.svelte';
 	import type { ProjectRulesState } from '$lib/project-rules';
 	import GlobalSettingsForm from '$lib/GlobalSettingsForm.svelte';
+	import AccountLimitsSettings from '$lib/AccountLimitsSettings.svelte';
 	import { clampSetting, defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings } from '$lib/settings';
 	import {
 		applyRelayEvent,
@@ -1974,6 +1975,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const it = t.byId[p.itemId] as any;
 					if (it) it._out = (it._out ?? '') + (p.delta ?? '');
 				}
+				break;
+			}
+			case 'yacwu/accountLimit/stopped': {
+				if (tid && typeof p.reason === 'string') addLocalNote(tid, `Task stopped. ${p.reason}`, 'err');
 				break;
 			}
 			case 'yacwu/contextUsage/updated': {
@@ -5589,6 +5594,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		</div>
 		{#if settingsOpen}
 			<GlobalSettingsForm {settings} {theme} onchange={saveSettings} onthemechange={(next) => applyTheme(next)} relayDefault={relayAcceptByDefault} onrelaydefaultchange={setRelayAcceptByDefault} onsoundpreview={(volume) => { soundPlayer.unlock(); soundPlayer.preview(volume); }} />
+			<AccountLimitsSettings />
 		{/if}
 	</div>
 </dialog>

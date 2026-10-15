@@ -26,6 +26,7 @@ import gleam/string_tree
 import gleam/uri
 import mist.{type Connection, type ResponseData}
 import simplifile
+import yacwu/account_limits
 import yacwu/auth
 import yacwu/backends
 import yacwu/benchmark
@@ -433,6 +434,21 @@ fn dispatch(
           |> response.set_body(mist.Bytes(bytes_tree.new()))
       }
     ["api", "hosts"], Get -> list_hosts(ctx)
+    ["api", "account", "limits"], Get ->
+      json_response(
+        200,
+        account_limits.encode(account_limits.load(account_limits.path())),
+      )
+    ["api", "account", "limits"], Post -> {
+      case account_limits.parse(read_json_body(req)) {
+        Error(message) -> json_response(400, error_body(message))
+        Ok(limits) ->
+          case account_limits.save(account_limits.path(), limits) {
+            Ok(_) -> json_response(200, account_limits.encode(limits))
+            Error(message) -> json_response(500, error_body(message))
+          }
+      }
+    }
     ["api", "account"], Get -> {
       use _, cx <- with_codex(ctx, req, None)
       account(cx)
