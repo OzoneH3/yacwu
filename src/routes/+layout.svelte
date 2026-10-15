@@ -764,7 +764,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	);
 	const slashPopupVisible = $derived(slashMatches.length > 0);
 	const composerPlaceholder = $derived(
-		mobileViewport ? 'Message Codex' : 'Message Codex…'
+		activeCopilot && active?.status === 'running' && active?.turnId
+			? 'Queue a message for Copilot’s next prompt…'
+			: `Message ${sessionAgentLabel(activeId)}${mobileViewport ? '' : '…'}`
 	);
 	const sessionRailOpen = $derived(mobileViewport ? mobileSidebarOpen : !desktopSidebarHidden);
 	const sessionRailToggleLabel = $derived(
@@ -979,13 +981,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
-	/** The host a session runs on: its summary's tag, the URL hint, or local. */
+	/** Display the session provider, including custom backend names. */
+	function sessionAgentLabel(id: string | null): string {
+		const provider = hostChoices.find(host => host.name === sessionHost(id))?.provider;
+		const model = id ? sessionConfigs[id]?.model : null;
+		return providerLabel(provider ?? (model?.startsWith('copilot/') ? 'copilot' : model?.startsWith('claude-') ? 'claude' : 'codex'));
+	}
+
 	/** Claude sessions get their stated time-left checked against the elapsed pace. */
 	function isClaudeSession(id: string | null): boolean {
 		const host = sessionHost(id);
 		return hostChoices.some((entry) => entry.name === host && entry.provider === 'claude');
 	}
 
+	/** The host a session runs on: its summary’s tag, the URL hint, or local. */
 	function sessionHost(id: string | null): string {
 		if (!id) return LOCAL_HOST;
 		const summary = sessions.find((s) => s.id === id);
@@ -2908,20 +2917,22 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 
 		const t = ensureThread(id);
+		const previousTurnId = t.status === 'running' ? t.turnId : null;
 		t.status = 'running';
 		t.error = null;
 		sendingMessage = true;
 		const echoId = addLocalUserMessage(id, text, draftAttachments);
 		try {
-			const res = await sendMessageWithRetries(id, text, draftAttachments, t.status === 'running' ? t.turnId : null);
+			const res = await sendMessageWithRetries(id, text, draftAttachments, previousTurnId);
 
 			if (!res.ok) {
 				const data = await res.json().catch(() => ({}));
 				throw new Error(data.error ?? `failed to send message (${res.status})`);
 			}
+			if (previousTurnId && sessionAgentLabel(id) === 'Copilot') addLocalNote(id, 'Message queued for Copilot’s next prompt.');
 			if (interactiveQuestion) {
 				resolveInteractiveQuestion(interactiveQuestion);
-				addLocalNote(id, 'Answer accepted by Codex; waiting for the agent to respond.');
+				addLocalNote(id, `Answer accepted by ${sessionAgentLabel(id)}; waiting for the agent to respond.`);
 			}
 
 			if (input === draftInput) input = '';
@@ -2934,7 +2945,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 			composerHistoryOf(id).record(text);
 		} catch (err) {
-			t.status = 'idle';
+			if (t.turnId === previousTurnId) t.status = previousTurnId ? 'running' : 'idle';
 			removeLocalItem(id, echoId);
 			addLocalNote(id, err instanceof Error ? err.message : 'failed to send message', 'err');
 			// Keep the unsent text, also when clearing moved us to a new session.
@@ -4896,7 +4907,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (res.ok && data.available && typeof data.branch === 'string') branch = data.branch;
 		} catch { /* No branch line. */ }
 		const config = sessionConfigs[id];
-		const agent = [isClaudeSession(id) ? 'Claude' : 'Codex', config?.model ? `${config.model}${config.effort ? `, ${config.effort}` : ''}` : '']
+		const agent = [sessionAgentLabel(id), config?.model ? `${config.model}${config.effort ? `, ${config.effort}` : ''}` : '']
 			.filter(Boolean).join(' · ');
 		const last = responses.at(-1);
 		return coordinatorHandoff({
@@ -6989,7 +7000,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); dismissInteractiveChoice(); } }}
 					>
 						<div class="session-info-heading">
-							<h2 id="interactive-choice-title">{isClaudeSession(activeId) ? 'Claude' : 'Codex'} has a question</h2>
+							<h2 id="interactive-choice-title">{sessionAgentLabel(activeId)} has a question</h2>
 							{#if pendingInteractiveQuestions.length > 1}<span class="meta">1 of {pendingInteractiveQuestions.length}</span>{/if}
 							<button class="session-info-close" type="button" onclick={dismissInteractiveChoice} aria-label="Dismiss question" title="Dismiss">
 								<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18" /></svg>
@@ -7226,8 +7237,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									type="button"
 									onclick={() => send()}
 										disabled={sendingMessage || (!input.trim() && selectedAttachments.length === 0)}
-					aria-label={sendingMessage ? 'Sending message' : activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Steer active task' : 'Send message'}
-					title={activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? 'Send guidance to the active task' : 'Send message'}
+					aria-label={sendingMessage ? 'Sending message' : activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? activeCopilot ? 'Queue next message' : 'Steer active task' : 'Send message'}
+					title={activeId && threads[activeId]?.status === 'running' && threads[activeId]?.turnId ? activeCopilot ? 'Queue this message for Copilot’s next prompt' : 'Send guidance to the active task' : 'Send message'}
 									aria-busy={sendingMessage}
 								>
 									<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">

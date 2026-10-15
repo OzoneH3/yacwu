@@ -30,6 +30,9 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Copilot uses its own labels in the composer, questions and handoffs; messages sent
+  during work are explicitly queued, with drafts retained if queueing fails.
+
 - Copilot tasks show estimated credits used and a credit-history view; uncertain cache/context
   pricing is shown as a range, and unavailable account allowances are stated explicitly.
 
