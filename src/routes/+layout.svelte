@@ -1338,6 +1338,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		}
 		delete threads[id];
+		// Its history went with it: a restored session must load it again.
+		delete sessionHistoryLoaded[id];
+		delete sessionOpening[id];
 		delete sessionConfigs[id];
 		delete sessionModels[id];
 		delete modelEfforts[id];
