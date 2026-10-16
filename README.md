@@ -30,38 +30,9 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
-- Side conversations work with paginated forks and reopen through live metadata
-  when Codex cannot read ephemeral history.
-
-- Settings groups allowance limits together and hides Claude/Copilot controls when
-  those providers are disabled.
-- Settings can stop Codex work at a remaining-allowance percentage and Copilot work
-  at a billing-cycle credit total; limits are saved and enforced on the server
-  across sessions and browsers, with both off by default.
-
-- Copilot shows live context occupancy and optional GitHub CLI account credits, with
-  the account name and any reported finite allowance; task estimates stay separate.
-- Copilot hides less capable models only when another costs no more across the
-  published credit rates and context tiers; unpriced choices remain available.
-- Copilot folder changes reopen the same conversation; reopen failures retain its
-  history and report an error instead of starting a replacement conversation.
-
-- Copilot uses its own labels in the composer, questions and handoffs; messages sent
-  during work are explicitly queued, with drafts retained if queueing fails.
-
-- Copilot tasks show estimated credits used and a credit-history view; uncertain cache/context
-  pricing is shown as a range, and unavailable account allowances are stated explicitly.
-
-- Legacy GPT names such as bare GPT-5.5 are hidden when a current GPT-6 option is offered.
-
-- Copilot model labels omit the redundant provider prefix while preserving fixed prices.
-
-- New Codex and Copilot sessions default to explicit GPT-6 Luna; Copilot omits Auto
-  and hides dominated GPT/Claude choices without adding cost learning.
-
 - 🖥️ Light and dark themes, responsive for desktop and mobile
-- 🔀 Codex and Claude sessions side by side; pick the provider and project
-  folder per session
+- 🔀 Codex, Claude and Copilot sessions side by side; pick the provider and
+  project folder per session
 - 🧵 Multi-session workspace: create, rename, reorder, clear, archive, restore,
   and delete sessions, and resume interrupted work; **Clear first** in the
   message box starts that message in a fresh conversation
@@ -145,7 +116,10 @@ rules locally, and records usage/diagnostic journals on the server.
   a newer build is deployed
 - 🔁 Alternative backends via `YACWU_BACKENDS`, such as
   [claude-codex](https://github.com/fuergaosi233/claude-codex)
-- 🐙 GitHub Copilot sessions through Copilot CLI's ACP server
+- 🐙 GitHub Copilot sessions through Copilot CLI's ACP server, with priced
+  model choices and estimated credits per task
+- 🛑 Optional server-enforced stops: Codex at a remaining-allowance percentage,
+  Copilot at a billing-cycle credit total (both off by default)
 - 🌐 Remote machines over SSH with a persistent app-server and full feature
   parity (see [docs/remote.md](docs/remote.md))
 - 🗄️ No storage layer — the backend is the source of truth
@@ -195,8 +169,8 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/review [notes]` | review uncommitted changes (or run a custom review) |
 | `/shell <command>` | run a user-initiated shell command in the thread |
 | `/rollback [turns]` | roll back the last N turns (default 1) |
-| `/fork` | branch this thread into a new session |
-| `/btw [question]` | start an ephemeral side conversation (a throwaway fork that treats inherited history as read-only context; nested under its parent in the sidebar) |
+| `/fork` | branch this thread into a new, permanent session that carries the history and continues the work |
+| `/btw [question]` | ask on the side: a throwaway fork, nested under its parent and deleted when closed, told to treat the history as reference and not to change anything (an instruction, not enforced) |
 | `/archive` | archive this session |
 | `/help` | list the commands |
 
@@ -391,31 +365,39 @@ YACWU_BACKENDS="claude=…;copilot=node ./scripts/copilot-backend.mjs ./claude-c
 ```
 
 Copilot then appears under Provider next to Codex and Claude, on this
-computer. The model picker lists the models the account may use, grouped by
-maker, with Auto removed and GPT-6 Luna as the explicit default, each named with its
-premium-request multiplier ("Claude Opus 5.5 · 15x") and offering its own
-thinking levels, from "none" to "max". Copilot compares capability estimates
-against fixed AI-credit prices within each maker, across token categories and context tiers; unpriced choices remain available.
-The older bare GPT IDs are hidden when GPT-6 replacements are offered. Visible
-models sort by ordinary input credit price, then capability. These prices stay
-separate from allowance cost learning. The list is read once a day from an
-empty session, without a prompt. Sessions keep their Copilot conversation across
-restarts. Commands, edits, reads, plans and token counts show as in other
-sessions. Live ACP context occupancy updates the session token meter, including
-compaction, without being counted as task spending. If `gh` is signed in on the
-backend host, Yacwu optionally reads explicit credit usage from GitHub's internal
-Copilot account endpoint, cached for five minutes. It labels the GitHub CLI login
-(which may differ from the Copilot CLI login), shows any finite allowance returned,
-and otherwise says no cap was reported; organization budgets may still apply.
-Authentication failures, unavailable fields and legacy request counts display no
-account credit reading. This internal endpoint can change. Full-access sessions
-turn on Copilot's allow-all; others ask before
-each tool. Messages sent while Copilot works go in as the next prompt of the
-same task, since ACP cannot add input to a running prompt. Not available:
-an account allowance through ACP alone, forks with the
-earlier conversation, and Yacwu's model ratings. Session records live in
-`$XDG_STATE_HOME/yacwu/copilot-adapter`; deleting an archived session also
-removes Copilot's copy. `YACWU_COPILOT_CLI` selects another `copilot` binary.
+computer. Sessions keep their Copilot conversation across restarts and folder
+changes; if Copilot cannot reopen it, Yacwu reports an error rather than
+starting a replacement. Commands, edits, reads, plans and token counts show as
+in other sessions, and the token meter follows Copilot's live context use.
+Full-access sessions turn on Copilot's allow-all; others ask before each tool.
+A message sent while Copilot works is queued as the next prompt of the same
+task, since ACP cannot add input to a running prompt.
+
+**Models.** The picker lists the models the account may use, grouped by maker,
+each with its own thinking levels (from "none" to "max") and its cost
+multiplier in the name ("Claude Opus 5.5 · 15x"). The list is read once a day
+from an empty session, without a prompt. New sessions start on GPT-6 Luna;
+Copilot's Auto is not offered. A model is hidden only when another of the same
+maker is at least as capable and costs no more at Copilot's fixed AI-credit
+prices; models without a known price stay visible. Older GPT models are
+hidden when a GPT-6 one is offered. The list is sorted by input price, then
+capability.
+
+**Credits.** Each task shows an estimate of the credits it used, from the token
+counts and those fixed prices (a range where cache pricing is uncertain), with
+a credit history view. If `gh` is signed in on the backend host, Yacwu also
+reads the account's credits used this billing cycle from GitHub's internal
+Copilot endpoint, cached for five minutes. That endpoint is undocumented and
+can change. The reading names the GitHub CLI login, which may differ from the
+Copilot CLI login. It shows any finite allowance, or says that no cap was
+reported (organization budgets may still apply). Without a reading, no account
+figure is shown. The optional Copilot credit stop in Settings uses this reading.
+
+**Not available:** an allowance reading through ACP itself, and forks with the
+earlier conversation: `/fork` and `/btw` start a fresh Copilot conversation.
+Session records live in `$XDG_STATE_HOME/yacwu/copilot-adapter`; deleting an
+archived session also removes Copilot's copy. `YACWU_COPILOT_CLI` selects
+another `copilot` binary.
 
 For a deployable artifact, `cd server && gleam export erlang-shipment`
 produces a self-contained BEAM release (needs only Erlang on the target), and
