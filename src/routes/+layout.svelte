@@ -667,8 +667,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		const task = activeUsageAnalysis?.tasks.find((task) => task.threadId === activeId && task.host === activeHost && task.turnId === active?.turnId);
 		return task && activeUsageAnalysis ? summarizeTaskAllowances(activeUsageAnalysis.tasks, task, activeFiveHourUsageAnalysis?.tasks ?? []) : null;
 	});
-	// A running task that has a learned rate but no token count yet: Claude
-	// reports usage only when a turn ends, so its cost is known then.
+	// A running task that has a learned rate but no token count yet (Claude
+	// reports after each model response): its cost is pending, not learning.
 	const activeTaskAwaitingTokens = $derived.by(() => {
 		const task = activeUsageAnalysis?.tasks.find((task) => task.threadId === activeId && task.host === activeHost && task.turnId === active?.turnId);
 		return task ? awaitingTokenCount(task, [activeUsageAnalysis, activeFiveHourUsageAnalysis]) : false;
@@ -6342,8 +6342,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{:else}
 							<span class="task-cost" title={projectedTaskUsage
 								? `Projected total weekly allowance from ${projectedTaskUsage.basis === 'progress' ? 'estimated completion' : 'elapsed time and time remaining'}. ${formatAllowancePercent(activeTaskUsage?.percent ?? null)} used so far; ${formatAllowancePercent(projectedTaskUsage.remaining)} estimated remaining. Includes recorded agent work.`
-								: activeTaskAwaitingTokens ? 'The learned rate for this model and thinking level is known; Claude reports token usage when the turn ends, and the cost is shown then.' : activeTaskUsage ? taskUsageTitle(activeTaskUsage) : 'Waiting for task usage recording and sufficient calibration.'}>
-								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : activeTaskUsage?.knownPercent !== null && activeTaskUsage?.knownPercent !== undefined ? `${formatAllowancePercent(activeTaskUsage.knownPercent)} week · incomplete` : activeTaskAwaitingTokens ? 'Cost at turn end' : 'Cost learning…'}{#if activeTaskUsage?.knownPercent != null && activeTaskUsage.provisional} · early{/if}
+								: activeTaskAwaitingTokens ? 'The learned rate for this model and thinking level is known; the cost appears once Claude reports its first tokens for this task.' : activeTaskUsage ? taskUsageTitle(activeTaskUsage) : 'Waiting for task usage recording and sufficient calibration.'}>
+								{projectedTaskUsage ? `${formatAllowancePercent(projectedTaskUsage.total)} week total` : activeTaskUsage?.percent !== null && activeTaskUsage?.percent !== undefined ? `${formatAllowancePercent(activeTaskUsage.percent)} week so far` : activeTaskUsage?.knownPercent !== null && activeTaskUsage?.knownPercent !== undefined ? `${formatAllowancePercent(activeTaskUsage.knownPercent)} week · incomplete` : activeTaskAwaitingTokens ? 'Cost pending' : 'Cost learning…'}{#if activeTaskUsage?.knownPercent != null && activeTaskUsage.provisional} · early{/if}
 							</span>
 							{/if}
 							{#if activeTaskUsage?.fiveHour?.knownPercent != null}

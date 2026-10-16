@@ -298,8 +298,10 @@ with separate rates for each model and thinking level. Cache-read tokens are
 normalized for both live reports and older recordings. Task estimates and
 projections appear once sufficient clean observations exist; until then the UI
 shows that costs are still being learned.
-Claude reports a turn's tokens only when it ends, so a running Claude task
-whose model and thinking level already have a rate shows "Cost at turn end".
+Claude's token usage is reported after each model response, so a running
+Claude task shows its allowance used so far and a projection; before the
+first report it shows "Cost pending" when its model and thinking level have
+a rate.
 Model IDs the catalog lacks (`claude-opus-5-5` next to its `opus` alias) learn
 under the same name as the alias, so each model keeps one rate.
 When available, 5-hour readings are also recorded and calibrated separately

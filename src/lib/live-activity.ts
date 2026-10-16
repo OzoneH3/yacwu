@@ -34,8 +34,8 @@ export function streamedChars(method: string, params: { delta?: unknown } | unde
 /**
  * The running token count for a turn: the backend's own figure when it has
  * reported one (Codex does as it goes), otherwise an estimate from the text
- * streamed so far, about four characters a token (Claude reports usage only
- * when a turn ends).
+ * streamed so far, about four characters a token (until the backend's
+ * first report).
  */
 export function turnTokenLabel(reported: number | null, streamed: number): string {
 	if (reported) return `${compact(reported)} tokens`;

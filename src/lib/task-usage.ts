@@ -82,8 +82,8 @@ export function projectTaskUsage(summary: TaskUsageSummary | null, progress: Tas
 
 /**
  * A running task whose model and thinking level already have a learned rate
- * but which has no token count yet (Claude reports usage only when a turn
- * ends): its cost is known at the end, so it is not still "learning".
+ * but no token count yet (before Claude's first response is reported): its
+ * cost is pending, not still "learning".
  */
 export function awaitingTokenCount(task: UsageTask, analyses: Array<{ rates: Array<{ model: string; effort: string; percentPerMillionTokens: number | null }> } | null | undefined>): boolean {
 	if (task.endedAt !== null || task.partialTokens || task.tokens.totalTokens > 0) return false;
