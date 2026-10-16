@@ -50,6 +50,7 @@ import yacwu/session_lock
 import yacwu/ssh_config
 import yacwu/static_files
 import yacwu/task_recovery
+import yacwu/thread_history
 import yacwu/usage
 import yacwu/workspace
 
@@ -2402,13 +2403,9 @@ fn open_thread(
   // thread. A brand-new thread isn't materialized until its first user
   // message, so thread/read can fail — treat that as "no history yet".
   let read =
-    codex.request(
-      cx,
-      "thread/read",
-      json.object([
-        #("threadId", json.string(thread_id)),
-        #("includeTurns", json.bool(True)),
-      ]),
+    thread_history.read(
+      fn(method, params) { codex.request(cx, method, params) },
+      thread_id,
     )
   let rollout_path = case read {
     Ok(read) ->
@@ -2488,9 +2485,9 @@ fn open_thread(
       case resume {
         Error(message) ->
           case read {
-            // Ephemeral side chats have no rollout to resume, but they are
-            // already loaded and thread/read rebuilds their turns from the
-            // live history — serve that instead of failing the open.
+            // Ephemeral side chats have no rollout to resume. Serve the
+            // snapshot acquired above (metadata only on newer Codex);
+            // the browser merges its already-streamed transcript items.
             Ok(read) -> json_response(200, jsonx.to_json(read))
             Error(_) -> json_response(500, error_body(message))
           }
@@ -3274,7 +3271,12 @@ fn fork(
 ) -> Response(ResponseData) {
   let body = read_json_body(req)
   let extra = case jsonx.field_bool(body, ["ephemeral"]) {
-    Ok(True) -> [#("ephemeral", json.bool(True))]
+    // Paginated ephemeral forks retain inherited context on the backend,
+    // but require their initial response to omit turns.
+    Ok(True) -> [
+      #("ephemeral", json.bool(True)),
+      #("excludeTurns", json.bool(True)),
+    ]
     _ -> []
   }
   let parent = project_rules.applied(ctx.project_rules, thread_id)

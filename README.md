@@ -30,6 +30,9 @@ rules locally, and records usage/diagnostic journals on the server.
 
 ## Features
 
+- Side conversations work with paginated forks and reopen through live metadata
+  when Codex cannot read ephemeral history.
+
 - Settings groups allowance limits together and hides Claude/Copilot controls when
   those providers are disabled.
 - Settings can stop Codex work at a remaining-allowance percentage and Copilot work
