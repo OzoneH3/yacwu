@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { filterAndSortModelChoices, isClaudeModelCatalog, modelDisplayProfile, modelPickerGroups, usageModelNames } from '../../src/lib/model-display';
+import { filterAndSortModelChoices, isClaudeModelCatalog, modelDisplayProfile, modelPickerGroups, usageModelName, usageModelNames } from '../../src/lib/model-display';
 
 const models = [
 	{ id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol' },
@@ -174,4 +174,18 @@ test('credit comparison handles context thresholds, cached input and unknown wri
  expect(copilotRatesNoHigher('copilot/claude-haiku-5.5', 'copilot/gpt-6-luna')).toBe(false);
  expect(copilotRatesNoHigher('copilot/unknown', 'copilot/gpt-6-luna')).toBe(false);
  expect(copilotRatesNoHigher('copilot/gpt-6-luna', 'copilot/gpt-5.5')).toBe(false);
+});
+
+test('Claude version IDs missing from the catalog learn under the catalog name', () => {
+	const names = usageModelNames([
+		{ id: 'opus', displayName: 'Claude Opus 5.5' },
+		{ id: 'default', displayName: 'Claude Opus 5.5 (default)' }
+	]);
+	expect(usageModelName(names, 'opus')).toBe('Claude Opus 5.5');
+	expect(usageModelName(names, 'claude-opus-5-5')).toBe('Claude Opus 5.5');
+	expect(usageModelName(names, 'claude-sonnet-5-5')).toBe('Claude Sonnet 5.5');
+	expect(usageModelName(names, 'claude-haiku-4-5-20251001')).toBe('Claude Haiku 4.5');
+	expect(usageModelName(names, 'claude-opus-5-5[1m]')).toBe('Claude Opus 5.5 · 1M');
+	expect(usageModelName(names, 'gpt-6-luna')).toBe('gpt-6-luna');
+	expect(usageModelName(names, 'copilot/claude-opus-5.5')).toBe('copilot/claude-opus-5.5');
 });

@@ -80,6 +80,16 @@ export function projectTaskUsage(summary: TaskUsageSummary | null, progress: Tas
 	return { total: summary.percent * multiplier, remaining: summary.percent * (multiplier - 1), basis };
 }
 
+/**
+ * A running task whose model and thinking level already have a learned rate
+ * but which has no token count yet (Claude reports usage only when a turn
+ * ends): its cost is known at the end, so it is not still "learning".
+ */
+export function awaitingTokenCount(task: UsageTask, analyses: Array<{ rates: Array<{ model: string; effort: string; percentPerMillionTokens: number | null }> } | null | undefined>): boolean {
+	if (task.endedAt !== null || task.partialTokens || task.tokens.totalTokens > 0) return false;
+	return analyses.some((analysis) => analysis?.rates.some((rate) => rate.model === task.model && rate.effort === task.effort && rate.percentPerMillionTokens != null));
+}
+
 export function formatAllowancePercent(value: number | null): string {
 	return value === null ? 'Learning…' : `~${value.toFixed(value > 0 && value < 0.01 ? 3 : 2)}%`;
 }

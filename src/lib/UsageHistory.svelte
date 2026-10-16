@@ -4,6 +4,7 @@
 	import { analyzeUsage, RATE_LABEL, RATE_TOKENS, type UsageEvent, type UsagePool } from './usage-analysis';
 	import BenchmarkControls from './BenchmarkControls.svelte';
 	import type { CostEstimate } from './usage-fit';
+	import { usageModelName } from './model-display';
 	let { host, sessionId, models, modelNames = {}, selectedModel, selectedEffort, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; modelNames?: Record<string, string>; selectedModel?: string; selectedEffort?: string; onclose: () => void } = $props();
 	let dialog = $state<HTMLDialogElement>();
 	let events = $state<UsageEvent[]>([]);
@@ -14,7 +15,7 @@
 	let poolSetting = $state('');
 	let windowDurationMins = $state<300 | 10080>(10080);
 	const windowLabel = $derived(windowDurationMins === 300 ? '5-hour' : 'Weekly');
-	const analysis = $derived(analyzeUsage(events, { host, windowDurationMins, modelName: (model) => modelNames[model] ?? model }));
+	const analysis = $derived(analyzeUsage(events, { host, windowDurationMins, modelName: (model) => usageModelName(modelNames, model) }));
 	const pools = $derived(analysis.pools.filter((pool) =>
 		pool.groups.some((group) => (!poolSetting || JSON.stringify([group.model, group.effort]) === poolSetting)
 			&& (!onlyConcurrentPools || group.peakWorkers > 1))

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { formatAllowancePercent, projectTaskUsage, summarizeTaskAllowances, summarizeTaskUsage } from '../../src/lib/task-usage';
+import { awaitingTokenCount, formatAllowancePercent, projectTaskUsage, summarizeTaskAllowances, summarizeTaskUsage } from '../../src/lib/task-usage';
 import type { UsageTask } from '../../src/lib/usage-analysis';
 
 function task(fields: Partial<UsageTask> = {}): UsageTask {
@@ -70,4 +70,18 @@ test('early agent estimates remain labelled provisional in combined task totals'
 	const summary = summarizeTaskUsage([root, agent], root);
 	expect(summary.percent).toBeCloseTo(.2);
 	expect(summary.provisional).toBe(true);
+});
+
+test('a running task with a learned rate but no token count yet is waiting, not learning', () => {
+	const zero = { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
+	const running = task({ model: 'Claude Opus 5.5', endedAt: null, status: 'running', tokens: zero, estimate: null });
+	const rated = { rates: [{ model: 'Claude Opus 5.5', effort: 'medium', percentPerMillionTokens: 0.48 }] };
+	const unrated = { rates: [{ model: 'Claude Opus 5.5', effort: 'medium', percentPerMillionTokens: null }] };
+	// The 5-hour rate alone is enough.
+	expect(awaitingTokenCount(running, [unrated, rated])).toBe(true);
+	expect(awaitingTokenCount(running, [unrated, null])).toBe(false);
+	expect(awaitingTokenCount(task({ ...running, effort: 'high' }), [rated])).toBe(false);
+	expect(awaitingTokenCount(task({ ...running, partialTokens: true }), [rated])).toBe(false);
+	expect(awaitingTokenCount(task({ ...running, tokens: { ...zero, totalTokens: 5 } }), [rated])).toBe(false);
+	expect(awaitingTokenCount(task({ ...running, endedAt: 5000 }), [rated])).toBe(false);
 });

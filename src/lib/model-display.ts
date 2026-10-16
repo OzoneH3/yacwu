@@ -197,3 +197,17 @@ export function usageModelNames(choices: ModelChoiceSummary[]): Record<string, s
 	}
 	return names;
 }
+
+/**
+ * The name a model's usage rate is learned under: its catalog name, or for a
+ * Claude version ID the catalog lacks, the same "Claude Opus 5.5" form. New
+ * Claude sessions name "claude-opus-5-5" while the catalog lists that model
+ * only as the "opus" alias; without this, one model would learn two rates.
+ */
+export function usageModelName(names: Record<string, string>, model: string): string {
+	if (names[model]) return names[model];
+	const match = model.startsWith('claude-') ? claudeVersion.exec(model) : null;
+	if (!match) return model;
+	const family = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+	return `Claude ${family} ${match[2]}${match[3] ? `.${match[3]}` : ''}${/\[1m\]/i.test(model) ? ' · 1M' : ''}`;
+}
