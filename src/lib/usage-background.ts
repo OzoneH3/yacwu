@@ -10,14 +10,18 @@ export interface UsageCache {
  save(update: { previousCursor: string; cursor: string; reset: boolean; events: UsageEvent[] }): Promise<void>;
 }
 
+export const USAGE_CACHE_LIMIT = 4;
+export const usageAnalysisKey = (host: string, names: Record<string, string>) =>
+ JSON.stringify([host, Object.entries(names).sort(([a], [b]) => a.localeCompare(b))]);
+
 /** Lives in the worker: raw journals and JSON parsing never enter UI state. */
 export function createUsageHistory(fetcher: (input: string, init?: RequestInit) => Promise<Response> = fetch, cache?: UsageCache) {
  let events: UsageEvent[] = [];
  let cursor = '';
  let loaded = false;
- let analyzers: { key: string; weekly: ReturnType<typeof createIncrementalUsageAnalyzer>; fiveHour: ReturnType<typeof createIncrementalUsageAnalyzer> } | null = null;
+ const entries = new Map<string, { revision: number; result: UsageAnalyses | null; weekly: ReturnType<typeof createIncrementalUsageAnalyzer>; fiveHour: ReturnType<typeof createIncrementalUsageAnalyzer> }>();
  let revision = 0;
- let previous: { key: string; revision: number; result: UsageAnalyses } | null = null;
+
  return {
   async refresh(host: string, names: Record<string, string>): Promise<UsageAnalyses> {
    if (!loaded) {
@@ -34,6 +38,7 @@ export function createUsageHistory(fetcher: (input: string, init?: RequestInit) 
    const incoming: UsageEvent[] = data.events ?? [];
    // Legacy responses are complete snapshots; this also keeps older servers usable.
    const reset = data.reset !== false;
+   if (reset) entries.clear();
    if (reset || incoming.length) {
     events = reset ? incoming : events.concat(incoming);
     revision++;
@@ -42,12 +47,18 @@ export function createUsageHistory(fetcher: (input: string, init?: RequestInit) 
    if (cursor && (reset || incoming.length || cursor !== previousCursor)) {
     try { await cache?.save({ previousCursor, cursor, reset, events: incoming }); } catch { /* A failed cache transaction never loses in-memory history. */ }
    }
-   const key = JSON.stringify([host, Object.entries(names).sort(([a], [b]) => a.localeCompare(b))]);
-   if (previous?.key === key && previous.revision === revision) return previous.result;
-   const modelName = (model: string) => usageModelName(names, model);
-   if (!analyzers || analyzers.key !== key || reset) analyzers = { key, weekly: createIncrementalUsageAnalyzer({ host, modelName }), fiveHour: createIncrementalUsageAnalyzer({ host, modelName, windowDurationMins: 300 }) };
-   const result = { weekly: analyzers.weekly.analyze(events), fiveHour: analyzers.fiveHour.analyze(events) };
-   previous = { key, revision, result };
+   const key = usageAnalysisKey(host, names);
+   let entry = entries.get(key);
+   if (entry) entries.delete(key); // Touch LRU, including unchanged reads.
+   else {
+    const modelName = (model: string) => usageModelName(names, model);
+    entry = { revision: -1, result: null, weekly: createIncrementalUsageAnalyzer({ host, modelName }), fiveHour: createIncrementalUsageAnalyzer({ host, modelName, windowDurationMins: 300 }) };
+   }
+   entries.set(key, entry);
+   while (entries.size > USAGE_CACHE_LIMIT) entries.delete(entries.keys().next().value!);
+   if (entry.revision === revision && entry.result) return entry.result;
+   const result = { weekly: entry.weekly.analyze(events), fiveHour: entry.fiveHour.analyze(events) };
+   entry.revision = revision; entry.result = result;
    return result;
   }
  };

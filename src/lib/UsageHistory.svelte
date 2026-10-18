@@ -4,6 +4,7 @@
 	import BenchmarkControls from './BenchmarkControls.svelte';
 	import type { CostEstimate } from './usage-fit';
 	import { loadUsageAnalysis } from './usage-client';
+	import { observeWhileVisible } from './polling';
 	import type { UsageAnalyses } from './usage-background';
 	let { host, sessionId, models, modelNames = {}, selectedModel, selectedEffort, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; modelNames?: Record<string, string>; selectedModel?: string; selectedEffort?: string; onclose: () => void } = $props();
 	let dialog = $state<HTMLDialogElement>();
@@ -56,9 +57,8 @@
 		finally { loading = false; }
 	}
 	onMount(() => {
-		dialog?.showModal(); void refresh();
-		const timer = setInterval(() => void refresh(), 30_000);
-		return () => clearInterval(timer);
+		dialog?.showModal();
+		return observeWhileVisible(refresh, 30_000);
 	});
 </script>
 

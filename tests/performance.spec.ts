@@ -74,3 +74,56 @@ test('reloading restores the journal cursor and requests only a delta', async ({
  await expect.poll(() => cursors.length).toBeGreaterThan(0);
  expect(cursors[0]).toBe('persisted');
 });
+
+test('hidden tabs pause usage polling but keep bounded runtime recovery and refresh when shown', async ({ page }) => {
+ const ids = Array.from({ length: 12 }, (_, i) => `poll-session-${i}`);
+ let usageReads = 0, runtimeReads = 0, activeReads = 0, peakReads = 0;
+ const thread = (id: string) => ({ id, host: 'local', name: id, cwd: '/workspace', status: { type: 'active' }, turns: [{ id: `turn-${id}`, status: 'inProgress', items: [] }] });
+ await page.addInitScript(ids => {
+  localStorage.setItem('yacwu-running-tasks', JSON.stringify(Object.fromEntries(ids.map(id => [id, id]))));
+  let visibility = 'visible';
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+  (window as any).setTestVisibility = (value: string) => { visibility = value; document.dispatchEvent(new Event('visibilitychange')); };
+  (window as any).usageReplies = [];
+  const OriginalWorker = window.Worker;
+  window.Worker = class extends OriginalWorker {
+   constructor(url: string | URL, options?: WorkerOptions) {
+    super(url, options);
+    this.addEventListener('message', event => { (window as any).usageReplies.push({ unchanged: event.data.unchanged, hasResult: Boolean(event.data.result) }); });
+   }
+  };
+ }, ids);
+ await page.clock.install();
+ await page.context().route('**/api/**', async route => {
+  const url = new URL(route.request().url());
+  if (url.pathname === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+  if (url.pathname === '/api/hosts') return route.fulfill({ json: { hosts: [{ name: 'local', state: 'connected', kind: 'local' }] } });
+  if (url.pathname === '/api/usage') {
+   usageReads++;
+   return route.fulfill({ json: { cursor: 'stable', reset: usageReads === 1, events: [] } });
+  }
+  if (url.pathname.endsWith('/runtime')) {
+   runtimeReads++; peakReads = Math.max(peakReads, ++activeReads);
+   await new Promise(resolve => setTimeout(resolve, 30));
+   await route.fulfill({ json: { thread: thread(url.pathname.split('/')[3]) } }); activeReads--; return;
+  }
+  if (url.pathname === '/api/threads') return route.fulfill({ json: { data: ids.map(thread) } });
+  if (url.pathname.endsWith('/model')) return route.fulfill({ json: { model: 'gpt-6-luna', effort: 'medium', models: [] } });
+  if (url.pathname.startsWith('/api/threads/')) return route.fulfill({ json: { thread: thread(url.pathname.split('/')[3]), data: [] } });
+  return route.fulfill({ json: {} });
+ });
+ await page.goto(`/s/${ids[0]}`);
+ await expect.poll(() => runtimeReads, { timeout: 5000 }).toBeGreaterThanOrEqual(ids.length);
+ expect(peakReads).toBeLessThanOrEqual(4);
+ await expect.poll(() => usageReads, { timeout: 5000 }).toBeGreaterThan(0);
+ await expect.poll(() => page.evaluate(() => (window as any).usageReplies.length), { timeout: 5000 }).toBeGreaterThan(0);
+ await page.evaluate(() => (window as any).setTestVisibility('hidden'));
+ const usageBefore = usageReads, runtimeBefore = runtimeReads;
+ await page.clock.fastForward(61000);
+ await expect.poll(() => runtimeReads, { timeout: 5000 }).toBeGreaterThan(runtimeBefore);
+ expect(usageReads).toBe(usageBefore);
+ await page.evaluate(() => (window as any).setTestVisibility('visible'));
+ await expect.poll(() => usageReads, { timeout: 5000 }).toBeGreaterThan(usageBefore);
+ await expect.poll(() => page.evaluate(() => (window as any).usageReplies.some((reply: any) => reply.unchanged && !reply.hasResult)), { timeout: 5000 }).toBe(true);
+ expect(peakReads).toBeLessThanOrEqual(4);
+});

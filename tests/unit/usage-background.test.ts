@@ -63,3 +63,29 @@ test('server reset replaces persisted history instead of retaining stale tasks',
  expect((await history.refresh('local', {})).weekly.tasks).toHaveLength(0);
  expect(updates).toEqual([{ previousCursor: 'stale', cursor: 'fresh', reset: true, events: [] }]);
 });
+
+test('alternating hosts keep their cached analyses and journal resets invalidate every host', async () => {
+ let reset = true;
+ const history = createUsageHistory(async () => { const data = { cursor: 'one', reset, events: [] }; reset = false; return Response.json(data); });
+ const a = await history.refresh('local', {});
+ const b = await history.refresh('claude', {});
+ expect(await history.refresh('local', {})).toBe(a);
+ expect(await history.refresh('claude', {})).toBe(b);
+ reset = true;
+ expect(await history.refresh('local', {})).not.toBe(a);
+ expect(await history.refresh('claude', {})).not.toBe(b);
+});
+
+test('analysis cache evicts least-recently-used catalogs at four entries', async () => {
+ let first = true;
+ const history = createUsageHistory(async () => { const reset = first; first = false; return Response.json({ cursor: 'c', reset, events: [] }); });
+ const a = await history.refresh('a', {});
+ const b = await history.refresh('b', {});
+ await history.refresh('c', {}); await history.refresh('d', {});
+ expect(await history.refresh('a', {})).toBe(a);
+ await history.refresh('e', {});
+ expect(await history.refresh('b', {})).not.toBe(b);
+ expect(await history.refresh('a', {})).toBe(a);
+ const renamed = await history.refresh('a', { old: 'new' });
+ expect(renamed).not.toBe(a);
+});

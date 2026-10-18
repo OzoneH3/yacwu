@@ -70,6 +70,7 @@
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
 	import { RATE_LABEL } from '$lib/usage-analysis';
 	import { loadUsageAnalysis } from '$lib/usage-client';
+	import { forEachConcurrent, observeWhileVisible } from '$lib/polling';
 	import type { UsageAnalysis } from '$lib/usage-background';
 	import { createTaskAllowanceSummarizer, projectTaskUsage, formatAllowancePercent, awaitingTokenCount, type TaskUsageSummary } from '$lib/task-usage';
 	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
@@ -706,10 +707,11 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	});
 
 	async function refreshTaskUsage(host: string) {
-		if (usageLoading.has(host)) return;
+		if (document.visibilityState !== 'visible' || usageLoading.has(host)) return;
 		usageLoading.add(host);
 		try {
 			const analysis = await loadUsageAnalysis(host, usageModelNamesByHost[host] ?? {});
+			if (usageAnalysisByHost[host] === analysis.weekly && fiveHourUsageAnalysisByHost[host] === analysis.fiveHour) return;
 			usageAnalysisByHost = { ...usageAnalysisByHost, [host]: analysis.weekly };
 			fiveHourUsageAnalysisByHost = { ...fiveHourUsageAnalysisByHost, [host]: analysis.fiveHour };
 		} catch { /* Retain the last learned rates if telemetry is unavailable. */ }
@@ -719,7 +721,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	function scheduleTaskUsageRefresh(threadId: string) {
 		const rootId = agents[threadId] ? agentRootId(agents, agents[threadId]) : threadId;
 		const host = sessionHost(rootId);
-		if (host !== activeHost || usageRefreshTimers.has(host)) return;
+		if (document.visibilityState !== 'visible' || host !== activeHost || usageRefreshTimers.has(host)) return;
 		usageRefreshTimers.set(host, setTimeout(() => {
 			usageRefreshTimers.delete(host);
 			void refreshTaskUsage(host);
@@ -760,9 +762,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	$effect(() => {
 		if (!activeId || usageHistoryOpen) return;
 		const host = activeHost;
-		void refreshTaskUsage(host);
-		const timer = setInterval(() => void refreshTaskUsage(host), settings.usageRefreshSeconds * 1000);
-		return () => clearInterval(timer);
+		return observeWhileVisible(() => refreshTaskUsage(host), settings.usageRefreshSeconds * 1000);
 	});
 	// Slash-command autocomplete: offered while the composer holds a bare
 	// command token ("/…" with no whitespace or newline yet), mirroring the
@@ -1421,8 +1421,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	$effect(() => {
 		if (!sessions.some((session) => threads[session.id]?.status === 'running')) return;
-		const timer = window.setInterval(() => activityClock = Date.now(), 1000);
-		return () => window.clearInterval(timer);
+		return observeWhileVisible(() => { activityClock = Date.now(); }, 1000);
 	});
 
 	// Evidence the running turn is moving: its latest update (or one of its
@@ -1466,9 +1465,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				processSamples = { ...processSamples, [id]: { previous: processSamples[id]?.current ?? null, current } };
 			} catch { /* Keep the last sample. */ }
 		};
-		void sample();
-		const timer = setInterval(sample, 10_000);
-		return () => { stopped = true; clearInterval(timer); };
+		const stopPolling = observeWhileVisible(sample, 10_000);
+		return () => { stopped = true; stopPolling(); };
 	});
 	const viewedTurnElapsed = $derived.by(() => {
 		activityClock;
@@ -1574,7 +1572,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			// Ask each thread's own backend. A loaded-thread list is not enough:
 			// it covers one host only, and a persistent backend that Yacwu just
 			// reconnected to lists none of its still-running threads.
-			await Promise.all(Object.entries(previouslyRunning).map(async ([threadId, sessionId]) => {
+			await forEachConcurrent(Object.entries(previouslyRunning), 4, async ([threadId, sessionId]) => {
 				const observedTurnId = threads[threadId]?.turnId;
 				try {
 					const url = new URL(threadApi(threadId, '/runtime'), window.location.origin);
@@ -1608,7 +1606,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						addLocalNote(sessionId, `Task interrupted.\nReason: ${interruptionReason(thread, thread.status?.type !== 'notLoaded')}\nUse Continue interrupted task to resume.`, 'err');
 					}
 				} catch { /* Unreachable is not proof of interruption; retain state. */ }
-			}));
+			});
 			for (const sessionId of checking) delete recoveringSessions[sessionId];
 			persistRunningTasks();
 			persistInterruptedSessions();
@@ -5513,11 +5511,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch { /* Defaults if storage is disabled. */ }
 		const runtimeCheckTimer = setInterval(() => void reconcileInterruptedSessions(), 15000);
 		loadSessions();
-		const accountUsageTimer = setInterval(() => {
-			if (activeId) void loadAccountUsage(activeHost, true);
-		}, 5 * 60 * 1000);
-		void loadResetFeed();
-		const resetFeedTimer = setInterval(() => void loadResetFeed(), 10 * 60 * 1000);
+		const stopAccountUsagePolling = observeWhileVisible(() => {
+			if (activeId) return loadAccountUsage(activeHost, true);
+		}, 5 * 60 * 1000, { immediate: false });
+		const stopResetFeedPolling = observeWhileVisible(() => loadResetFeed(), 10 * 60 * 1000);
 		/** Every later `yacwu/connected` is a reconnect. */
 		let streamConnectedBefore = false;
 		// A stream can die without an error (sleep, network change, a proxy):
@@ -5591,8 +5588,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			window.removeEventListener('focusout', onTooltipFocusOut);
 			window.removeEventListener('scroll', dismissTooltipOnViewportChange, true);
 			window.removeEventListener('resize', dismissTooltipOnViewportChange);
-			clearInterval(accountUsageTimer);
-			clearInterval(resetFeedTimer);
+			stopAccountUsagePolling();
+			stopResetFeedPolling();
 			clearInterval(runtimeCheckTimer);
 			for (const timer of usageRefreshTimers.values()) clearTimeout(timer);
 			usageRefreshTimers.clear();
