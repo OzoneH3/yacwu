@@ -554,6 +554,10 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		if (pendingQuestionsForThread(items, threadId, resolvedInteractiveQuestionIds).length
 			|| retainedInteractiveQuestions.some((question) => question.threadId === threadId
 				&& !resolvedInteractiveQuestionIds[`${threadId}:${question.id}`])) return 'choice';
+		// An open question only waits for an answer once the turn has ended on
+		// it; mid-turn commentary ("…can this be built from existing calls?")
+		// is the agent thinking aloud while it keeps working.
+		if (threads[threadId]?.status === 'running') return null;
 		for (let index = items.length - 1; index >= 0; index--) {
 			const item = items[index] as any;
 			if (item.type === 'userMessage') return null;
