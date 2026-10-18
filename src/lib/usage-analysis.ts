@@ -244,17 +244,22 @@ function resolveSpawnEvidence(events: UsageEvent[]): UsageEvent[] {
 	})].sort((a, b) => a.at - b.at);
 }
 
-export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; settleMs?: number; windowDurationMins?: 300 | 10080; modelName?: (model: string) => string } = {}) {
+type UsageOptions = { host?: string; settleMs?: number; windowDurationMins?: 300 | 10080; modelName?: (model: string) => string };
+
+function prepareUsage(rawEvents: UsageEvent[], options: UsageOptions) {
 	const host = options.host ?? 'local';
-	// Aliases of one model learn one rate (see usageModelNames).
-	const modelName = options.modelName ?? ((model: string) => model);
-	const settleMs = options.settleMs ?? 60_000;
 	const windowDurationMins = options.windowDurationMins ?? 10080;
 	// Legacy quotas and benchmark boundaries describe the weekly allowance.
 	// Analyze each window independently; never mix their percentages or resets.
 	const windowEvents = rawEvents.filter((event) => !['quota', 'benchmarkBoundary', 'benchmarkBoundaryEnd'].includes(event.event)
 		|| (event.windowDurationMins ?? 10080) === windowDurationMins);
-	const events = resolveSpawnEvidence(accountEvents(windowEvents, host));
+	return resolveSpawnEvidence(accountEvents(windowEvents, host));
+}
+
+function createUsageReducer(options: UsageOptions) {
+	const host = options.host ?? 'local';
+	const modelName = options.modelName ?? ((model: string) => model);
+	const settleMs = options.settleMs ?? 60_000;
 	const tasks: UsageTask[] = [];
 	const tasksByTurn = new Map<string, UsageTask>();
 	const active = new Map<string, UsageTask>();
@@ -287,6 +292,8 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		pools.push(pool);
 		return pool;
 	}
+ return {
+  append(events: UsageEvent[]) {
 	// Stored file order disambiguates notifications in the same millisecond.
 	for (const event of events) {
 		if (!Number.isFinite(event.at)) continue;
@@ -426,6 +433,27 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			}
 		}
 	}
+  },
+  snapshot() { return structuredClone({ tasks, quotas, observations, pools, calibrationScope, baseline, intervalTokens, intervalTasks, lastTokenAt, intervalIncomplete, excludedIntervals, benchmarkInterval }); }
+ };
+}
+
+function finishUsage(state: ReturnType<ReturnType<typeof createUsageReducer>['snapshot']>, events: UsageEvent[], options: UsageOptions) {
+	const settleMs = options.settleMs ?? 60_000;
+	const windowDurationMins = options.windowDurationMins ?? 10080;
+ let { tasks, quotas, observations, pools, calibrationScope, baseline, intervalTokens, intervalTasks, lastTokenAt, intervalIncomplete, excludedIntervals, benchmarkInterval } = state;
+	function recordPool(end: UsageEvent, status: UsagePool['status']): UsagePool | null {
+		if (!baseline || !intervalTasks.size || !Number.isFinite(end.usedPercent)) return null;
+		const groups = Object.entries(intervalTokens).map(([key, tokens]) => {
+			const [model, effort] = JSON.parse(key);
+			const contributors = [...intervalTasks.values()].filter(({ task }) => groupKey(task.model, task.effort) === key);
+			return { model, effort, tokens: { ...tokens }, contributors, ...poolConcurrency(contributors, baseline!.at, end.at) };
+		});
+		const pool: UsagePool = { startedAt: baseline.at, endedAt: end.at, weeklyLeftBefore: 100 - baseline.usedPercent!,
+			weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups };
+		pools.push(pool);
+		return pool;
+	}
 	const latestQuota = quotas.at(-1);
 	if (baseline && latestQuota && latestQuota.at >= baseline.at && latestQuota.accountKey === baseline.accountKey && sameResetWindow(latestQuota.resetsAt, baseline.resetsAt)) {
 		recordPool({ ...latestQuota, at: Math.max(latestQuota.at, lastTokenAt) }, intervalIncomplete ? 'excluded' : 'accumulating');
@@ -493,4 +521,76 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 		}
 	}
 	return { windowDurationMins, tasks: tasks.reverse(), pools: pools.reverse(), rates, observations: observations.length, excludedIntervals, calibrated: learned.calibrated, hosts: [...new Set(events.map((event) => event.host))] };
+}
+
+
+/** Quota polling and settings updates cannot retroactively change spawn or
+ * idle-read evidence. Append these directly; other event kinds go through
+ * the full evidence resolver before deciding whether reducer replay is needed. */
+function createUsagePreparation(options: UsageOptions) {
+ let raw: UsageEvent[] = [];
+ let prepared: UsageEvent[] = [];
+ let accounts = new Map<string, string>();
+ let lastAt = -Infinity;
+ const host = options.host ?? 'local';
+ const window = options.windowDurationMins ?? 10080;
+ return (events: UsageEvent[]) => {
+  const incoming = events.slice(raw.length);
+  const append = raw.length > 0 && events.length >= raw.length && raw.every((event, i) => event === events[i])
+   && incoming.every(event => Number.isFinite(event.at) && event.at >= lastAt
+    && ['metadata', 'settings', 'quota', 'benchmarkBoundary', 'benchmarkBoundaryEnd', 'benchmarkFinished'].includes(event.event));
+  if (append) {
+   const selected = accounts.get(host) ?? `unidentified:${host}`;
+   const tail = incoming.filter(event => !['quota', 'benchmarkBoundary', 'benchmarkBoundaryEnd'].includes(event.event)
+     || (event.windowDurationMins ?? 10080) === window)
+    .map(event => ({ ...event, accountKey: accounts.get(event.host) ?? `unidentified:${event.host}` }))
+    .filter(event => event.accountKey === selected || event.accountKey === `unidentified:${host}`)
+    .sort((a, b) => a.at - b.at);
+   prepared = prepared.concat(tail);
+  } else {
+   prepared = prepareUsage(events, options);
+   accounts = new Map();
+   const accountEvents = events.filter(event => event.event === 'account').sort((a, b) => a.at - b.at);
+   for (const event of accountEvents) {
+    if (event.fingerprint) accounts.set(event.host, event.fingerprint); else accounts.delete(event.host);
+   }
+  }
+  raw = events.slice();
+  lastAt = events.reduce((at, event) => Math.max(at, Number.isFinite(event.at) ? event.at : -Infinity), -Infinity);
+  return prepared;
+ };
+}
+
+/** Preserve the reducer across chronological appends. Late spawn/snapshot/account
+ * evidence can change the prepared prefix; replay in that case for exact parity. */
+export function createIncrementalUsageAnalyzer(options: UsageOptions = {}) {
+ const prepare = createUsagePreparation(options);
+ let reducer = createUsageReducer(options);
+ let prefix: UsageEvent[] = [];
+ let processed = 0;
+ let replays = 0;
+ return {
+  analyze(rawEvents: UsageEvent[]) {
+   const events = prepare(rawEvents);
+   if (events.length < prefix.length || prefix.some((event, i) => {
+    const next = events[i];
+    const keys = Object.keys(event) as (keyof UsageEvent)[];
+    return keys.length !== Object.keys(next).length || keys.some(key => event[key] !== next[key]);
+   })) {
+    reducer = createUsageReducer(options); prefix = []; replays++;
+   }
+   const incoming = events.slice(prefix.length);
+   reducer.append(incoming); processed += incoming.length;
+   prefix = events;
+   return finishUsage(reducer.snapshot(), events, options);
+  },
+  get stats() { return { processed, replays }; }
+ };
+}
+
+export function analyzeUsage(rawEvents: UsageEvent[], options: UsageOptions = {}) {
+ const events = prepareUsage(rawEvents, options);
+ const reducer = createUsageReducer(options);
+ reducer.append(events);
+ return finishUsage(reducer.snapshot(), events, options);
 }

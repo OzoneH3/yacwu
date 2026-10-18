@@ -1,18 +1,30 @@
-import { analyzeUsage, type UsageEvent } from './usage-analysis';
+import { analyzeUsage, createIncrementalUsageAnalyzer, type UsageEvent } from './usage-analysis';
 import { usageModelName } from './model-display';
 import { hostQuery } from './protocol';
 
 export type UsageAnalysis = ReturnType<typeof analyzeUsage>;
 export interface UsageAnalyses { weekly: UsageAnalysis; fiveHour: UsageAnalysis }
 
+export interface UsageCache {
+ load(): Promise<{ cursor: string; events: UsageEvent[] } | null>;
+ save(update: { previousCursor: string; cursor: string; reset: boolean; events: UsageEvent[] }): Promise<void>;
+}
+
 /** Lives in the worker: raw journals and JSON parsing never enter UI state. */
-export function createUsageHistory(fetcher: (input: string, init?: RequestInit) => Promise<Response> = fetch) {
+export function createUsageHistory(fetcher: (input: string, init?: RequestInit) => Promise<Response> = fetch, cache?: UsageCache) {
  let events: UsageEvent[] = [];
  let cursor = '';
+ let loaded = false;
+ let analyzers: { key: string; weekly: ReturnType<typeof createIncrementalUsageAnalyzer>; fiveHour: ReturnType<typeof createIncrementalUsageAnalyzer> } | null = null;
  let revision = 0;
  let previous: { key: string; revision: number; result: UsageAnalyses } | null = null;
  return {
   async refresh(host: string, names: Record<string, string>): Promise<UsageAnalyses> {
+   if (!loaded) {
+    loaded = true;
+    try { const saved = await cache?.load(); if (saved) { events = saved.events; cursor = saved.cursor; } } catch { /* Cache is optional (private browsing, quota, eviction). */ }
+   }
+   const previousCursor = cursor;
    const query = new URLSearchParams(hostQuery(host).slice(1));
    query.set('incremental', '1');
    if (cursor) query.set('cursor', cursor);
@@ -27,10 +39,14 @@ export function createUsageHistory(fetcher: (input: string, init?: RequestInit) 
     revision++;
    }
    cursor = data.cursor ?? '';
+   if (cursor && (reset || incoming.length || cursor !== previousCursor)) {
+    try { await cache?.save({ previousCursor, cursor, reset, events: incoming }); } catch { /* A failed cache transaction never loses in-memory history. */ }
+   }
    const key = JSON.stringify([host, Object.entries(names).sort(([a], [b]) => a.localeCompare(b))]);
    if (previous?.key === key && previous.revision === revision) return previous.result;
    const modelName = (model: string) => usageModelName(names, model);
-   const result = { weekly: analyzeUsage(events, { host, modelName }), fiveHour: analyzeUsage(events, { host, modelName, windowDurationMins: 300 }) };
+   if (!analyzers || analyzers.key !== key || reset) analyzers = { key, weekly: createIncrementalUsageAnalyzer({ host, modelName }), fiveHour: createIncrementalUsageAnalyzer({ host, modelName, windowDurationMins: 300 }) };
+   const result = { weekly: analyzers.weekly.analyze(events), fiveHour: analyzers.fiveHour.analyze(events) };
    previous = { key, revision, result };
    return result;
   }

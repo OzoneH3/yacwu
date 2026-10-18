@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { analyzeUsage as analyzeObservedUsage, type UsageEvent } from '../../src/lib/usage-analysis';
+import { createIncrementalUsageAnalyzer, analyzeUsage as analyzeObservedUsage, type UsageEvent } from '../../src/lib/usage-analysis';
 const analyzeUsage = (events: UsageEvent[]) => analyzeObservedUsage(events, { settleMs: 0 });
 
 const event = (at: number, event: string, fields: Partial<UsageEvent> = {}): UsageEvent => ({ at, event, host: 'local', ...fields });
@@ -382,4 +382,44 @@ test('indexed quota lookups keep inclusive before/after boundaries and ignore la
  expect(task.weeklyLeftBefore).toBe(98);
  expect(task.weeklyLeftAfter).toBe(95);
  expect(task.sharedAllowanceDelta).toBe(3);
+});
+
+test('incremental reducer matches replay for every prefix, including late evidence and resets', () => {
+ const events: UsageEvent[] = [
+  { at: 1, host: 'local', event: 'account', fingerprint: 'a' },
+  { at: 2, host: 'local', event: 'turn/started', threadId: 't', turnId: '1' },
+  { at: 3, host: 'local', event: 'tokens', threadId: 't', turnId: '1', total: { totalTokens: 10 }, last: { totalTokens: 10 } },
+  { at: 4, host: 'local', event: 'spawnedThread', threadId: 't', model: 'm', effort: 'high' },
+  { at: 5, host: 'local', event: 'turn/completed', threadId: 't', turnId: '1' },
+  { at: 6, host: 'local', event: 'quota', usedPercent: 3, resetsAt: 1000 },
+  { at: 7, host: 'local', event: 'account', fingerprint: 'b' }
+ ];
+ const incremental = createIncrementalUsageAnalyzer({ settleMs: 0 });
+ for (let i = 1; i <= events.length; i++) expect(incremental.analyze(events.slice(0, i))).toEqual(analyzeUsage(events.slice(0, i)));
+ expect(incremental.stats.replays).toBeGreaterThan(0);
+ expect(incremental.analyze([])).toEqual(analyzeUsage([]));
+});
+
+test('ordinary appends process only new events and snapshots cannot mutate reducer state', () => {
+ const events: UsageEvent[] = [{ at: 1, host: 'local', event: 'newThread', threadId: 't' }];
+ const incremental = createIncrementalUsageAnalyzer({ settleMs: 0 });
+ incremental.analyze(events);
+ events.push({ at: 2, host: 'local', event: 'turn/started', threadId: 't', turnId: '1' });
+ const first = incremental.analyze(events);
+ first.tasks[0].status = 'modified';
+ events.push({ at: 3, host: 'local', event: 'turn/completed', threadId: 't', turnId: '1' });
+ expect(incremental.analyze(events)).toEqual(analyzeUsage(events));
+ expect(incremental.stats).toEqual({ processed: 3, replays: 0 });
+});
+
+test('late historical proof and out-of-order records invalidate the prepared prefix', () => {
+ const events: UsageEvent[] = [
+  event(100, 'turn/started', { threadId: 't', turnId: '1' }),
+  event(110, 'tokens', { threadId: 't', turnId: '1', total: { totalTokens: 100 } }),
+  event(120, 'historicalSnapshot', { threadId: 't', turnId: '1', snapshotAt: 110, completedAt: 90, total: { totalTokens: 100 } }),
+  event(105, 'metadata', { threadId: 't', model: 'late-model' })
+ ];
+ const incremental = createIncrementalUsageAnalyzer({ settleMs: 0 });
+ for (let i = 1; i <= events.length; i++) expect(incremental.analyze(events.slice(0, i))).toEqual(analyzeUsage(events.slice(0, i)));
+ expect(incremental.stats.replays).toBe(2);
 });

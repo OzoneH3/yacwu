@@ -39,3 +39,38 @@ test('usage runs in a worker and refreshes incrementally; runtime polling avoids
  expect(requests.filter(url => url.startsWith(`/api/threads/${other}/runtime`)).length).toBeGreaterThan(0);
  expect(requests.some(url => url.startsWith(`/api/threads/${other}?`) && url.includes('turns=1'))).toBe(false);
 });
+
+test('reloading restores the journal cursor and requests only a delta', async ({ page }) => {
+ const cursors: (string | null)[] = [];
+ const thread = { id: 'cache-session', host: 'local', cwd: '/workspace', status: { type: 'idle' }, turns: [] };
+ await page.context().route('**/api/**', async route => {
+  const url = new URL(route.request().url());
+  if (url.pathname === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+  if (url.pathname === '/api/hosts') return route.fulfill({ json: { hosts: [{ name: 'local', label: 'Local', state: 'connected', kind: 'local' }] } });
+  if (url.pathname === '/api/usage') {
+   cursors.push(url.searchParams.get('cursor'));
+   return route.fulfill({ json: { cursor: 'persisted', reset: !url.searchParams.has('cursor'), events: [] } });
+  }
+  if (url.pathname === '/api/threads') return route.fulfill({ json: { data: [thread] } });
+  if (url.pathname.startsWith('/api/threads/')) return route.fulfill({ json: { thread, data: [], models: [] } });
+  return route.fulfill({ json: { data: [], models: [] } });
+ });
+ await page.goto('/s/cache-session');
+ await expect.poll(() => cursors.length).toBeGreaterThan(0);
+ // Wait for the atomic cache transaction before destroying the worker.
+ await expect.poll(() => page.evaluate(async () => {
+  return new Promise(resolve => {
+   const request = indexedDB.open('yacwu-usage-journal');
+   request.onsuccess = () => {
+    const db = request.result;
+    if (!db.objectStoreNames.contains('meta')) { db.close(); resolve(null); return; }
+    const tx = db.transaction('meta'); const get = tx.objectStore('meta').get('cursor');
+    tx.oncomplete = () => { db.close(); resolve(get.result); };
+   };
+  });
+ })).toBe('persisted');
+ cursors.length = 0;
+ await page.reload();
+ await expect.poll(() => cursors.length).toBeGreaterThan(0);
+ expect(cursors[0]).toBe('persisted');
+});
