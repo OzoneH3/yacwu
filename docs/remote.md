@@ -34,17 +34,29 @@ things (`server/src/yacwu/remote.gleam`):
    manager actor (`server/src/yacwu/codex.gleam`), which multiplexes the
    JSON-RPC traffic exactly as it does for the local stdio child.
 
-### Host discovery: `~/.ssh/config`, nothing else
+### Host discovery: SSH config and temporary access
 
-yacwu has no host registry and stores nothing on disk. The set of remote
-machines is the set of concrete `Host` aliases in `~/.ssh/config` (following
-`Include`), re-read on demand. Authentication, usernames, ports, jump hosts —
-all of it stays in ssh's hands; yacwu only ever passes the alias to the `ssh`
-binary, with `BatchMode=yes` so a host that would prompt fails fast and
-visibly instead of hanging a server process.
+Yacwu discovers concrete `Host` aliases in `~/.ssh/config` (following
+`Include`) and temporary identities created through **Manage SSH access**.
+Both are re-read on demand. Existing aliases retain their SSH authentication,
+usernames, ports and jump hosts; runtime connections use `BatchMode=yes` so
+interactive prompts fail visibly instead of hanging a server process.
 
 Pattern aliases (`*`, `?`, `!…`) are skipped, as is anything unsafe to place
 in argv or a socket filename.
+
+### Password-assisted temporary access
+
+To connect without an existing SSH key, open **New session → Manage SSH access**,
+enter the host, username, port and password, then choose an access duration.
+Confirm the host fingerprint before trusting a new host. The password is used
+in memory only; Yacwu saves a dedicated private key in its state directory.
+These direct connections require Node.js locally, OpenSSH on the remote host
+with [`expiry-time` support](https://man.openbsd.org/sshd#expiry-time), and Codex
+installed remotely. Expiry closes Yacwu's tunnel and blocks new connections;
+remote tasks keep running. **Remove access** revokes the public key and deletes
+the local identity; an expired key may require the account password for cleanup.
+Existing SSH config aliases keep their normal authentication and jump-host setup.
 
 ### Reconnects
 
@@ -69,7 +81,7 @@ explicit `?host=` hint — the frontend does so wherever it knows the session's
 host, and deep links carry the host in the URL (`/s/<id>?host=<name>`), so a
 remote session opens correctly even into a freshly started yacwu.
 
-`GET /api/hosts` lists local plus all discovered aliases with their live
+`GET /api/hosts` lists local plus all discovered aliases and temporary identities with their live
 connection state, and never connects to anything; a host is only contacted
 when the user addresses it (picks it in the create form, opens one of its
 sessions).
@@ -83,7 +95,8 @@ sessions).
   the provider needs (API-key variables like a custom provider's `env_key`)
   belong there.
 - SSH key/agent auth that works non-interactively (`ssh <host>` with no
-  prompts). Hosts needing passwords or touch prompts will show a clear error.
+  prompts), or password-assisted temporary access as described above. Runtime
+  connections never prompt for a password or security-key touch.
 - OpenSSH ≥ 6.7 on both sides (Unix-socket forwarding).
 - On systemd distributions that set `KillUserProcesses=yes`, run
   `loginctl enable-linger` once on the remote machine so the detached

@@ -27,6 +27,7 @@ export interface ThreadSummary {
 /** A machine sessions can run on: local, or an ~/.ssh/config alias. */
 export interface HostInfo {
 	name: string;
+	temporaryAccessExpiresAt?: number | null;
 	kind: 'local' | 'remote' | 'backend';
 	provider?: string;
 	state: 'connected' | 'connecting' | 'disconnected';

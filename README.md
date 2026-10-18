@@ -123,6 +123,7 @@ rules locally, and records usage/diagnostic journals on the server.
   model choices and estimated credits per task
 - 🛑 Optional server-enforced stops: Codex at a remaining-allowance percentage,
   Copilot at a billing-cycle credit total (both off by default)
+- 🔑 Password-assisted SSH setup creates a dedicated key for 1 hour to 7 days, with host fingerprint confirmation and access revocation.
 - 🌐 Remote machines over SSH with a persistent app-server and full feature
   parity (see [docs/remote.md](docs/remote.md))
 - 🗄️ No storage layer — the backend is the source of truth

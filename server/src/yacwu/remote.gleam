@@ -34,6 +34,7 @@ import gleam/option.{Some}
 import gleam/result
 import gleam/string
 import simplifile
+import yacwu/remote_access
 import yacwu/ws
 
 // -- Erlang FFI ---------------------------------------------------------------
@@ -200,6 +201,7 @@ pub type Bootstrap {
 /// script through `ssh` and parses its report. Synchronous — call from a
 /// connector process, never from the manager actor itself.
 pub fn bootstrap(host: String) -> Result(Bootstrap, String) {
+  use _ <- result.try(remote_access.check(host))
   let port =
     erl_open_port(SpawnExecutable("/usr/bin/env"), [
       Binary,
@@ -207,14 +209,15 @@ pub fn bootstrap(host: String) -> Result(Bootstrap, String) {
       UseStdio,
       StderrToStdout,
       Hide,
-      Args([
-        "ssh",
-        "-oBatchMode=yes",
-        "-oConnectTimeout=15",
-        "--",
-        host,
-        "exec sh",
-      ]),
+      Args(
+        list.append(["ssh", ..remote_access.arguments(host)], [
+          "-oBatchMode=yes",
+          "-oConnectTimeout=15",
+          "--",
+          host,
+          "exec sh",
+        ]),
+      ),
     ])
   let _ = erl_port_command(port, bit_array.from_string(bootstrap_script))
   let output = collect_port_output(port, "", deadline_ms(60_000))
@@ -426,22 +429,29 @@ pub fn open_forwarder(
           UseStdio,
           StderrToStdout,
           Hide,
-          Args([
-            "sh",
-            "-c",
-            "ssh \"$@\" & p=$!; cat >/dev/null; kill \"$p\" 2>/dev/null",
-            "sh",
-            "-oBatchMode=yes",
-            "-oConnectTimeout=15",
-            "-oExitOnForwardFailure=yes",
-            "-oServerAliveInterval=15",
-            "-oServerAliveCountMax=3",
-            "-N",
-            "-L",
-            local <> ":" <> remote_sock,
-            "--",
-            host,
-          ]),
+          Args(
+            list.append(
+              [
+                "sh",
+                "-c",
+                remote_access.tunnel_wrapper(host),
+                "sh",
+                ..remote_access.arguments(host)
+              ],
+              [
+                "-oBatchMode=yes",
+                "-oConnectTimeout=15",
+                "-oExitOnForwardFailure=yes",
+                "-oServerAliveInterval=15",
+                "-oServerAliveCountMax=3",
+                "-N",
+                "-L",
+                local <> ":" <> remote_sock,
+                "--",
+                host,
+              ],
+            ),
+          ),
         ]),
       )
     }
@@ -613,17 +623,18 @@ pub fn detect_holders(
           UseStdio,
           StderrToStdout,
           Hide,
-          Args([
-            "ssh",
-            "-oBatchMode=yes",
-            "-oConnectTimeout=10",
-            "--",
-            host,
-            "exec sh -s "
-              <> shell_quote(rollout_path)
-              <> " "
-              <> shell_quote(remote_sock),
-          ]),
+          Args(
+            list.append(["ssh", ..remote_access.arguments(host)], [
+              "-oBatchMode=yes",
+              "-oConnectTimeout=10",
+              "--",
+              host,
+              "exec sh -s "
+                <> shell_quote(rollout_path)
+                <> " "
+                <> shell_quote(remote_sock),
+            ]),
+          ),
         ])
       let _ = erl_port_command(port, bit_array.from_string(holders_script))
       collect_port_output(port, "", deadline_ms(20_000))

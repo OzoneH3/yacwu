@@ -44,6 +44,7 @@ import yacwu/project_rules
 import yacwu/relay
 import yacwu/relay_core
 import yacwu/remote
+import yacwu/remote_access
 import yacwu/reset_benchmark
 import yacwu/reset_feed
 import yacwu/session_lock
@@ -435,6 +436,10 @@ fn dispatch(
           |> response.set_body(mist.Bytes(bytes_tree.new()))
       }
     ["api", "hosts"], Get -> list_hosts(ctx)
+    ["api", "hosts", "access"], Post ->
+      remote_access_operation(ctx, req, "setup")
+    ["api", "hosts", "access", "revoke"], Post ->
+      remote_access_operation(ctx, req, "revoke")
     ["api", "account", "limits"], Get ->
       json_response(
         200,
@@ -766,6 +771,7 @@ fn list_hosts(ctx: Context) -> Response(ResponseData) {
       [hosts.local],
       list.map(configured_backends, fn(backend) { backend.name }),
       ssh_config.discover(),
+      remote_access.discover(),
     ]
     |> list.flatten
     |> list.unique
@@ -781,6 +787,10 @@ fn list_hosts(ctx: Context) -> Response(ResponseData) {
       }
       json.object([
         #("name", json.string(host)),
+        #("temporaryAccessExpiresAt", case remote_access.expires_at(host) {
+          0 -> json.null()
+          at -> json.int(at)
+        }),
         #("kind", case backend, hosts.is_local(host) {
           Ok(_), _ -> json.string("backend")
           _, True -> json.string("local")
@@ -805,6 +815,52 @@ fn list_hosts(ctx: Context) -> Response(ResponseData) {
     200,
     json.object([#("hosts", json.preprocessed_array(entries))]),
   )
+}
+
+/// Credential-changing requests require a same-origin JSON browser request.
+/// Passwords are never placed in URLs, diagnostics or persisted settings.
+fn remote_access_operation(
+  ctx: Context,
+  req: Request(Connection),
+  action: String,
+) -> Response(ResponseData) {
+  let origin = request.get_header(req, "origin") |> result.unwrap("")
+  let host = request.get_header(req, "host") |> result.unwrap("")
+  let kind = request.get_header(req, "content-type") |> result.unwrap("")
+  case
+    { origin == "http://" <> host || origin == "https://" <> host }
+    && string.starts_with(kind, "application/json")
+  {
+    False ->
+      json_response(
+        403,
+        error_body("SSH access changes require a same-origin JSON request"),
+      )
+    True -> {
+      let body = read_json_body(req)
+      case remote_access.operation(body, action) {
+        Error(message) -> json_response(500, error_body(message))
+        Ok(data) -> {
+          case
+            action,
+            jsonx.field_bool(data, ["ok"]),
+            jsonx.field_string(data, ["host"])
+          {
+            "revoke", Ok(True), Ok(host) ->
+              hosts.disconnect_remote(ctx.registry, host)
+            _, _, _ -> Nil
+          }
+          json_response(
+            case jsonx.field_bool(data, ["ok"]) {
+              Ok(True) -> 200
+              _ -> 400
+            },
+            jsonx.to_json(data),
+          )
+        }
+      }
+    }
+  }
 }
 
 // -- Small helpers ------------------------------------------------------------

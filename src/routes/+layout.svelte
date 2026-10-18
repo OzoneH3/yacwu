@@ -64,6 +64,7 @@
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
 	import FolderBrowser from '$lib/FolderBrowser.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
+	import RemoteAccess from '$lib/RemoteAccess.svelte';
 	import CopilotCreditHistory from '$lib/CopilotCreditHistory.svelte';
 	import { copilotAccountUsage, copilotAccountLabel, copilotAccountTitle, type CopilotAccountUsage } from '$lib/copilot-account';
 	import { copilotTaskCredits, creditLabel, creditTitle } from '$lib/copilot-credits';
@@ -224,6 +225,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let newMachine = $state(LOCAL_HOST);
 	let newProvider = $state('codex');
 	let hostChoices = $state<HostInfo[]>([]);
+	let remoteAccessOpen = $state(false);
 	// The new-session dialog's check of a remote machine, shown under its picker.
 	let hostChecks = $state<Record<string, { state: 'connecting' | 'connected' | 'error'; message?: string }>>({});
 	const newProviders = $derived(backendProviders(hostChoices));
@@ -2371,6 +2373,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	 * host — the connection may take a few seconds while ssh bootstraps the
 	 * remote app-server; state updates arrive over the event stream.
 	 */
+	async function temporaryHostConnected(host: string) {
+		await loadHostChoices();
+		newMachine = host; newProvider = 'codex';
+		onNewHostChange();
+	}
+	async function temporaryHostRemoved(host: string) {
+		if (newMachine === host) { newMachine = LOCAL_HOST; onNewHostChange(); }
+		await loadHostChoices();
+		hostStates[host] = 'disconnected';
+	}
+
 	async function loadHostSessions(host: string) {
 		hostChecks = { ...hostChecks, [host]: { state: 'connecting' } };
 		try {
@@ -5826,6 +5839,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	{/each}
 {/snippet}
 
+{#if remoteAccessOpen}
+ <RemoteAccess hosts={hostChoices} onconnected={temporaryHostConnected} onremoved={temporaryHostRemoved} onclose={() => remoteAccessOpen = false} />
+{/if}
+
 <div class="app" class:sidebar-open={mobileSidebarOpen} class:rail-hidden={desktopSidebarHidden}>
 	{#if !activeId && !mobileSidebarOpen}
 		<button
@@ -5921,6 +5938,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</p>
 					{/if}
 				{/if}
+				<button class="mini ghost" type="button" onclick={() => remoteAccessOpen = true}>Manage SSH access</button>
 				{#if newProviders.length}
 					<div class="create-row">
 						<label for="new-provider">Provider</label>

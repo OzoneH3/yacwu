@@ -23,6 +23,7 @@ import gleam/otp/supervision
 import gleam/result
 import yacwu/backends
 import yacwu/codex.{type Codex}
+import yacwu/remote_access
 import yacwu/ssh_config
 
 pub const local = "local"
@@ -46,6 +47,7 @@ pub opaque type Msg {
   SubscribeLifecycle(owner: Pid, subject: Subject(codex.Lifecycle))
   Lookup(thread: String, reply: Subject(Result(String, Nil)))
   RunningManagers(reply: Subject(List(#(String, Codex))))
+  ForgetRemote(host: String, reply: Subject(Nil))
   Down(pid: Pid)
 }
 
@@ -148,6 +150,15 @@ pub fn running(registry: Registry) -> List(#(String, Codex)) {
   }
 }
 
+/// Drop only a remote manager and its SSH transport, never its app-server.
+pub fn disconnect_remote(registry: Registry, host: String) -> Nil {
+  let _ =
+    exception.rescue(fn() {
+      process.call(process.named_subject(registry), 5000, ForgetRemote(host, _))
+    })
+  Nil
+}
+
 type State {
   State(
     managers: Dict(String, #(Codex, Pid)),
@@ -219,6 +230,19 @@ fn start(name: Registry) -> actor.StartResult(Subject(Msg)) {
 
 fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
+    ForgetRemote(host, reply) -> {
+      case is_local(host), dict.get(state.managers, host) {
+        False, Ok(manager) -> process.kill(manager.1)
+        _, _ -> Nil
+      }
+      process.send(reply, Nil)
+      actor.continue(
+        State(..state, managers: case is_local(host) {
+          True -> state.managers
+          False -> dict.delete(state.managers, host)
+        }),
+      )
+    }
     Resolve(hint, thread, reply) -> {
       let host = case hint, thread {
         Some(host), _ if host != "" -> host
@@ -316,10 +340,17 @@ fn ensure_manager(
   state: State,
   host: String,
 ) -> Result(#(State, Codex), String) {
+  use _ <- result.try(remote_access.check(host))
   case dict.get(state.managers, host) {
     Ok(manager) -> Ok(#(state, manager.0))
     Error(_) ->
-      case is_local(host) || list.contains(ssh_config.discover(), host) {
+      case
+        is_local(host)
+        || list.contains(
+          list.append(ssh_config.discover(), remote_access.discover()),
+          host,
+        )
+      {
         False -> Error("unknown host: " <> host)
         True -> start_manager(state, host)
       }
