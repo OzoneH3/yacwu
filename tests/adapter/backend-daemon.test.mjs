@@ -208,3 +208,64 @@ test('server frames carry their length correctly', () => {
   assert.deepEqual([...medium.subarray(0, 4)], [0x81, 126, 1, 44]);
   assert.equal(encodeFrame(2, Buffer.alloc(70000))[1], 127);
 });
+
+test('held messages enforce a byte budget and reject excess requests explicitly', () => {
+  const held = createHeldMessages(3, 8);
+  assert.equal(held.hold('rrrr', true), true);
+  assert.equal(held.hold('nnnn', false), true);
+  assert.equal(held.hold('qqqq', true), true);
+  assert.deepEqual(held.take(), ['rrrr', 'qqqq']);
+  assert.equal(held.bytes, 0);
+  assert.equal(held.hold('123456789', true), false);
+  assert.equal(held.size, 0);
+  held.hold('12345678', true);
+  assert.equal(held.hold('q', true), false);
+  assert.equal(held.bytes, 8);
+});
+
+test('backend line buffering discards oversized fragments and recovers at newline', async () => {
+ const { boundedLines } = await import('../../scripts/backend-daemon.mjs');
+ const { Readable } = await import('node:stream');
+ const lines = [];
+ for await (const line of boundedLines(Readable.from([Buffer.from('12345'), Buffer.from('6789\nok\n')]), 8)) lines.push(line);
+ assert.deepEqual(lines, ['ok']);
+});
+
+test('a slow writable blocks until drain or disconnect and removes its listeners', async () => {
+ const { waitForDrain } = await import('../../scripts/backend-daemon.mjs');
+ const { EventEmitter } = await import('node:events');
+ for (const event of ['drain', 'close', 'error']) {
+  const stream = Object.assign(new EventEmitter(), { writableNeedDrain: true, destroyed: false });
+  let done = false;
+  const pending = waitForDrain(stream).then(() => { done = true; });
+  await Promise.resolve(); assert.equal(done, false);
+  stream.emit(event); await pending;
+  assert.equal(done, true);
+  assert.equal(stream.listenerCount('drain'), 0);
+  assert.equal(stream.listenerCount('close'), 0);
+ }
+});
+
+test('a full disconnected queue returns an RPC error instead of leaving the backend waiting', { timeout: 10000 }, async t => {
+ const socketPath = join(mkdtempSync(join(tmpdir(), 'yacwu-overflow-')), 'b.sock');
+ const backend = `let rejected = null;
+ require('readline').createInterface({input:process.stdin}).on('line', line => {
+  const m=JSON.parse(line);
+  if(m.error) rejected=m.id;
+  if(m.method==='initialize')console.log(JSON.stringify({id:m.id,result:{rejected}}));
+ });
+ console.log(JSON.stringify({id:'one',method:'ask'}));
+ console.log(JSON.stringify({id:'two',method:'ask'}));`;
+ const { child, server } = runDaemon({ socketPath, command: [process.execPath, '-e', backend], heldMessageLimit: 1, heldByteLimit: 128 });
+ t.after(() => { child.removeAllListeners('exit'); child.kill(); server.close(); });
+ await new Promise(resolve => server.once('listening', resolve));
+ await new Promise(resolve => setTimeout(resolve, 150));
+ const client = connectClient(socketPath);
+ t.after(() => client.close());
+ await client.opened;
+ client.send({ id: 1, method: 'initialize' });
+ assert.deepEqual(await client.next(), { id: 1, result: { rejected: 'two' } });
+ client.send({ method: 'initialized' });
+ assert.deepEqual(await client.next(), { id: 'one', method: 'ask' });
+ await client.close();
+});

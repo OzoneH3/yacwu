@@ -20,7 +20,6 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { createInterface } from 'node:readline';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -110,28 +109,71 @@ export function messageKind(line) {
 
 /**
  * What the backend sent while no client was ready, in order. Requests are
- * kept even past the limit: each one has a backend waiting on its answer.
+ * never silently dropped: a full queue rejects new requests with an RPC error.
  */
-export function createHeldMessages(limit = MAX_HELD) {
+export function createHeldMessages(limit = MAX_HELD, byteLimit = 16 * 1024 * 1024) {
   /** @type {{ line: string, request: boolean }[]} */
   let held = [];
+  let bytes = 0;
   return {
     /** @param {string} line @param {boolean} request */
     hold(line, request) {
-      held.push({ line, request });
-      if (held.length > limit) {
+      const size = Buffer.byteLength(line);
+      if (size > byteLimit) return false;
+      while (held.length >= limit || bytes + size > byteLimit) {
         const oldest = held.findIndex((entry) => !entry.request);
-        if (oldest >= 0) held.splice(oldest, 1);
+        if (oldest < 0) return false;
+        bytes -= Buffer.byteLength(held[oldest].line);
+        held.splice(oldest, 1);
       }
+      held.push({ line, request }); bytes += size;
+      return true;
     },
     /** @returns {string[]} */
     take() {
       const lines = held.map((entry) => entry.line);
-      held = [];
+      held = []; bytes = 0;
       return lines;
     },
+    shift() { const entry = held.shift(); if (entry) bytes -= Buffer.byteLength(entry.line); return entry?.line; },
+    get bytes() { return bytes; },
     get size() { return held.length; }
   };
+}
+
+/** Wait without accumulating writes; a disconnect releases the producer. */
+export function waitForDrain(stream) {
+  if (stream.destroyed || !stream.writableNeedDrain) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      stream.off('drain', done); stream.off('close', done); stream.off('error', done);
+      resolve();
+    };
+    stream.once('drain', done); stream.once('close', done); stream.once('error', done);
+  });
+}
+
+/** Bound unterminated backend lines too. Discard oversize output through its newline. */
+export async function* boundedLines(stream, limit = MAX_MESSAGE) {
+  let parts = [], size = 0, dropping = false;
+  for await (const chunk of stream) {
+    let start = 0;
+    while (start < chunk.length) {
+      const end = chunk.indexOf(10, start);
+      const piece = chunk.subarray(start, end < 0 ? chunk.length : end);
+      if (!dropping) {
+        size += piece.length;
+        if (size > limit) {
+          parts = []; dropping = true;
+          console.error('yacwu backend output: oversized line discarded');
+        } else parts.push(piece);
+      }
+      if (end < 0) break;
+      if (!dropping) yield Buffer.concat(parts, size).toString('utf8');
+      parts = []; size = 0; dropping = false; start = end + 1;
+    }
+  }
+  if (size && !dropping) yield Buffer.concat(parts, size).toString('utf8');
 }
 
 /** @param {Buffer} payload */
@@ -141,23 +183,44 @@ function isInitialized(payload) {
 
 /**
  * Run the daemon: one backend child, one socket server.
- * @param {{ socketPath: string, command: string[] }} options
+ * @param {{ socketPath: string, command: string[], heldMessageLimit?: number, heldByteLimit?: number }} options
  */
-export function runDaemon({ socketPath, command }) {
+export function runDaemon({ socketPath, command, heldMessageLimit = MAX_HELD, heldByteLimit = 16 * 1024 * 1024 }) {
   const child = spawn(command[0], command.slice(1), { stdio: ['pipe', 'pipe', 'inherit'] });
   /** @type {import('node:net').Socket | null} */
   let client = null;
   /** The client has finished its handshake (sent `initialized`). */
   let ready = false;
-  const held = createHeldMessages();
+  const held = createHeldMessages(heldMessageLimit, heldByteLimit);
   const connected = () => Boolean(client && !client.destroyed);
-  const send = (opcode, payload) => { if (connected()) client.write(encodeFrame(opcode, payload)); };
-  createInterface({ input: child.stdout }).on('line', (line) => {
-    if (!line) return;
-    const kind = messageKind(line);
-    if (kind === 'response') { send(0x1, Buffer.from(line, 'utf8')); return; }
-    if (connected() && ready) send(0x1, Buffer.from(line, 'utf8'));
-    else held.hold(line, kind === 'request');
+  // Pause stdout consumption while a connected client is not draining.
+  const send = async (opcode, payload) => {
+    const target = client;
+    if (!target || target.destroyed) return;
+    if (!target.write(encodeFrame(opcode, payload))) await waitForDrain(target);
+  };
+  const hold = async (line, kind) => {
+    if (held.hold(line, kind === 'request') || kind !== 'request') return;
+    const { id } = JSON.parse(line);
+    const error = JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32000, message: 'Yacwu output queue is full; reconnect and retry the request.' } });
+    if (!child.stdin.write(`${error}\n`)) await waitForDrain(child.stdin);
+  };
+  let flushing = null;
+  const flush = () => flushing ??= (async () => {
+    while (connected() && ready && held.size) await send(0x1, Buffer.from(held.shift(), 'utf8'));
+  })().finally(() => { flushing = null; });
+  void (async () => {
+    for await (const line of boundedLines(child.stdout)) {
+      if (!line) continue;
+      const kind = messageKind(line);
+      if (kind === 'response') { await send(0x1, Buffer.from(line, 'utf8')); continue; }
+      if (connected() && ready) await flush();
+      if (connected() && ready) await send(0x1, Buffer.from(line, 'utf8'));
+      else await hold(line, kind);
+    }
+  })().catch((error) => {
+    console.error(`yacwu backend output: ${error.message}`);
+    client?.destroy();
   });
   const cleanup = () => { try { rmSync(socketPath, { force: true }); } catch { /* gone */ } };
   child.on('exit', (code, signal) => { cleanup(); process.exit(code ?? (signal ? 1 : 0)); });
@@ -183,16 +246,20 @@ export function runDaemon({ socketPath, command }) {
     let decoder = null;
     /** Frames that arrived while deciding whether to accept this client. */
     let early = [];
+    let earlyBytes = 0;
     let deciding = false;
     const receive = (chunk) => {
       let messages;
       try { messages = decoder.push(chunk); } catch { socket.destroy(); return; }
       for (const { opcode, payload } of messages) {
         if (opcode === 0x1) {
-          child.stdin.write(`${payload.toString('utf8')}\n`);
+          if (!child.stdin.write(`${payload.toString('utf8')}\n`)) {
+            socket.pause();
+            child.stdin.once('drain', () => { if (!socket.destroyed) socket.resume(); });
+          }
           if (!ready && socket === client && isInitialized(payload)) {
             ready = true;
-            for (const line of held.take()) send(0x1, Buffer.from(line, 'utf8'));
+            void flush().catch(() => socket.destroy());
           }
         } else if (opcode === 0x9) socket.write(encodeFrame(0xa, payload));
         else if (opcode === 0xa) { if (socket === client) onPong?.(); }
@@ -212,7 +279,7 @@ export function runDaemon({ socketPath, command }) {
     };
     socket.on('data', (chunk) => {
       if (decoder) { receive(chunk); return; }
-      if (deciding) { early.push(chunk); return; }
+      if (deciding) { earlyBytes += chunk.length; if (earlyBytes > MAX_MESSAGE) socket.destroy(); else early.push(chunk); return; }
       header = Buffer.concat([header, chunk]);
       const end = header.indexOf('\r\n\r\n');
       if (end < 0) { if (header.length > 16384) socket.destroy(); return; }

@@ -109,6 +109,7 @@ rules locally, and records usage/diagnostic journals on the server.
   quiet-worker notices, and whether sessions accept direct messages
 - 🎛️ Per-session Codex profiles from `$CODEX_HOME/<name>.config.toml`
 - 🧾 `/todo <task>` queues follow-up work to run after the current turn
+- Persistent backend output uses bounded buffering and backpressure; excess queued requests receive an explicit error.
 - ♻️ Optional persistent backends (`YACWU_PERSISTENT_BACKENDS=1`): restarting
   Yacwu leaves running agents alone
 - 🩹 Tasks cut off by a crashed backend (or Yacwu itself) continue on their own
