@@ -48,7 +48,7 @@
 	import {
 		agentLabel,
 		agentRootId,
-		agentsForSession,
+		indexAgentsBySession,
 		isSubAgentThread,
 		isAgentRunning,
 		mergeAgentThreadMeta,
@@ -462,7 +462,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const pendingInteractiveQuestions = $derived.by(() => {
 		if (!activeId || viewedAgentId) return [];
 		const queue: PendingInteractiveQuestion[] = [];
-		const threadIds = [activeId, ...agentsForSession(agents, activeId).map((agent) => agent.id)];
+		const threadIds = [activeId, ...sessionAgents(activeId).map((agent) => agent.id)];
 		for (const threadId of threadIds) {
 			const items = itemsOf(threads[threadId] ?? null);
 			queue.push(...pendingQuestionsForThread(items, threadId, resolvedInteractiveQuestionIds));
@@ -527,9 +527,10 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	// Orphans — whose parent was archived or isn't listed — stay top-level so
 	// they remain reachable.
 	const topSessions = $derived.by(() => {
+		const sessionIds = new Set(sessions.map(s => s.id));
 		const roots = sessions.filter(
 			(s) => s.id !== clearReplacementId && (!clearCreationSnapshot || clearCreationSnapshot.has(s.id))
-				&& (!isSideChat(s) || !sessions.some((p) => p.id === s.forkedFromId))
+				&& (!isSideChat(s) || !sessionIds.has(s.forkedFromId!))
 		);
 		const positions = new Map(sessionOrder.map((id, index) => [id, index]));
 		return roots
@@ -549,7 +550,49 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	// Sub-agents of the active session, in spawn order. Selecting one (via the
 	// ?agent= query param) shows its transcript read-only; the session itself
 	// stays the URL's identity, so the rail selection never moves.
-	const activeAgents = $derived(activeId ? agentsForSession(agents, activeId) : []);
+	const agentsBySession = $derived(indexAgentsBySession(agents));
+	function sessionAgents(id: string) { return agentsBySession.get(id) ?? []; }
+	// Each derived value tracks only its own thread; unrelated streamed text and
+	// the countdown clock do not rescan every retained transcript.
+	class ThreadIndicators {
+		readonly id: string;
+		constructor(id: string) { this.id = id; }
+		attention = $derived.by(() => threadAttention(this.id));
+		quotaStop = $derived.by(() => {
+			const thread = threads[this.id];
+			if (!thread) return undefined;
+			for (let i = thread.order.length - 1; i >= 0; i--) {
+				const item = thread.byId[thread.order[i]] as any;
+				if (item?.quotaStop && item.resumeAvailable) return item;
+			}
+			return undefined;
+		});
+		quotaLabel = $derived.by(() => computeQuotaWaitLabel(this.id, this.quotaStop));
+	}
+	const indicatorCache = new Map<string, { value: ThreadIndicators; dispose: () => void }>();
+	function indicators(id: string) {
+		let entry = indicatorCache.get(id);
+		if (!entry) {
+			// Outlive the row/effect that first asks for this thread's indicators.
+			let value!: ThreadIndicators;
+			const dispose = $effect.root(() => { value = new ThreadIndicators(id); });
+			entry = { value, dispose };
+			indicatorCache.set(id, entry);
+		}
+		return entry.value;
+	}
+	$effect(() => {
+		const ids = new Set([...sessions.map(s => s.id), ...Object.keys(agents), ...Object.keys(threads)]);
+		for (const [id, entry] of indicatorCache) if (!ids.has(id)) {
+			entry.dispose();
+			indicatorCache.delete(id);
+		}
+	});
+	$effect(() => () => {
+		for (const entry of indicatorCache.values()) entry.dispose();
+		indicatorCache.clear();
+	});
+	const activeAgents = $derived(activeId ? sessionAgents(activeId) : []);
 	// The same conditions as Session details → Clear session.
 	const canResetActive = $derived(Boolean(activeId && activeSummary && !isSideChat(activeSummary) && activeConfig
 		&& active?.status !== 'running' && !activeAgents.some(agentIsRunning) && !clearingSessionId));
@@ -578,8 +621,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const sessionAttentionById = $derived.by(() => {
 		const result: Record<string, 'choice' | 'alert'> = {};
 		for (const session of sessions) {
-			const attention = [session.id, ...agentsForSession(agents, session.id).map((agent) => agent.id)]
-				.map(threadAttention);
+			const attention = [session.id, ...sessionAgents(session.id).map((agent) => agent.id)]
+				.map(id => indicators(id).attention);
 			if (attention.includes('alert')) result[session.id] = 'alert';
 			else if (attention.includes('choice')) result[session.id] = 'choice';
 		}
@@ -596,7 +639,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	$effect(() => {
 		const next: typeof previousSignals = {};
 		for (const session of sessions) {
-			const ids = [session.id, ...agentsForSession(agents, session.id).map((agent) => agent.id)];
+			const ids = [session.id, ...sessionAgents(session.id).map((agent) => agent.id)];
 			next[session.id] = ids.some((id) => threads[id]?.error) ? 'error' : sessionAttentionById[session.id] ? 'question' : null;
 		}
 		untrack(() => {
@@ -1287,7 +1330,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function markSessionAttentionRead(id: string) {
-		const threadIds = [id, ...agentsForSession(agents, id).map((agent) => agent.id)];
+		const threadIds = [id, ...sessionAgents(id).map((agent) => agent.id)];
 		const next = { ...dismissedAttentionByThread };
 		for (const threadId of threadIds) {
 			if (!threads[threadId]?.error) next[threadId] = true;
@@ -1332,7 +1375,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			persistInterruptedSessions();
 		}
 		if (finishedSessions[id]) clearFinishedSession(id);
-		const relatedAttentionIds = [id, ...agentsForSession(agents, id).map((agent) => agent.id)];
+		const relatedAttentionIds = [id, ...sessionAgents(id).map((agent) => agent.id)];
 		const remainingAttention = { ...dismissedAttentionByThread };
 		for (const threadId of relatedAttentionIds) delete remainingAttention[threadId];
 		dismissedAttentionByThread = remainingAttention;
@@ -1432,7 +1475,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		activityClock;
 		if (!viewed || viewed.status !== 'running' || !viewedId) return '';
 		let latest = { at: viewed.lastActivityAt ?? null, kind: viewed.lastActivityKind ?? null };
-		for (const agent of agentsForSession(agents, viewedId)) {
+		for (const agent of sessionAgents(viewedId)) {
 			const at = threads[agent.id]?.lastActivityAt;
 			if (at && (latest.at === null || at > latest.at)) latest = { at, kind: threads[agent.id]?.lastActivityKind ?? null };
 		}
@@ -1442,7 +1485,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	// or estimated from what has streamed.
 	const viewedTurnTokens = $derived.by(() => {
 		if (!viewed || viewed.status !== 'running' || !viewedId) return '';
-		const streamed = [viewedId, ...agentsForSession(agents, viewedId).map((agent) => agent.id)]
+		const streamed = [viewedId, ...sessionAgents(viewedId).map((agent) => agent.id)]
 			.reduce((sum, id) => sum + (threads[id]?.turnStreamChars ?? 0), 0);
 		return turnTokenLabel(turnTokens(viewed.turnStartTokens, viewed.tokenStatistics), streamed);
 	});
@@ -3123,12 +3166,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return Number.isInteger(remaining) ? String(remaining) : remaining.toFixed(1);
 	}
 
-	function quotaWaitLabel(id: string): string | null {
+	function quotaWaitLabel(id: string): string | null { return indicators(id).quotaLabel; }
+
+	function computeQuotaWaitLabel(id: string, quotaStop: any): string | null {
 		if (threads[id]?.status === 'running') return null;
 		const usage = accountUsageByHost[sessionHost(id)];
 		const reserve = isClaudeSession(id) ? settings.claudeAllowanceReserve : 0;
 		const now = activityClock / 1000;
-		const quotaStop = itemsOf(threads[id] ?? null).slice().reverse().find((item: any) => item.quotaStop && item.resumeAvailable);
 		if (quotaStop && cancelledAutoResumes[`${id}:${quotaStop.id}`]) return null;
 		const blocked = [usage?.fiveHour, usage?.sevenDay].filter((window): window is RateLimitWindow =>
 			Boolean(window) && window!.usedPercent >= 100 - reserve && (window!.resetsAt == null || window!.resetsAt > now));
@@ -3932,7 +3976,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		try {
 			const data = await replaceSessionWithEmptyThread({
 				assertIdle: async () => {
-					if (threads[id]?.status === 'running' || agentsForSession(agents, id).some(agentIsRunning)) {
+					if (threads[id]?.status === 'running' || sessionAgents(id).some(agentIsRunning)) {
 						throw new Error('Finish or stop this session and its agents before clearing it.');
 					}
 					const live = await request(threadApi(id));

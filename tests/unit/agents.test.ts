@@ -5,6 +5,7 @@ import {
 	agentRootId,
 	isAgentRunning,
 	agentsForSession,
+	indexAgentsBySession,
 	isSubAgentThread,
 	mergeAgentThreadMeta,
 	trackAgentItem,
@@ -270,3 +271,13 @@ test('spawns without their own activity item are shown as started', async () => 
 	registry['7639120c-6289-4981-ad03-d4df1713c62e'].path = 'root/review';
 	expect(unannouncedSpawn(spawn(), new Set(), registry)?.path).toBe('/root/review');
 });
+
+ test('session index preserves nested agent order and tracks reparenting', () => {
+ const registry: AgentRegistry = {};
+ trackAgentItem(registry, SESSION, spawn([AGENT_A]));
+ trackAgentItem(registry, AGENT_A, spawn([AGENT_B], 'completed', AGENT_A));
+ expect(indexAgentsBySession(registry).get(SESSION)?.map(a => a.id)).toEqual([AGENT_A, AGENT_B]);
+ registry[AGENT_A].parentId = 'other';
+ expect(indexAgentsBySession(registry).get(SESSION)).toBeUndefined();
+ expect(indexAgentsBySession(registry).get('other')?.map(a => a.id)).toEqual([AGENT_A, AGENT_B]);
+ });

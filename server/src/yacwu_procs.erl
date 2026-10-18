@@ -6,24 +6,68 @@
 %% process; the commands it starts inherit the tag), as
 %% {Pid, ParentPid, Command, ElapsedSeconds, CpuCentiseconds}.
 %% Linux /proc only; anything unreadable is skipped.
+%% One owner serializes refreshes across concurrent requests. A snapshot is
+%% shared by every thread for one second; callers never scan /proc themselves.
 tagged(Thread) ->
-    Tag = <<0, "YACWU_THREAD_ID=", Thread/binary, 0>>,
+    Pid = cache_owner(),
+    Ref = erlang:monitor(process, Pid),
+    Pid ! {snapshot, self(), Ref, Thread},
+    receive
+        {Ref, Processes} -> erlang:demonitor(Ref, [flush]), Processes;
+        {'DOWN', Ref, process, Pid, _} -> tagged(Thread)
+    after 5000 -> erlang:demonitor(Ref, [flush]), []
+    end.
+
+cache_owner() ->
+    case whereis(yacwu_procs_cache) of
+        undefined ->
+            Pid = spawn(fun() -> receive start -> cache_loop(undefined, #{}) end end),
+            try register(yacwu_procs_cache, Pid) of
+                true -> Pid ! start, Pid
+            catch error:badarg -> exit(Pid, kill), cache_owner()
+            end;
+        Pid -> Pid
+    end.
+
+cache_loop(At, Cached) ->
+    receive
+        {snapshot, From, Ref, Thread} ->
+            Now = erlang:monotonic_time(millisecond),
+            {NextAt, Next} = case At =/= undefined andalso Now - At < 1000 of
+                true -> {At, Cached};
+                false -> {Now, scan()}
+            end,
+            From ! {Ref, maps:get(Thread, Next, [])},
+            cache_loop(NextAt, Next)
+    end.
+
+scan() ->
     Uptime = uptime(),
     case file:list_dir("/proc") of
         {ok, Names} ->
-            lists:filtermap(fun(Name) -> process(Name, Tag, Uptime) end, Names);
-        _ -> []
+            lists:foldl(fun(Name, Acc) ->
+                case process(Name, Uptime) of
+                    {Thread, Info} -> maps:update_with(Thread, fun(Items) -> [Info | Items] end, [Info], Acc);
+                    false -> Acc
+                end
+            end, #{}, Names);
+        _ -> #{}
     end.
 
-process(Name, Tag, Uptime) ->
+process(Name, Uptime) ->
     case string:to_integer(Name) of
         {Pid, []} ->
             Dir = "/proc/" ++ Name,
             case file:read_file(Dir ++ "/environ") of
                 {ok, Env} ->
-                    case binary:match(<<0, Env/binary>>, Tag) of
-                        nomatch -> false;
-                        _ -> info(Pid, Dir, Uptime)
+                    Tags = [Thread || <<"YACWU_THREAD_ID=", Thread/binary>> <- binary:split(Env, <<0>>, [global]), Thread =/= <<>>],
+                    case Tags of
+                        [Thread | _] ->
+                            try info(Pid, Dir, Uptime) of
+                                {true, Info} -> {Thread, Info};
+                                false -> false
+                            catch _:_ -> false end;
+                        _ -> false
                     end;
                 _ -> false
             end;

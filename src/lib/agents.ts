@@ -229,3 +229,15 @@ export function unannouncedSpawn(
 			: defaultAgentPath(agentThreadId);
 	return { agentThreadId, path };
 }
+
+/** Group descendants once for all session indicators, preserving spawn order. */
+export function indexAgentsBySession(registry: AgentRegistry): Map<string, AgentInfo[]> {
+ const index = new Map<string, AgentInfo[]>();
+ for (const agent of Object.values(registry)) {
+  const root = agentRootId(registry, agent);
+  if (root === agent.id) continue;
+  const group = index.get(root);
+  if (group) group.push(agent); else index.set(root, [agent]);
+ }
+ return index;
+}

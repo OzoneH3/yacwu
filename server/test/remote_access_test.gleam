@@ -4,6 +4,7 @@ import gleam/list
 import gleam/result
 import gleeunit/should
 import simplifile
+import yacwu/hosts
 import yacwu/jsonx
 import yacwu/oauth
 import yacwu/remote_access
@@ -77,4 +78,15 @@ pub fn existing_tunnel_closes_at_expiry_test() {
   let result = forwarder_expires(remote_access.tunnel_wrapper(host))
   let _ = simplifile.delete(dir)
   result |> should.be_true
+}
+
+pub fn local_backend_ignores_ssh_metadata_test() {
+  let dir = remote_access.root() <> "/" <> host_id("local")
+  let assert Ok(_) = simplifile.create_directory_all(dir)
+  let assert Ok(_) = simplifile.write(dir <> "/entry.json", "bad-json")
+  let local_result = hosts.check_access("local")
+  let remote_result = remote_access.check("local")
+  let _ = simplifile.delete(dir)
+  local_result |> should.equal(Ok(Nil))
+  remote_result |> result.is_error |> should.be_true
 }

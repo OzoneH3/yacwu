@@ -2,10 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 
 test.setTimeout(30_000);
 
-async function mock(page: Page, quotaStop = true, fail = false) {
+async function mock(page: Page, quotaStop = true, fail = false, historyLength = 0) {
  const interrupts: unknown[] = [], messages: unknown[] = [];
  const note = { type: 'localNote', id: 'quota-stop:limited', text: "Task stopped.\nYou've hit your session limit · resets 1am (Europe/Berlin)", quotaStop, resumeAvailable: true };
- const thread = { id: 'paused', name: 'paused', cwd: '/project', host: 'claude', status: { type: 'idle' }, turns: [{ id: 'limited', status: 'failed', items: [note] }] };
+ const thread = { id: 'paused', name: 'paused', cwd: '/project', host: 'claude', status: { type: 'idle' }, turns: [{ id: 'limited', status: 'failed', items: [...Array.from({ length: historyLength }, (_, i) => ({ type: 'agentMessage', id: `old-${i}`, text: 'Earlier message' })), note] }] };
  await page.route('**/api/**', async route => {
   const path = new URL(route.request().url()).pathname;
   if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
@@ -52,3 +52,20 @@ test('ordinary manually stopped tasks do not offer automatic cancellation', asyn
  await mock(page, false);
  await expect(page.getByRole('button', { name: 'Cancel automatic continuation', exact: true })).toHaveCount(0);
 });
+
+ test('allowance indicators avoid copying long history on each clock tick and react to cancellation', async ({ page }) => {
+ await page.addInitScript(() => {
+  (window as any).__historyReversals = 0;
+  const reverse = Array.prototype.reverse;
+  Array.prototype.reverse = function() {
+   if (this.length === 1338) (window as any).__historyReversals++;
+   return reverse.call(this);
+  };
+ });
+ await mock(page, true, false, 1337);
+ await expect(page.locator('.quota-waiting').first()).toBeVisible();
+ await page.waitForTimeout(2200);
+ expect(await page.evaluate(() => (window as any).__historyReversals)).toBe(0);
+ await page.getByRole('button', { name: 'Cancel automatic continuation', exact: true }).click();
+ await expect(page.locator('.quota-waiting')).toHaveCount(0);
+ });

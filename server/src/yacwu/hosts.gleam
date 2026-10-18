@@ -333,6 +333,14 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   }
 }
 
+/// Local backends never use managed SSH identities.
+pub fn check_access(host: String) -> Result(Nil, String) {
+  case is_local(host) {
+    True -> Ok(Nil)
+    False -> remote_access.check(host)
+  }
+}
+
 /// Look up a host's manager, starting it if this is the first time the host
 /// is addressed. Unknown hosts (not "local", not a configured backend, not
 /// in ~/.ssh/config) error.
@@ -340,7 +348,7 @@ fn ensure_manager(
   state: State,
   host: String,
 ) -> Result(#(State, Codex), String) {
-  use _ <- result.try(remote_access.check(host))
+  use _ <- result.try(check_access(host))
   case dict.get(state.managers, host) {
     Ok(manager) -> Ok(#(state, manager.0))
     Error(_) ->
