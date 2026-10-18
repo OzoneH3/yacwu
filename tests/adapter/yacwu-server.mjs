@@ -39,6 +39,8 @@ export async function startServer(root, { claudeBackend } = {}) {
 			YACWU_INSECURE_SKIP_AUTH: '1',
 			YACWU_BACKEND_ROOT: repo,
 			YACWU_BACKENDS: `claude=${claudeBackend ?? `node ./scripts/claude-backend.mjs ${adapter}`}`,
+			// An explicit mock catalog: no authenticated SDK discovery in CI.
+			CLAUDE_CODEX_MODELS: 'claude-opus-5-5,sonnet,opus,haiku',
 			CLAUDE_CODEX_MOCK: '1'
 		}
 	});

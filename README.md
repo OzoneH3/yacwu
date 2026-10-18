@@ -555,6 +555,8 @@ also get their own empty Codex home and Yacwu state, so tests never see your
 sessions or credentials and cannot spend a model turn: model replies are
 stubbed in the tests.
 
+CI also runs the browser and adapter suites with isolated state, mock model responses, and a pinned adapter checkout.
+
 ## Architecture
 
 ```

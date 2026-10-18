@@ -37,6 +37,48 @@ jobs:
       - run: gleam build --warnings-as-errors
       - run: gleam test
 
-  # The Playwright e2e suite drives a live `codex app-server` and needs an
-  # authenticated codex CLI, so it runs locally (`bunx playwright test`), not
-  # in CI.
+  integrations:
+    name: Browser and adapter integrations (isolated, no model credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      YACWU_PERSISTENT_BACKENDS: '0'
+      YACWU_BACKENDS: ''
+      YACWU_RESET_FEED: 'off'
+      CODEX_HOME: ${{ github.workspace }}/.workspace/ci-codex
+      XDG_STATE_HOME: ${{ github.workspace }}/.workspace/ci-state
+      YACWU_USAGE_DIR: ${{ github.workspace }}/.workspace/ci-usage
+      TMPDIR: ${{ github.workspace }}/.workspace/tmp
+    steps:
+      - uses: actions/checkout@v5
+      - run: mkdir -p "$TMPDIR" "$CODEX_HOME" "$XDG_STATE_HOME" "$YACWU_USAGE_DIR"
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+          gleam-version: '1.18.1'
+          rebar3-version: '3'
+      - uses: actions/checkout@v5
+        with:
+          repository: fuergaosi233/claude-codex
+          ref: 99f4162408292ef1760472f5927b07ea06a1624a
+          path: claude-codex
+      - run: bun install
+      - run: npm install --prefix .workspace/cli @openai/codex@0.160.0
+      - run: echo "$GITHUB_WORKSPACE/.workspace/cli/node_modules/.bin" >> "$GITHUB_PATH"
+      - run: bun install && bun run build
+        working-directory: claude-codex
+      - run: test -f claude-codex/dist/src/adapter.mjs && codex --version
+      - run: gleam deps download && gleam build
+        working-directory: server
+      - run: bun run test:adapter
+      - run: bunx playwright install --with-deps chromium
+      - run: bunx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-failures
+          path: test-results/

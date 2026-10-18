@@ -52,7 +52,7 @@ export default defineConfig({
 		// The server fails closed without auth; the e2e suite runs it open on loopback.
 		command: `bun run build && cd server && YACWU_STATIC=../build YACWU_INSECURE_SKIP_AUTH=1 gleam run -- --host 127.0.0.1 --port ${port}`,
 		url: baseURL,
-		reuseExistingServer: true,
+		reuseExistingServer: !process.env.CI,
 		timeout: 120_000
 	}
 });

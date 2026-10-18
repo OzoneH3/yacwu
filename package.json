@@ -13,7 +13,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:unit": "bun test tests/unit",
     "test:server": "cd server && gleam test",
-    "test:adapter": "node --test 'tests/adapter/*.test.mjs'"
+    "test:adapter": "node --test --test-concurrency=1 'tests/adapter/*.test.mjs'"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
