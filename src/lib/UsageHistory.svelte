@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { hostQuery } from './protocol';
-	import { analyzeUsage, RATE_LABEL, RATE_TOKENS, type UsageEvent, type UsagePool } from './usage-analysis';
+	import { analyzeUsage, RATE_LABEL, RATE_TOKENS, type UsagePool } from './usage-analysis';
 	import BenchmarkControls from './BenchmarkControls.svelte';
 	import type { CostEstimate } from './usage-fit';
-	import { usageModelName } from './model-display';
+	import { loadUsageAnalysis } from './usage-client';
+	import type { UsageAnalyses } from './usage-background';
 	let { host, sessionId, models, modelNames = {}, selectedModel, selectedEffort, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; modelNames?: Record<string, string>; selectedModel?: string; selectedEffort?: string; onclose: () => void } = $props();
 	let dialog = $state<HTMLDialogElement>();
-	let events = $state<UsageEvent[]>([]);
+	let analyses = $state.raw<UsageAnalyses>({ weekly: analyzeUsage([]), fiveHour: analyzeUsage([], { windowDurationMins: 300 }) });
 	let loading = $state(false);
 	let error = $state('');
 	let onlySession = $state(true);
@@ -15,7 +15,7 @@
 	let poolSetting = $state('');
 	let windowDurationMins = $state<300 | 10080>(10080);
 	const windowLabel = $derived(windowDurationMins === 300 ? '5-hour' : 'Weekly');
-	const analysis = $derived(analyzeUsage(events, { host, windowDurationMins, modelName: (model) => usageModelName(modelNames, model) }));
+	const analysis = $derived(windowDurationMins === 300 ? analyses.fiveHour : analyses.weekly);
 	const pools = $derived(analysis.pools.filter((pool) =>
 		pool.groups.some((group) => (!poolSetting || JSON.stringify([group.model, group.effort]) === poolSetting)
 			&& (!onlyConcurrentPools || group.peakWorkers > 1))
@@ -51,10 +51,7 @@
 		if (loading) return;
 		loading = true; error = '';
 		try {
-			const response = await fetch(`/api/usage${hostQuery(host)}`);
-			const data = await response.json();
-			if (!response.ok) throw new Error(data.error ?? 'Could not load usage history');
-			events = data.events ?? [];
+			analyses = await loadUsageAnalysis(host, modelNames);
 		} catch (e) { error = e instanceof Error ? e.message : String(e); }
 		finally { loading = false; }
 	}

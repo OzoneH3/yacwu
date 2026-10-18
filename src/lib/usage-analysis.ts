@@ -461,10 +461,28 @@ export function analyzeUsage(rawEvents: UsageEvent[], options: { host?: string; 
 			singleSettingSamples: samples.filter((sample) => Object.values(sample.tokens).filter((tokens) => tokens.totalTokens > 0).length === 1).length,
 			tokens: total.totalTokens, percentPerMillionTokens: estimate?.value ?? null, estimate, weights: perRateTokens(learned.weights(key)) };
 	});
+	// The events are already chronological. Index once per account and use
+	// binary search rather than rescanning every quota for every historical turn.
+	const quotasByAccount = new Map<string | undefined, UsageEvent[]>();
+	for (const quota of quotas) {
+		const account = quotasByAccount.get(quota.accountKey) ?? [];
+		account.push(quota); quotasByAccount.set(quota.accountKey, account);
+	}
+	const atOrBefore = (entries: UsageEvent[], at: number): UsageEvent | undefined => {
+		let low = 0, high = entries.length;
+		while (low < high) {
+			const middle = (low + high) >>> 1;
+			if (entries[middle].at <= at) low = middle + 1;
+			else high = middle;
+		}
+		return entries[low - 1];
+	};
 	for (const task of tasks) {
-		const accountQuotas = quotas.filter((quota) => quota.accountKey === task.accountKey);
-		const before = accountQuotas.findLast((quota) => quota.at <= task.startedAt && task.startedAt - quota.at <= 90_000);
-		const after = task.endedAt ? accountQuotas.findLast((quota) => quota.at >= task.endedAt! + settleMs && quota.at - task.endedAt! <= Math.max(180_000, settleMs)) : accountQuotas.findLast((quota) => quota.at >= task.startedAt);
+		const accountQuotas = quotasByAccount.get(task.accountKey) ?? [];
+		const beforeCandidate = atOrBefore(accountQuotas, task.startedAt);
+		const before = beforeCandidate && task.startedAt - beforeCandidate.at <= 90_000 ? beforeCandidate : undefined;
+		const afterCandidate = task.endedAt ? atOrBefore(accountQuotas, task.endedAt + Math.max(180_000, settleMs)) : accountQuotas.at(-1);
+		const after = afterCandidate && afterCandidate.at >= (task.endedAt ? task.endedAt + settleMs : task.startedAt) ? afterCandidate : undefined;
 		task.settling = task.endedAt !== null && !after && (accountQuotas.at(-1)?.at ?? 0) < task.endedAt + settleMs;
 		task.weeklyLeftBefore = before ? 100 - before.usedPercent! : null;
 		task.weeklyLeftAfter = after ? 100 - after.usedPercent! : null;

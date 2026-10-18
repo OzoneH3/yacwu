@@ -369,3 +369,17 @@ test('aliases of one model share one group when named alike', () => {
 	expect(merged.pools[0].groups.map((group) => [group.model, group.tokens.totalTokens])).toEqual([['Claude Opus 5.5', 300]]);
 	expect(analyzeUsage(events).pools[0].groups.map((group) => group.model)).toEqual(['default', 'opus']);
 });
+
+test('indexed quota lookups keep inclusive before/after boundaries and ignore later readings', () => {
+ const events = [
+  event(0, 'metadata', { threadId: 'bounded', model: 'model', effort: 'medium' }),
+  quota(110000, 1), quota(200000, 2),
+  event(200000, 'turn/started', { threadId: 'bounded', turnId: 'bounded' }),
+  event(210000, 'turn/completed', { threadId: 'bounded', turnId: 'bounded' }),
+  quota(269999, 3), quota(270000, 4), quota(390000, 5), quota(390001, 6)
+ ];
+ const task = analyzeObservedUsage(events).tasks[0];
+ expect(task.weeklyLeftBefore).toBe(98);
+ expect(task.weeklyLeftAfter).toBe(95);
+ expect(task.sharedAllowanceDelta).toBe(3);
+});

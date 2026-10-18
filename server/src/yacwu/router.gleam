@@ -484,7 +484,12 @@ fn dispatch(
       response.new(200)
       |> response.set_header("content-type", "application/json")
       |> response.set_body(
-        mist.Bytes(bytes_tree.from_string(usage.shared_history(host))),
+        mist.Bytes(
+          bytes_tree.from_string(case query_value(req, "incremental") {
+            "1" -> usage.shared_delta(host, query_value(req, "cursor"))
+            _ -> usage.shared_history(host)
+          }),
+        ),
       )
     }
     ["api", "reset-feed"], Get ->
@@ -549,6 +554,18 @@ fn dispatch(
     ["api", "threads", id], Get -> {
       use _, cx <- with_codex(ctx, req, Some(id))
       read_thread(cx, req, id)
+    }
+    ["api", "threads", id, "runtime"], Get -> {
+      use _, cx <- with_codex(ctx, req, Some(id))
+      case
+        thread_history.runtime(
+          fn(method, params) { codex.request(cx, method, params) },
+          id,
+        )
+      {
+        Ok(data) -> json_response(200, data)
+        Error(message) -> json_response(502, error_body(message))
+      }
     }
     ["api", "threads", id, "diagnostics"], Get -> {
       use _, cx <- with_codex(ctx, req, Some(id))

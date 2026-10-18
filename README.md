@@ -45,6 +45,7 @@ rules locally, and records usage/diagnostic journals on the server.
   volume slider that previews each change
 - 🔒 In-use detection warns before opening a session another Codex process
   has loaded
+- 🪶 Background usage analysis with incremental updates and lightweight session status polling keeps long sessions responsive
 - ⚡ Live streaming of messages, reasoning, commands, plans, and file changes;
   message timestamps survive browser refreshes; steer a running turn, stop it,
   or resume it later

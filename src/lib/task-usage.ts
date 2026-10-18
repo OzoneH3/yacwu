@@ -93,3 +93,20 @@ export function awaitingTokenCount(task: UsageTask, analyses: Array<{ rates: Arr
 export function formatAllowancePercent(value: number | null): string {
 	return value === null ? 'Learning…' : `~${value.toFixed(value > 0 && value < 0.01 ? 3 : 2)}%`;
 }
+
+/** Analyses are immutable worker snapshots. Reuse rollups between text deltas. */
+export function createTaskAllowanceSummarizer() {
+ let previousTasks: UsageTask[] | null = null;
+ let previousFiveHour: UsageTask[] | null = null;
+ let cache = new WeakMap<UsageTask, TaskUsageSummary>();
+ return (tasks: UsageTask[], task: UsageTask, fiveHour: UsageTask[]): TaskUsageSummary => {
+  if (tasks !== previousTasks || fiveHour !== previousFiveHour) {
+   cache = new WeakMap(); previousTasks = tasks; previousFiveHour = fiveHour;
+  }
+  const existing = cache.get(task);
+  if (existing) return existing;
+  const summary = summarizeTaskAllowances(tasks, task, fiveHour);
+  cache.set(task, summary);
+  return summary;
+ };
+}

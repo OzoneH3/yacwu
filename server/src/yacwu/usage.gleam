@@ -290,3 +290,31 @@ pub fn shared_history(label: String) -> String {
   ])
   |> string_tree.to_string
 }
+
+@external(erlang, "yacwu_usage", "read_delta")
+fn read_delta(cursor: String) -> #(String, String, Bool)
+
+/// Incremental shared history; complete records only, with a reset on rotation.
+pub fn shared_delta(label: String, cursor: String) -> String {
+  let #(bytes, next, reset) = read_delta(cursor)
+  let events =
+    bytes
+    |> string.split("\n")
+    |> list.filter(fn(line) {
+      result.is_ok(json.parse(line, decode.success(Nil)))
+    })
+  string_tree.concat([
+    string_tree.from_string(
+      "{\"host\":"
+      <> json.to_string(json.string(label))
+      <> ",\"cursor\":"
+      <> json.to_string(json.string(next))
+      <> ",\"reset\":"
+      <> json.to_string(json.bool(reset))
+      <> ",\"events\":[",
+    ),
+    string_tree.join(list.map(events, string_tree.from_string), ","),
+    string_tree.from_string("]}"),
+  ])
+  |> string_tree.to_string
+}

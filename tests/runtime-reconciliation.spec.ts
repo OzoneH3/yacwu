@@ -60,3 +60,29 @@ test('a thread its backend no longer runs is still flagged after a restart', asy
 	await expect(page.getByRole('button', { name: 'Continue interrupted task', exact: true })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Stop current turn', exact: true })).toHaveCount(0);
 });
+
+test('a compact stopped status hydrates missed final output once', async ({ page }) => {
+ const id = 'missed-final-output'; let stopped = false; let historyReads = 0;
+ await page.addInitScript(id => localStorage.setItem('yacwu-running-tasks', JSON.stringify({ [id]: id })), id);
+ await page.clock.install();
+ await page.route('**/api/**', async route => {
+  const url = new URL(route.request().url()); const path = url.pathname;
+  let data: object = {};
+  const thread = { id, host: 'local', name: 'Missed final', cwd: '/workspace', status: { type: stopped ? 'idle' : 'active' }, turns: [{ id: 'turn', status: stopped ? 'completed' : 'inProgress', items: stopped ? [{ id: 'final', type: 'agentMessage', text: 'Recovered final response' }] : [] }] };
+  if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+  if (path === '/api/threads') data = { data: [thread] };
+  else if (path === '/api/threads/loaded') data = { data: [] };
+  else if (path.endsWith('/runtime')) data = { thread: { ...thread, turns: thread.turns.map(turn => ({ ...turn, items: [] })) } };
+  else if (path === `/api/threads/${id}` || path.endsWith('/open')) { if (url.searchParams.get('turns') === '1') historyReads++; data = { thread }; }
+  await route.fulfill({ json: data });
+ });
+ await page.goto(`/s/${id}`);
+ await expect(page.getByRole('button', { name: 'Stop current turn', exact: true })).toBeVisible();
+ expect(historyReads).toBe(0);
+ stopped = true; await page.clock.fastForward(16000);
+ await expect(page.getByText('Recovered final response', { exact: true })).toBeVisible();
+ const reads = historyReads;
+ await page.clock.fastForward(16000);
+ expect(historyReads).toBe(reads);
+ expect(reads).toBe(1);
+});

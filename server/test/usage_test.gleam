@@ -148,3 +148,56 @@ pub fn shared_history_skips_a_torn_line_test() {
   string.contains(shared, "\"total\":{\"a\":1}") |> should.be_false
   simplifile.delete(path) |> should.be_ok
 }
+
+pub fn incremental_journal_sends_only_new_complete_records_and_resets_on_rotation_test() {
+  let label = "usage-delta-regression-test"
+  usage.record(label, "first", [])
+  let first = usage.shared_delta(label, "")
+  let assert Ok(cursor) =
+    json.parse(first, decode.at(["cursor"], decode.string))
+  json.parse(first, decode.at(["reset"], decode.bool)) |> should.equal(Ok(True))
+  string.contains(first, "usage-delta-regression-test") |> should.be_true
+  let unchanged = usage.shared_delta(label, cursor)
+  json.parse(unchanged, decode.at(["events"], decode.list(decode.dynamic)))
+  |> should.equal(Ok([]))
+  let path =
+    usage.history(label)
+    |> json.to_string
+    |> json.parse(decode.at(["path"], decode.string))
+    |> result.unwrap("")
+  let assert Ok(before) = simplifile.read(path)
+  simplifile.write(
+    path,
+    before <> "{\"host\":\"usage-delta-regression-test\",\"event\":\"partial\"}",
+  )
+  |> should.be_ok
+  let partial = usage.shared_delta(label, cursor)
+  string.contains(partial, "partial") |> should.be_false
+  let assert Ok(partial_cursor) =
+    json.parse(partial, decode.at(["cursor"], decode.string))
+  simplifile.write(
+    path,
+    before
+      <> "{\"host\":\"usage-delta-regression-test\",\"event\":\"partial\"}\n",
+  )
+  |> should.be_ok
+  let completed = usage.shared_delta(label, partial_cursor)
+  string.contains(completed, "partial") |> should.be_true
+  string.contains(completed, "first") |> should.be_false
+  let assert Ok(completed_cursor) =
+    json.parse(completed, decode.at(["cursor"], decode.string))
+  simplifile.rename(path, path <> ".1") |> should.be_ok
+  usage.record(label, "afterRotation", [])
+  let rotated = usage.shared_delta(label, completed_cursor)
+  json.parse(rotated, decode.at(["reset"], decode.bool))
+  |> should.equal(Ok(True))
+  string.contains(rotated, "first") |> should.be_true
+  string.contains(rotated, "afterRotation") |> should.be_true
+  json.parse(
+    usage.shared_delta(label, "invalid cursor"),
+    decode.at(["reset"], decode.bool),
+  )
+  |> should.equal(Ok(True))
+  simplifile.delete(path) |> should.be_ok
+  simplifile.delete(path <> ".1") |> should.be_ok
+}

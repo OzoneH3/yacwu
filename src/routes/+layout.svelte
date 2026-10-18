@@ -68,8 +68,10 @@
 	import { copilotAccountUsage, copilotAccountLabel, copilotAccountTitle, type CopilotAccountUsage } from '$lib/copilot-account';
 	import { copilotTaskCredits, creditLabel, creditTitle } from '$lib/copilot-credits';
 	import ModelSuggestion from '$lib/ModelSuggestion.svelte';
-	import { analyzeUsage, RATE_LABEL } from '$lib/usage-analysis';
-	import { summarizeTaskAllowances, projectTaskUsage, formatAllowancePercent, awaitingTokenCount, type TaskUsageSummary } from '$lib/task-usage';
+	import { RATE_LABEL } from '$lib/usage-analysis';
+	import { loadUsageAnalysis } from '$lib/usage-client';
+	import type { UsageAnalysis } from '$lib/usage-background';
+	import { createTaskAllowanceSummarizer, projectTaskUsage, formatAllowancePercent, awaitingTokenCount, type TaskUsageSummary } from '$lib/task-usage';
 	import { replaceSessionWithEmptyThread } from '$lib/session-clear';
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { createPathKindQueue, pathKindKey, type PathKind } from '$lib/path-kinds';
@@ -293,8 +295,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let clearReplacementId = $state<string | null>(null);
 	let clearCreationSnapshot = $state<Set<string> | null>(null);
 	let activityClock = $state(Date.now());
-	let usageAnalysisByHost = $state<Record<string, ReturnType<typeof analyzeUsage>>>({});
-	let fiveHourUsageAnalysisByHost = $state<Record<string, ReturnType<typeof analyzeUsage>>>({});
+	let usageAnalysisByHost = $state.raw<Record<string, UsageAnalysis>>({});
+	let fiveHourUsageAnalysisByHost = $state.raw<Record<string, UsageAnalysis>>({});
 	const usageLoading = new Set<string>();
 	const usageRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let archiveBrowserDialog = $state<HTMLDialogElement | null>(null);
@@ -684,6 +686,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	});
 	const projectedTaskUsage = $derived(projectTaskUsage(activeTaskUsage, activeTaskProgress, activityClock));
 	const projectedFiveHourTaskUsage = $derived(projectTaskUsage(activeTaskUsage?.fiveHour ?? null, activeTaskProgress, activityClock));
+	const summarizeTaskAllowances = createTaskAllowanceSummarizer();
 	const completedUsageByItem = $derived.by(() => {
 		const result: Record<string, TaskUsageSummary> = {};
 		if (!activeUsageAnalysis || !viewedId) return result;
@@ -706,12 +709,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		if (usageLoading.has(host)) return;
 		usageLoading.add(host);
 		try {
-			const response = await fetch(`/api/usage${hostQuery(host)}`, { signal: AbortSignal.timeout(10_000) });
-			if (!response.ok) return;
-			const data = await response.json();
-			const modelName = (model: string) => usageModelName(host, model);
-			usageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host, modelName });
-			fiveHourUsageAnalysisByHost[host] = analyzeUsage(data.events ?? [], { host, windowDurationMins: 300, modelName });
+			const analysis = await loadUsageAnalysis(host, usageModelNamesByHost[host] ?? {});
+			usageAnalysisByHost = { ...usageAnalysisByHost, [host]: analysis.weekly };
+			fiveHourUsageAnalysisByHost = { ...fiveHourUsageAnalysisByHost, [host]: analysis.fiveHour };
 		} catch { /* Retain the last learned rates if telemetry is unavailable. */ }
 		finally { usageLoading.delete(host); }
 	}
@@ -1577,21 +1577,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			await Promise.all(Object.entries(previouslyRunning).map(async ([threadId, sessionId]) => {
 				const observedTurnId = threads[threadId]?.turnId;
 				try {
-					const url = new URL(threadApi(threadId), window.location.origin);
-					url.searchParams.set('turns', '1');
+					const url = new URL(threadApi(threadId, '/runtime'), window.location.origin);
 					const read = await fetch(url, { signal: AbortSignal.timeout(5000) });
 					if (!read.ok) return;
 					const data = await read.json();
 					if (!data.thread) return;
-					const thread: { status?: { type: string }; turns?: Turn[] } = data.thread;
+					let thread: { status?: { type: string }; turns?: Turn[] } = data.thread;
 					const outcome = runtimeOutcome(thread);
 					// A new streamed turn must not be overwritten by an older read.
 					if (threads[threadId]?.turnId !== observedTurnId) return;
 					if (outcome === 'unknown' || outcome === 'running') return;
+					// A stopped turn can have missed its final SSE items. Hydrate once
+					// on this transition; active status polls never download transcripts.
+					try {
+						const historyUrl = new URL(threadApi(threadId), window.location.origin);
+						historyUrl.searchParams.set('turns', '1');
+						const history = await fetch(historyUrl, { signal: AbortSignal.timeout(5000) });
+						if (history.ok) {
+							const snapshot = await history.json();
+							if (snapshot.thread) thread = snapshot.thread;
+						}
+					} catch { /* The compact read still establishes the stopped state. */ }
+					const resolvedOutcome = runtimeOutcome(thread);
+					if (threads[threadId]?.turnId !== observedTurnId || resolvedOutcome === 'running' || resolvedOutcome === 'unknown') return;
 					syncThreadRuntime(threadId, thread);
 					const latest = thread.turns?.at(-1);
 					for (const item of latest?.items ?? []) upsertItem(threadId, item, false, latest?.id, true);
-					if (outcome === 'interrupted' && !interruptedSessions[sessionId]) {
+					if (resolvedOutcome === 'interrupted' && !interruptedSessions[sessionId]) {
 						interruptedSessions[sessionId] = true;
 						addLocalNote(sessionId, `Task interrupted.\nReason: ${interruptionReason(thread, thread.status?.type !== 'notLoaded')}\nUse Continue interrupted task to resume.`, 'err');
 					}

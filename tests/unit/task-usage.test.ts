@@ -85,3 +85,14 @@ test('a running task with a learned rate but no token count yet is waiting, not 
 	expect(awaitingTokenCount(task({ ...running, tokens: { ...zero, totalTokens: 5 } }), [rated])).toBe(false);
 	expect(awaitingTokenCount(task({ ...running, endedAt: 5000 }), [rated])).toBe(false);
 });
+
+test('immutable usage snapshots reuse completed task rollups between transcript deltas', async () => {
+ const { createTaskAllowanceSummarizer } = await import('../../src/lib/task-usage');
+ const { analyzeUsage } = await import('../../src/lib/usage-analysis');
+ const analysis = analyzeUsage([{ at: 1, host: 'local', event: 'turn/started', threadId: 't', turnId: 'one' }]);
+ const summarize = createTaskAllowanceSummarizer();
+ const task = analysis.tasks[0];
+ const first = summarize(analysis.tasks, task, analysis.tasks);
+ expect(summarize(analysis.tasks, task, analysis.tasks)).toBe(first);
+ expect(summarize([...analysis.tasks], task, analysis.tasks)).not.toBe(first);
+});
