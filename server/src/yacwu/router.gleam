@@ -33,6 +33,7 @@ import yacwu/benchmark
 import yacwu/codex.{type Codex}
 import yacwu/defaults
 import yacwu/diagnostics
+import yacwu/file_access
 import yacwu/files
 import yacwu/git
 import yacwu/hosts
@@ -468,6 +469,44 @@ fn dispatch(
       use host, cx <- with_codex(ctx, req, None)
       list_directories(host, cx, req)
     }
+    ["api", "threads", id, "file-access"], Get -> {
+      use _, cx <- with_codex(ctx, req, Some(id))
+      rpc(
+        cx,
+        "yacwu/fileAccess/read",
+        json.object([#("threadId", json.string(id))]),
+      )
+    }
+    ["api", "threads", id, "file-access"], Post -> {
+      use _, cx <- with_codex(ctx, req, Some(id))
+      let body = read_json_body(req)
+      case
+        codex.request(
+          cx,
+          "thread/read",
+          json.object([
+            #("threadId", json.string(id)),
+            #("includeTurns", json.bool(False)),
+          ]),
+        )
+      {
+        Error(message) -> json_response(409, error_body(message))
+        Ok(snapshot) ->
+          case jsonx.field_string(snapshot, ["thread", "status", "type"]) {
+            Ok("active") ->
+              json_response(
+                409,
+                error_body("Stop the current turn before changing file access"),
+              )
+            _ ->
+              rpc(
+                cx,
+                "yacwu/fileAccess/set",
+                jsonx.object_with(body, [#("threadId", json.string(id))]),
+              )
+          }
+      }
+    }
     ["api", "threads", id, "profile"], Get -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       get_profile(ctx, host, cx, id)
@@ -619,7 +658,14 @@ fn dispatch(
     }
     ["api", "threads", id, "file"], Put -> {
       use host, cx <- with_codex(ctx, req, Some(id))
-      write_text_file(host, cx, req, id)
+      case file_access.load(host, id) {
+        Ok("read-write") -> write_text_file(host, cx, req, id)
+        _ ->
+          json_response(
+            403,
+            error_body("This session has read-only file access"),
+          )
+      }
     }
     ["api", "threads", id, "git", "changes"], Get -> {
       use host, cx <- with_codex(ctx, req, Some(id))
@@ -2082,7 +2128,57 @@ fn create_thread_on(
   cx: Codex,
   body: Dynamic,
 ) -> Response(ResponseData) {
-  let params = defaults.thread_defaults()
+  let access = case jsonx.field_string(body, ["inheritAccessFrom"]) {
+    Ok(parent) -> file_access.load(host, parent)
+    Error(_) ->
+      Ok(
+        jsonx.field_string(body, ["fileAccess"])
+        |> result.unwrap(file_access.read_write),
+      )
+  }
+  case access {
+    Error(message) -> json_response(500, error_body(message))
+    Ok(mode) -> create_thread_with_valid_access(ctx, host, cx, body, mode)
+  }
+}
+
+fn create_thread_with_valid_access(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  body: Dynamic,
+  mode: String,
+) -> Response(ResponseData) {
+  case file_access.valid(mode) {
+    False ->
+      json_response(
+        400,
+        error_body("File access must be read-only or read-write"),
+      )
+    True -> create_thread_with_access(ctx, host, cx, body, mode)
+  }
+}
+
+fn create_thread_with_access(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  body: Dynamic,
+  mode: String,
+) -> Response(ResponseData) {
+  let params =
+    defaults.thread_defaults()
+    |> list.filter(fn(entry) { entry.0 != "sandbox" })
+  let params = [
+    #(
+      "sandbox",
+      json.string(case mode {
+        "read-only" -> "read-only"
+        _ -> "danger-full-access"
+      }),
+    ),
+    ..params
+  ]
   let params = case jsonx.field_string(body, ["model"]) {
     Ok(model) if model != "" -> [#("model", json.string(model)), ..params]
     _ -> params

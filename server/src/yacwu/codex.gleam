@@ -42,6 +42,7 @@ import gleam/string
 import yacwu/account_limits
 import yacwu/backends
 import yacwu/diagnostics
+import yacwu/file_access
 import yacwu/jsonx
 import yacwu/oauth
 import yacwu/remote
@@ -459,6 +460,7 @@ type Pending {
     started_at: Int,
     /// The connection generation the request was written on.
     generation: Int,
+    access: String,
   )
 }
 
@@ -593,6 +595,8 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
   case msg {
     Request(method, params, reply) ->
       case method {
+        "yacwu/fileAccess/read" | "yacwu/fileAccess/set" ->
+          session_file_access(state, method, params, reply)
         "account/read" | "account/rateLimits/read" ->
           account_request(state, method, params, reply)
         _ -> on_request(state, Queued(method, params, Plain(reply)))
@@ -1116,6 +1120,54 @@ fn account_request(
   }
 }
 
+fn session_file_access(
+  state: State,
+  method: String,
+  params: Json,
+  reply: Subject(Reply),
+) -> actor.Next(State, Msg) {
+  let body = file_access.dynamic(params)
+  let thread = jsonx.field_string(body, ["threadId"]) |> result.unwrap("")
+  let provider = account_provider(state)
+  let result = case method {
+    "yacwu/fileAccess/read" -> file_access.load(state.label, thread)
+    _ -> {
+      let mode = jsonx.field_string(body, ["mode"]) |> result.unwrap("")
+      let running = case dict.get(state.activity, thread) {
+        Ok(activity) -> activity.turn != ""
+        Error(_) -> False
+      }
+      let pending =
+        dict.values(state.pending)
+        |> list.any(fn(p) {
+          p.thread == Some(thread)
+          && {
+            p.method == "turn/start"
+            || p.method == "thread/resume"
+            || p.method == "thread/fork"
+            || p.method == "turn/steer"
+          }
+        })
+      case running || pending {
+        True -> Error("Stop the current turn before changing file access")
+        False -> {
+          use _ <- result.try(file_access.authorize(provider, mode))
+          file_access.save(state.label, thread, mode)
+          |> result.map(fn(_) { mode })
+        }
+      }
+    }
+  }
+  process.send(
+    reply,
+    result
+      |> result.map(fn(mode) {
+        file_access.state(mode, provider) |> file_access.dynamic
+      }),
+  )
+  actor.continue(state)
+}
+
 fn on_request(state: State, request: Queued) -> actor.Next(State, Msg) {
   case state.status {
     NotRunning -> begin_connect(state, [request])
@@ -1143,7 +1195,22 @@ fn dispatch_queued(state: State, conn: Conn, request: Queued) -> State {
       fail_queued([request], reason)
       state
     }
-    None -> dispatch_allowed(state, conn, request)
+    None ->
+      case
+        file_access.prepare(
+          state.label,
+          account_provider(state),
+          request.method,
+          request.params,
+        )
+      {
+        Error(reason) -> {
+          fail_queued([request], reason)
+          state
+        }
+        Ok(params) ->
+          dispatch_allowed(state, conn, Queued(..request, params: params))
+      }
   }
 }
 
@@ -1211,7 +1278,7 @@ fn expire(state: State, ticket: Int) -> State {
           let state =
             State(..state, tickets: dict.delete(state.tickets, ticket))
           case dict.get(state.pending, id) {
-            Ok(Pending(method, _, TrackedCaller(_, reply), _, generation)) -> {
+            Ok(Pending(method, _, TrackedCaller(_, reply), _, generation, _)) -> {
               diagnostics.record(state.label, oauth.now(), "rpc_expired", [
                 #("id", json.int(id)),
                 #("method", json.string(method)),
@@ -1238,6 +1305,20 @@ fn send_request(
   params: Json,
   reply_to: ReplyTo,
 ) -> State {
+  let params = case method {
+    "thread/resume" -> {
+      let thread =
+        jsonx.field_string(file_access.dynamic(params), ["threadId"])
+        |> result.unwrap("")
+      file_access.apply(
+        params,
+        method,
+        file_access.load(state.label, thread)
+          |> result.unwrap(file_access.read_only),
+      )
+    }
+    _ -> params
+  }
   let id = state.next_id
   let at = oauth.now()
   usage.request(state.label, method, params)
@@ -1278,6 +1359,10 @@ fn send_request(
         reply_to,
         at,
         state.generation,
+        case jsonx.field_string(file_access.dynamic(params), ["sandbox"]) {
+          Ok("read-only") -> file_access.read_only
+          _ -> file_access.read_write
+        },
       ),
     ),
   )
@@ -1597,6 +1682,11 @@ fn process_line(state: State, line: BitArray) -> State {
         _, Ok(method) -> {
           let at = oauth.now()
           usage.notification(state.label, method, msg)
+          case method {
+            "item/started" | "item/completed" ->
+              file_access.inherit_agents(state.label, msg)
+            _ -> Nil
+          }
           let state = case method {
             "account/rateLimits/updated" -> {
               case jsonx.field(msg, ["params"]) {
@@ -1795,7 +1885,19 @@ fn on_response(
       }
     _ ->
       case dict.get(state.pending, id) {
-        Ok(Pending(method, thread, reply_to, started_at, generation)) -> {
+        Ok(Pending(method, thread, reply_to, started_at, generation, access)) -> {
+          // Save before answering: follow-up requests must see the restriction.
+          let reply = case method, reply {
+            "thread/start", Ok(value) | "thread/fork", Ok(value) -> {
+              case jsonx.field_string(value, ["thread", "id"]) {
+                Ok(thread) ->
+                  file_access.save(state.label, thread, access)
+                  |> result.map(fn(_) { value })
+                Error(_) -> Error("Backend did not return a session id")
+              }
+            }
+            _, _ -> reply
+          }
           let at = oauth.now()
           let state = case method {
             "account/read" | "account/rateLimits/read" -> {
@@ -1968,7 +2070,8 @@ fn track_resumed(
 
 /// We run codex with approvalPolicy "never", so approvals shouldn't normally
 /// be requested. If anything does come through, auto-accept so turns never
-/// hang. The request is also broadcast so the UI can show what happened.
+/// hang. Read-only sessions deny escalation. The request is also broadcast so
+/// the UI can show what happened.
 fn on_server_request(
   state: State,
   line: BitArray,
@@ -1997,10 +2100,7 @@ fn on_server_request(
         state,
         line,
         id,
-        case string.contains(method, "requestApproval") {
-          True -> json.object([#("decision", json.string("accept"))])
-          False -> json.object([])
-        },
+        file_access.approval(state.label, method, msg),
       )
   }
 }

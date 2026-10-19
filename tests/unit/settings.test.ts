@@ -45,3 +45,9 @@ test('sound volume defaults to 50 and stays within 0–100', () => {
 	expect(readSettings('{"soundVolume":400}').soundVolume).toBe(100);
 	expect(readSettings('{"soundVolume":"loud"}').soundVolume).toBe(50);
 });
+
+test('file access defaults preserve existing read/write behaviour and accept only known modes', () => {
+ expect(readSettings(null).defaultFileAccess).toBe('read-write');
+ expect(readSettings('{"defaultFileAccess":"read-only"}').defaultFileAccess).toBe('read-only');
+ expect(readSettings('{"defaultFileAccess":"invalid"}').defaultFileAccess).toBe('read-write');
+});

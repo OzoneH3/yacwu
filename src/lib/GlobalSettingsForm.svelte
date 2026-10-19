@@ -42,7 +42,7 @@
 </script>
 
 <div class="global-settings">
-	<p class="intro">Saved in this browser and applied to every session straight away.</p>
+	<p class="intro">Saved in this browser. New session defaults apply when you create a session.</p>
 
 	<section aria-labelledby="settings-appearance">
 		<h3 id="settings-appearance">Appearance</h3>
@@ -79,7 +79,13 @@
 	</section>
 
 	<section aria-labelledby="settings-new-sessions">
-		<h3 id="settings-new-sessions">Session rule defaults</h3>
+		<h3 id="settings-new-sessions">New session defaults</h3>
+		<label class="row"><span>Default file access</span>
+			<select aria-label="Default file access" value={settings.defaultFileAccess} onchange={(e) => set('defaultFileAccess', e.currentTarget.value as GlobalSettings['defaultFileAccess'])}>
+				<option value="read-write">Read/write</option><option value="read-only">Read-only</option>
+			</select>
+		</label>
+		<p class="description">Applies to new sessions. Choose access during creation or in Session details. Enforced read-only access is currently available for Codex.</p>
 		<p class="description note">For sessions without their own saved rules. Session details can still override them per session.</p>
 		<label class="check"><input type="checkbox" checked={settings.defaultProgressReporting} onchange={(e) => set('defaultProgressReporting', e.currentTarget.checked)} /> Default: progress reporting</label>
 		<label class="check"><input type="checkbox" checked={settings.defaultSharedCoordination} onchange={(e) => set('defaultSharedCoordination', e.currentTarget.checked)} /> Default: shared background coordination</label>

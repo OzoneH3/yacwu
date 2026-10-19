@@ -74,6 +74,8 @@ rules locally, and records usage/diagnostic journals on the server.
   quiet background worker can be told from a hang
 - 🤝 Multi-agent visibility: switch between a session and its spawned agents,
   with read-only agent transcripts
+- 🔒 Codex file access: choose a default in Settings, override at creation or in
+  Session details, and keep read-only access through resumes and forks
 - 🧠 Per-session model and reasoning effort, with "Suggest settings" and
   capability/efficiency indicators in the picker
   (see [rating methodology](docs/model-ratings.md))
@@ -595,9 +597,17 @@ The backend is pure Gleam: interop with the VM (spawning the codex port,
 `/proc` symlink reads, Unix sockets) goes through typed `@external` bindings
 to Erlang built-ins — no Erlang source files, no NIFs.
 
-Threads run in "yolo" mode — `approvalPolicy: "never"` and
-`sandbox: "danger-full-access"` — so the web UI never blocks on an interactive
-approval prompt and commands run with full access.
+Sessions default to read/write access (`approvalPolicy: "never"`,
+`sandbox: "danger-full-access"`). Settings can select read-only for new sessions;
+creation and Session details can override it. Existing sessions keep their
+access choice, which is stored on the server and can change while idle.
+
+Codex read-only sessions use its filesystem sandbox for commands and edits,
+deny permission escalation, and disable shell shortcuts and browser editor
+saves. Resumes, forks, spawned agents and cleared-session replacements retain
+the restriction. Connected external services retain their own permissions.
+Claude and Copilot currently offer read/write access only; their adapters do
+not expose an equivalent enforced filesystem sandbox.
 
 ### Per-session profiles
 

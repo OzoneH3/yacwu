@@ -17,7 +17,7 @@
 	import ProjectRulesEditor from '$lib/ProjectRulesEditor.svelte';
 	import type { ProjectRulesState } from '$lib/project-rules';
 	import GlobalSettingsForm from '$lib/GlobalSettingsForm.svelte';
-	import { clampSetting, defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings } from '$lib/settings';
+	import { clampSetting, defaultSettings, GLOBAL_SETTINGS_KEY, readSettings, sendsMessage, withAllowanceReserve, type GlobalSettings, type FileAccess } from '$lib/settings';
 	import {
 		applyRelayEvent,
 		applyRelaySnapshot,
@@ -296,6 +296,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let showBottomJump = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
+	let fileAccessBySession = $state<Record<string, { mode: FileAccess; readOnlySupported: boolean }>>({});
+	let fileAccessPending = $state<Record<string, boolean>>({});
+	let fileAccessErrors = $state<Record<string, string>>({});
 	let usageHistoryOpen = $state(false);
 	let clearingSessionId = $state<string | null>(null);
 	let clearReplacementId = $state<string | null>(null);
@@ -876,6 +879,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let cwdBrowseKey = $state(0);
 	let cwdBrowseLoading = $state(false);
 	let newProfile = $state('');
+	let newFileAccess = $state<FileAccess>('read-write');
 	let profileChoices = $state<ProfileChoice[]>([]);
 	let defaultCwd = $state('');
 	let cwdInputEl = $state<HTMLInputElement | null>(null);
@@ -2349,6 +2353,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		newProfile = '';
 		newMachine = LOCAL_HOST;
 		newProvider = 'codex';
+		newFileAccess = settings.defaultFileAccess;
 		creating = true;
 		// Hosts come from ~/.ssh/config, re-read by the backend on demand.
 		void loadHostChoices();
@@ -2517,6 +2522,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
+				fileAccess: newFileAccess,
 				...(cwd ? { cwd } : {}),
 				...(profile ? { profile } : {}),
 				...(remote ? { host } : {})
@@ -2531,6 +2537,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const id = data.thread?.id;
 		if (id) {
 			rememberEmptySession(id, data.host ?? host);
+			fileAccessBySession[id] = { mode: newFileAccess, readOnlySupported: newProvider === 'codex' };
 			const thread = ensureThread(id);
 			thread.status = data.thread?.status?.type === 'active' ? 'running' : 'idle';
 			// thread/start already gave us an empty transcript. Avoid immediately
@@ -2577,6 +2584,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			composerHistories.get(id)?.resetNavigation();
 			slashDismissedToken = null;
 			void loadSessionConfig(id);
+			void loadFileAccess(id);
 			ensureThread(id);
 			if (sessionHistoryLoaded[id] || sessionOpening[id]) {
 				scrollToBottom();
@@ -2597,6 +2605,31 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const hosts = JSON.parse(accountUsageHostKey) as string[];
 		untrack(() => void forEachConcurrent(hosts, 4, host => loadAccountUsage(host)));
 	});
+
+	async function loadFileAccess(id: string) {
+		if (fileAccessPending[id]) return;
+		fileAccessPending[id] = true;
+		try {
+			const response = await fetch(threadApi(id, '/file-access'), { signal: AbortSignal.timeout(8000) });
+			const data = await response.json();
+			if (!response.ok || !['read-only', 'read-write'].includes(data.mode)) throw new Error(data.error ?? 'Could not load file access');
+			fileAccessBySession[id] = data;
+			delete fileAccessErrors[id];
+		} catch (error) { fileAccessErrors[id] = error instanceof Error ? error.message : 'Could not load file access'; }
+		finally { delete fileAccessPending[id]; }
+	}
+
+	async function changeFileAccess(id: string, mode: FileAccess) {
+		if (fileAccessPending[id]) return;
+		fileAccessPending[id] = true;
+		try {
+			const { ok, data } = await postCmd(id, 'file-access', { mode });
+			if (!ok) throw new Error(data.error ?? 'Could not change file access');
+			fileAccessBySession[id] = data;
+			delete fileAccessErrors[id];
+		} catch (error) { fileAccessErrors[id] = error instanceof Error ? error.message : 'Could not change file access'; }
+		finally { delete fileAccessPending[id]; }
+	}
 
 	async function loadSessionConfig(id: string) {
 		const previous = sessionConfigs[id];
@@ -4030,7 +4063,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					// The thread/started SSE event can beat the HTTP creation reply.
 					// Stage additions until we know which ID is our replacement.
 					clearCreationSnapshot = new Set(sessions.map((entry) => entry.id));
-					const fresh = await request('/api/threads', { host, cwd, ...(config ? { model: config.model, effort: config.effort, profile: config.profile } : {}) });
+					const fresh = await request('/api/threads', { host, cwd, inheritAccessFrom: id, ...(config ? { model: config.model, effort: config.effort, profile: config.profile } : {}) });
 					createdId = fresh.thread?.id ?? null;
 					clearReplacementId = createdId;
 					clearCreationSnapshot = null;
@@ -4648,6 +4681,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function openSessionInfo() {
 		if (!sessionInfoDialog) return;
 		sessionInfoDialog.showModal();
+		if (activeId) void loadFileAccess(activeId);
 		await tick();
 		sessionInfoDialog.focus();
 	}
@@ -6134,8 +6168,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</select>
 					</div>
 				{/if}
+				<div class="create-row">
+					<label for="new-file-access">File access</label>
+					<select id="new-file-access" bind:value={newFileAccess}>
+						<option value="read-write">Read/write</option>
+						<option value="read-only" disabled={newProvider !== 'codex'}>Read-only</option>
+					</select>
+				</div>
+				{#if newProvider !== 'codex'}<p class="create-hint">Enforced read-only access is currently available for Codex. Choose Read/write for this provider.</p>{/if}
 				<div class="create-actions">
-					<button class="mini" disabled={cwdBrowseLoading} onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
+					<button class="mini" disabled={cwdBrowseLoading || (newFileAccess === 'read-only' && newProvider !== 'codex')} onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
 				</div>
 				{#if createError}
 					<div id="create-helper" class="create-err" role="alert">{createError}</div>
@@ -6523,6 +6565,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</div>
 					{/if}
 					<span class="session-label" title={sessionContextTitle}>Session</span>
+					{#if fileAccessBySession[activeId]?.mode === 'read-only'}<span class="usage-window" aria-label="Read-only session">🔒 Read-only</span>{/if}
 					{#if activeTodoQueue?.tasks.length}<span class="todo-position">[{activeTodoPosition}/{activeTodoTotal}]</span>{/if}
 					<p>{sessionContextLine}</p>
 						<div class="session-bar-right">
@@ -6564,6 +6607,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{#key activeId}
 							<FileBrowser
 								threadId={activeId}
+								readOnly={fileAccessBySession[activeId]?.mode === 'read-only'}
 								cwd={cwds[activeId] ?? activeSummary?.cwd ?? ''}
 								rootOverride={filesReveal?.root ?? null}
 								host={activeHost}
@@ -6629,6 +6673,25 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</button>
 					</div>
 					<dl class="session-info-list">
+						<div>
+							<dt><label for="session-file-access">File access</label></dt>
+							<dd>
+								<select id="session-file-access" value={fileAccessBySession[activeId]?.mode ?? ''}
+									disabled={!fileAccessBySession[activeId] || fileAccessPending[activeId] || active?.status === 'running' || activeAgents.some(agentIsRunning)}
+									onchange={async (event) => {
+										const select = event.currentTarget, id = activeId!;
+										await changeFileAccess(id, select.value as FileAccess);
+										select.value = fileAccessBySession[id]?.mode ?? '';
+									}}>
+									{#if !fileAccessBySession[activeId]}<option value="">Loading…</option>{/if}
+									<option value="read-write">Read/write</option>
+									<option value="read-only" disabled={!fileAccessBySession[activeId]?.readOnlySupported}>Read-only</option>
+								</select>
+								<p class="access-note">Changes apply to the next turn. Stop running work before changing access.</p>
+								{#if fileAccessBySession[activeId] && !fileAccessBySession[activeId].readOnlySupported}<p class="access-note">Enforced read-only access is currently available for Codex.</p>{/if}
+								{#if fileAccessErrors[activeId]}<p role="alert">{fileAccessErrors[activeId]}</p><button class="mini ghost" type="button" onclick={() => void loadFileAccess(activeId!)}>Retry file access</button>{/if}
+							</dd>
+						</div>
 						<div>
 							<dt>Session</dt>
 							<dd>{activeId}</dd>

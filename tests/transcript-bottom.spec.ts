@@ -6,6 +6,7 @@ test('bottom button reaches the real end of a long virtualized transcript and re
 	const root = { id: 'root-test', name: 'Scroll test', cwd: '/tmp', status: { type: 'idle' }, turns: [{ id: 'turn-one', status: 'completed', items }] };
 	await page.route('**/api/**', async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith('/file-access')) return route.fulfill({ json: { mode: 'read-write', readOnlySupported: true } });
 		let data: object = {};
 		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
 		if (path === '/api/threads') data = { data: [root], defaultCwd: '/tmp' };

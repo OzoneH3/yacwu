@@ -2,7 +2,11 @@
 // Stored once in localStorage; anything missing or invalid falls back to the
 // default, so older browsers and partial values keep working.
 
+export type FileAccess = 'read-only' | 'read-write';
+
 export interface GlobalSettings {
+	/** File access for newly created sessions; existing sessions retain their choice. */
+	defaultFileAccess: FileAccess;
 	/** Desktop composer: Enter sends (Shift+Enter for a newline). Off: Ctrl/⌘+Enter sends. */
 	enterToSend: boolean;
 	/** Transcript starts with every activity row instead of the compact view. */
@@ -34,6 +38,7 @@ export interface GlobalSettings {
 export const GLOBAL_SETTINGS_KEY = 'yacwu-settings';
 
 export const defaultSettings: GlobalSettings = {
+	defaultFileAccess: 'read-write',
 	enterToSend: true,
 	showAllActivity: false,
 	collapseOutputLines: 10,
@@ -76,6 +81,7 @@ export function readSettings(raw: string | null): GlobalSettings {
 	const flag = (key: keyof GlobalSettings) =>
 		typeof parsed[key] === 'boolean' ? (parsed[key] as boolean) : (defaultSettings[key] as boolean);
 	return {
+		defaultFileAccess: parsed.defaultFileAccess === 'read-only' ? 'read-only' : 'read-write',
 		enterToSend: flag('enterToSend'),
 		showAllActivity: flag('showAllActivity'),
 		collapseOutputLines: key(parsed, 'collapseOutputLines'),

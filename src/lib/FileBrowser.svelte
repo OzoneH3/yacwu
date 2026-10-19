@@ -33,6 +33,7 @@
 		cwd,
 		rootOverride = null,
 		host = '',
+		readOnly = false,
 		theme = 'light',
 		embedded = false,
 		reveal = null,
@@ -45,6 +46,7 @@
 		rootOverride?: string | null;
 		/** Remote host serving this session's files ('' or 'local' for this machine). */
 		host?: string;
+		readOnly?: boolean;
 		theme?: 'light' | 'dark';
 		embedded?: boolean;
 		reveal?: { path: string; line?: number | null; nonce: number } | null;
@@ -205,8 +207,13 @@
 		onchanges();
 	}
 
+	$effect(() => {
+		const locked = readOnly;
+		editor?.updateOptions({ readOnly: locked, domReadOnly: locked });
+	});
+
 	async function saveFile() {
-		if (!selectedPath || !file || file.status !== 'ready' || file.kind !== 'text' || saving) return;
+		if (!selectedPath || !file || file.status !== 'ready' || file.kind !== 'text' || saving || readOnly) return;
 		const content = typeof editor?.getValue === 'function' ? editor.getValue() : editorText;
 		saving = true;
 		saveStatus = '';
@@ -330,8 +337,8 @@
 		}
 		if (!editor) {
 			editor = monacoRef.editor.create(el, {
-				readOnly: false,
-				domReadOnly: false,
+				readOnly,
+				domReadOnly: readOnly,
 				theme: monacoTheme(theme),
 				automaticLayout: true,
 				minimap: { enabled: false },
@@ -514,7 +521,7 @@
 					{/if}
 					{#if file.status === 'ready' && file.kind === 'text'}
 						<span class="fb-save-status" class:error={Boolean(saveError)} role="status">{saving ? 'Saving…' : saveError ?? (editorIsDirty() ? 'Unsaved' : saveStatus)}</span>
-						<button type="button" class="fb-save" onclick={saveFile} disabled={!editorIsDirty() || saving}>Save</button>
+						<button type="button" class="fb-save" onclick={saveFile} disabled={readOnly || !editorIsDirty() || saving}>Save</button>
 					{/if}
 				</div>
 				{#if file.status === 'loading'}

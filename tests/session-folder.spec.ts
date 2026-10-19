@@ -10,6 +10,7 @@ async function mock(page: Page, host = 'local') {
 	const thread = { id: ID, name: 'folder test', cwd: '/home/u/old', host, status: { type: 'idle' }, turns: [] };
 	await page.route('**/api/**', async (route) => {
 		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith('/file-access')) return route.fulfill({ json: { mode: 'read-write', readOnlySupported: host === 'local' } });
 		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
 		if (path === '/api/hosts') return route.fulfill({ json: { hosts: [{ name: 'local', kind: 'local', provider: 'codex' }, { name: 'claude', kind: 'local', provider: 'claude' }] } });
 		if (path === '/api/threads') return route.fulfill({ json: { data: [thread], defaultCwd: '/home/u' } });

@@ -1230,7 +1230,7 @@ test('slash command & picker: /profile selects codex profiles', async ({ page })
 	await expect(page.locator('#new-profile option')).toHaveCount(3);
 	await page.locator('.create button.mini', { hasText: 'Start session' }).click();
 	await expect(page.locator('.composer')).toBeVisible();
-	expect(createBody).toEqual({});
+	expect(createBody).toEqual({ fileAccess: 'read-write' });
 
 	// /profile shows the current selection and the available profiles.
 	const ta = page.locator('.composer textarea');
@@ -1260,5 +1260,5 @@ test('slash command & picker: /profile selects codex profiles', async ({ page })
 	await expect(page.locator('.create-err')).toContainText('unknown profile: fast', {
 		timeout: 15_000
 	});
-	expect(createBody).toEqual({ profile: 'fast' });
+	expect(createBody).toEqual({ fileAccess: 'read-write', profile: 'fast' });
 });
