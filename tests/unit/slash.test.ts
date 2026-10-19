@@ -84,7 +84,7 @@ test('SLASH_COMMANDS derives one popup entry per command with arg hints', async 
 test('filterSlashCommands lists all for an empty fragment and prefix-matches otherwise', async () => {
 	const { SLASH_COMMANDS, filterSlashCommands } = await import('../../src/lib/slash');
 	expect(filterSlashCommands('')).toEqual([...SLASH_COMMANDS]);
-	expect(filterSlashCommands('mo').map((c) => c.name)).toEqual(['/model']);
+	expect(filterSlashCommands('mo').map((c) => c.name)).toEqual(['/model', '/mode']);
 	expect(filterSlashCommands('f').map((c) => c.name)).toEqual(['/fast', '/fork']);
 	expect(filterSlashCommands('FAST').map((c) => c.name)).toEqual(['/fast']);
 	expect(filterSlashCommands('zzz')).toEqual([]);
