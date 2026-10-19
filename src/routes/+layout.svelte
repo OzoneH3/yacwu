@@ -8,6 +8,7 @@
 	import { mcpActivityLabel } from '$lib/mcp-activity';
 	import { compactActivity, compactActivityLabel } from '$lib/compact-activity';
 	import { removePendingTodo, todoEntries } from '$lib/todo-queue';
+	import { replayHistory } from '$lib/history-replay';
 	import { clearsStalledWorkerPrompt } from '$lib/stalled-worker';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
@@ -1040,12 +1041,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// Restored history carries the backend's own userMessage items;
 		// any optimistic copies were wiped with the transcript above.
 		pendingUserEchoes[id] = [];
-		for (const turn of turns) {
-			clearStoppedResumeActions(id);
-			for (const item of turn.items ?? []) {
-				if ((item as any).id) upsertItem(id, item as any, false, turn.id, turn.status !== 'inProgress');
-			}
-		}
+		replayHistory(turns, (item, turn) => {
+			upsertItem(id, item, false, turn.id, turn.status !== 'inProgress');
+		});
 	}
 
 	/** Display the session provider, including custom backend names. */

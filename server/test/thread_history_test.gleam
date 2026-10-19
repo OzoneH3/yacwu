@@ -92,3 +92,21 @@ pub fn legacy_adapter_order_still_returns_latest_turn_test() {
   string.contains(json.to_string(data), "new") |> should.be_true
   string.contains(json.to_string(data), "old") |> should.be_false
 }
+
+pub fn open_resume_omits_duplicate_history_and_preserves_settings_test() {
+  let reply = value("{\"serviceTier\":\"priority\"}")
+  let request = fn(method, params) {
+    method |> should.equal("thread/resume")
+    let params = value(json.to_string(params))
+    jsonx.field_bool(params, ["excludeTurns"]) |> should.equal(Ok(True))
+    jsonx.field_string(params, ["threadId"]) |> should.equal(Ok("large"))
+    jsonx.field_string(params, ["config", "model"])
+    |> should.equal(Ok("test-model"))
+    Ok(reply)
+  }
+  thread_history.resume_without_history(request, [
+    #("threadId", json.string("large")),
+    #("config", json.object([#("model", json.string("test-model"))])),
+  ])
+  |> should.equal(Ok(reply))
+}

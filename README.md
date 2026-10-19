@@ -47,6 +47,7 @@ rules locally, and records usage/diagnostic journals on the server.
   has loaded
 - Usage refreshes skip unchanged results, reuse a bounded host cache, and pause observations in hidden tabs; background recovery limits concurrent status requests.
 - 🪶 Background usage analysis reuses appended-event state and caches journals between reloads; cached session indicators and shared process snapshots keep long sessions responsive
+- Long histories replay in a single pass, and opening a session avoids requesting a second transcript during resume.
 - ⚡ Live streaming of messages, reasoning, commands, plans, and file changes;
   message timestamps survive browser refreshes; steer a running turn, stop it,
   or resume it later

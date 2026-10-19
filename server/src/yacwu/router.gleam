@@ -2554,7 +2554,10 @@ fn open_thread(
         Error(_) -> resume_params
       }
       let resume =
-        codex.request(cx, "thread/resume", json.object(resume_params))
+        thread_history.resume_without_history(
+          fn(method, params) { codex.request(cx, method, params) },
+          resume_params,
+        )
       case resume {
         Error(message) ->
           case read {

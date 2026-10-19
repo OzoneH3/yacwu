@@ -105,3 +105,14 @@ pub fn runtime(request: Request, thread: String) -> Result(Json, String) {
     ]),
   )
 }
+
+/// Opening already fetched history through read; resume only needs metadata.
+pub fn resume_without_history(
+  request: Request,
+  params: List(#(String, Json)),
+) -> Result(Dynamic, String) {
+  request(
+    "thread/resume",
+    json.object([#("excludeTurns", json.bool(True)), ..params]),
+  )
+}
