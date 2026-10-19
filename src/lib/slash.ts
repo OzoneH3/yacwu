@@ -21,6 +21,8 @@ export type SlashCommand =
 	| { kind: 'fork' }
 	| { kind: 'btw'; message?: string }
 	| { kind: 'archive' }
+	| { kind: 'mode-show' }
+	| { kind: 'mode-set'; mode: 'read-only' | 'read-write' }
 	| { kind: 'unknown'; command: string };
 
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
@@ -46,6 +48,9 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
 	['/rollback [turns]', 'roll back recent turns (default: 1)'],
 	['/fork', 'branch this thread into a new session'],
 	['/btw [question]', 'start an ephemeral side conversation'],
+	['/mode', 'show the current file access mode'],
+	['/mode r', 'set read-only file access'],
+	['/mode rw', 'set read-write file access'],
 	['/archive', 'archive this session'],
 	['/help', 'show this help']
 ];
@@ -187,6 +192,12 @@ export function parseSlash(text: string): SlashCommand {
 		case '/btw':
 		case '/side':
 			return arg ? { kind: 'btw', message: arg } : { kind: 'btw' };
+		case '/mode':
+			if (!arg) return { kind: 'mode-show' };
+			const lower = arg.toLowerCase();
+			if (lower === 'r' || lower === 'read-only') return { kind: 'mode-set', mode: 'read-only' };
+			if (lower === 'rw' || lower === 'read-write') return { kind: 'mode-set', mode: 'read-write' };
+			return { kind: 'unknown', command: cmd };
 		case '/archive':
 			return arg ? { kind: 'unknown', command: cmd } : { kind: 'archive' };
 		default:

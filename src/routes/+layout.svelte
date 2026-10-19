@@ -3737,6 +3737,38 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 
+		case 'mode-show': {
+			const mode = fileAccessBySession[id]?.mode;
+			const readOnlySupported = fileAccessBySession[id]?.readOnlySupported;
+			if (!mode) {
+				addLocalNote(id, 'File access mode not loaded yet');
+			} else {
+				const label = mode === 'read-only' ? 'Read-only' : 'Read/write';
+				addLocalNote(id, `File access: ${label}${!readOnlySupported && mode === 'read-only' ? ' (supported for Codex)' : ''}`);
+			}
+			break;
+		}
+
+		case 'mode-set': {
+			if (fileAccessPending[id]) {
+				addLocalNote(id, 'File access change in progress, please wait', 'info');
+				break;
+			}
+			if (active?.status === 'running' || activeAgents.some(agentIsRunning)) {
+				addLocalNote(id, 'Stop running work before changing file access', 'err');
+				break;
+			}
+			const newMode: FileAccess = parsed.mode;
+			await changeFileAccess(id, newMode);
+			const label = newMode === 'read-only' ? 'Read-only' : 'Read/write';
+			if (fileAccessErrors[id]) {
+				addLocalNote(id, fileAccessErrors[id] ?? 'Could not change file access', 'err');
+			} else {
+				addLocalNote(id, `File access set to ${label}. Changes apply to the next turn.`, 'info');
+			}
+			break;
+		}
+
 			case 'archive': {
 				const session = sessions.find((session) => session.id === id);
 				if (session && isSideChat(session)) {
@@ -6289,6 +6321,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<span class="host-badge" title={`Runs on ${s.host}`}>{s.host}</span>
 						{/if}
 						{#if fastSessions[s.id]}{@render fastMark()}{/if}
+						{#if fileAccessBySession[s.id]?.mode === 'read-only'}<span class="readonly-badge" title="Read-only session">🔒</span>{/if}
 					</a>
 				</div>
 				{#each sideChatsOf(s.id) as side (side.id)}

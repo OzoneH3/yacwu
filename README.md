@@ -170,6 +170,8 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/model <model> [effort]` | change the model and optional reasoning effort (`--effort <effort>` changes effort only) |
 | `/profile` | show the session's codex profile and the available choices |
 | `/profile <name>` / `/profile clear` | switch this session to a profile / back to the base config |
+| `/mode` | show the current file access mode (read-only or read-write) |
+| `/mode r` / `/mode rw` | set read-only or read-write file access (changes apply to the next turn) |
 | `/goal <objective>` | set the thread goal (`--budget N` to add a token budget) |
 | `/goal` / `/goal clear` | show / clear the current goal |
 | `/todo <task>` | queue a follow-up task to start after the current task |
