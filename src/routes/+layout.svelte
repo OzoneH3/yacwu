@@ -2586,11 +2586,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		});
 	});
 
+	// Sidebar allowance clocks need every represented account, even when none
+	// of its transcripts has been opened. A stable key avoids reloading on
+	// title/status changes; loadAccountUsage coalesces and caches per host.
+	const accountUsageHostKey = $derived(JSON.stringify([...new Set([
+		...sessions.map(session => session.host || LOCAL_HOST),
+		...(activeId ? [activeHost] : [])
+	])].sort()));
 	$effect(() => {
-		const id = activeId;
-		const host = activeHost;
-		if (!id) return;
-		untrack(() => void loadAccountUsage(host));
+		const hosts = JSON.parse(accountUsageHostKey) as string[];
+		untrack(() => void forEachConcurrent(hosts, 4, host => loadAccountUsage(host)));
 	});
 
 	async function loadSessionConfig(id: string) {
@@ -5656,7 +5661,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const runtimeCheckTimer = setInterval(() => void reconcileInterruptedSessions(), 15000);
 		loadSessions();
 		const stopAccountUsagePolling = observeWhileVisible(() => {
-			if (activeId) return loadAccountUsage(activeHost, true);
+			return forEachConcurrent(JSON.parse(accountUsageHostKey) as string[], 4, host => loadAccountUsage(host, true));
 		}, 5 * 60 * 1000, { immediate: false });
 		const stopResetFeedPolling = observeWhileVisible(() => loadResetFeed(), 10 * 60 * 1000);
 		/** Every later `yacwu/connected` is a reconnect. */

@@ -56,7 +56,8 @@ rules locally, and records usage/diagnostic journals on the server.
   final failure; **Show all activity** shows the full trace
 - ⏱️ Session bar with task progress, time-left estimates, elapsed time, and
   5-hour / 7-day usage with reset countdowns; quota-stopped sessions keep a
-  sidebar wait clock visible while allowance readings refresh
+  sidebar wait clock visible while allowance readings refresh, including after
+  reload without opening those sessions
 - ⚡ A global Codex limit reset announced by OpenAI (from the public
   willreset.com feed) shows next to the Codex usage until it lands, so the
   rest of the week's allowance can be used first (`YACWU_RESET_FEED=off`
