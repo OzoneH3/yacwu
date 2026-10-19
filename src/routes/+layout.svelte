@@ -3928,7 +3928,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const data = await response.json().catch(() => ({}));
 					throw new Error(data.error ?? `Could not restart prompt (${response.status})`);
 				}
-				addLocalNote(id, `Restarted the prompt on ${modelName} with ${effortLabel(selectedEffort)} thinking. The previous partial attempt remains in this transcript.`, 'info');
+				addLocalNote(id, `Restarted with ${modelName} and ${selectedEffort} reasoning. Earlier work is visible above.`, 'info');
 			} catch (error) {
 				thread.status = 'idle';
 				thread.turnStartedAt = null;
