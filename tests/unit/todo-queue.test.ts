@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { removePendingTodo } from '../../src/lib/todo-queue';
+import { removePendingTodo, todoEntries } from '../../src/lib/todo-queue';
 import { parseSlash } from '../../src/lib/slash';
 
 test('rm parses only positive integer task numbers', () => {
@@ -24,4 +24,19 @@ test('initial running prompt occupies position one and cannot be removed', () =>
 	expect(removePendingTodo(queue, 1)).toHaveProperty('error');
 	expect(removePendingTodo(queue, 2)).toEqual({ queue: { ...queue, tasks: ['last'] }, removed: 'pending' });
 	expect(removePendingTodo({ ...queue, initialTask: null }, 1)).toEqual({ queue: { ...queue, initialTask: null, tasks: ['last'] }, removed: 'pending' });
+});
+
+test('todo entries number every task as /todo does and mark finished and running ones', () => {
+	const queue = { tasks: ['b', 'c', 'd'], startedCount: 2, initialTask: 'a', currentTask: 'c' };
+	expect(todoEntries(queue, true)).toEqual([
+		{ position: 1, task: 'a', state: 'done' },
+		{ position: 2, task: 'b', state: 'done' },
+		{ position: 3, task: 'c', state: 'current' },
+		{ position: 4, task: 'd', state: 'queued' }
+	]);
+	// Before any queued task starts, the running initial task is current.
+	expect(todoEntries({ tasks: ['b'], startedCount: 0, initialTask: 'a', currentTask: null }, true).map((e) => e.state)).toEqual(['current', 'queued']);
+	expect(todoEntries(undefined, false)).toEqual([]);
+	// Every queued position is one /todo rm accepts.
+	for (const entry of todoEntries(queue, true)) expect('error' in removePendingTodo(queue, entry.position)).toBe(entry.state !== 'queued');
 });

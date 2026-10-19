@@ -7,7 +7,7 @@
 	import McpToolActivity from '$lib/McpToolActivity.svelte';
 	import { mcpActivityLabel } from '$lib/mcp-activity';
 	import { compactActivity, compactActivityLabel } from '$lib/compact-activity';
-	import { removePendingTodo } from '$lib/todo-queue';
+	import { removePendingTodo, todoEntries } from '$lib/todo-queue';
 	import { clearsStalledWorkerPrompt } from '$lib/stalled-worker';
 	import { filterArchives, type ArchiveFilter } from '$lib/archive';
 	import SessionRulesEditor from '$lib/SessionRulesEditor.svelte';
@@ -821,6 +821,15 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 			: []
 	);
 	const slashPopupVisible = $derived(slashMatches.length > 0);
+	// "/todo rm " lists the session's tasks; picking a queued one fills in its
+	// number. Finished and running tasks are listed but cannot be picked.
+	let todoPickDismissed = $state<string | null>(null);
+	let todoPickIndex = $state(0);
+	const todoPickToken = $derived(/^\/todo\s+rm\s*$/i.test(input) ? input : null);
+	const todoPickEntries = $derived(todoPickToken !== null && todoPickToken !== todoPickDismissed && activeId
+		? todoEntries(todoQueues[activeId], threads[activeId]?.status === 'running') : []);
+	const todoPickable = $derived(todoPickEntries.filter((entry) => entry.state === 'queued'));
+	const todoPickVisible = $derived(todoPickEntries.length > 0);
 	const composerPlaceholder = $derived(
 		activeCopilot && active?.status === 'running' && active?.turnId
 			? 'Queue a message for Copilot’s next prompt…'
@@ -3525,24 +3534,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 
 			case 'todo-show': {
-				const queue = todoQueues[id];
-				if (!queue?.tasks.length) addLocalNote(id, 'no queued todos');
-				else {
-					const offset = queue.initialTask ? 1 : 0;
-					const total = queue.tasks.length + offset;
-					const lines = queue.tasks.map((task, index) => {
-						const position = index + 1 + offset;
-						const state = index < queue.startedCount
-							? index === queue.startedCount - 1 && queue.currentTask ? 'current' : 'done'
-							: 'queued';
-						return `[${position}/${total}] ${state} · ${task}`;
-					});
-					if (queue.initialTask) {
-						const isRunning = queue.startedCount === 0 && threads[id]?.status === 'running';
-						lines.unshift(`[1/${total}] ${isRunning ? 'current' : 'done'} · ${queue.initialTask}`);
-					}
-					addLocalNote(id, lines.join('\n'));
-				}
+				const entries = todoEntries(todoQueues[id], threads[id]?.status === 'running');
+				if (!entries.length) addLocalNote(id, 'no queued todos');
+				else addLocalNote(id, entries.map((entry) => `[${entry.position}/${entries.length}] ${entry.state} · ${entry.task}`).join('\n'));
 				break;
 			}
 
@@ -4223,6 +4217,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// The slash popup owns its keys while visible (codex TUI precedence:
 		// command popup before history navigation and submission).
 		if (slashPopupVisible && handleSlashPopupKey(e)) return;
+		if (todoPickVisible && handleTodoPickKey(e)) return;
 		// Mobile keyboards use Return for multiline composition; the adjacent
 		// send button stays in thumb reach. Desktop keeps the fast Enter-to-send
 		// convention, with Shift+Enter for a newline.
@@ -4270,6 +4265,46 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			return true;
 		}
 		return false;
+	}
+
+	function handleTodoPickKey(e: KeyboardEvent): boolean {
+		if (e.isComposing) return false;
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			todoPickDismissed = todoPickToken;
+			return true;
+		}
+		const choices = todoPickable;
+		if (!choices.length) return false;
+		const moveUp = (e.key === 'ArrowUp' && !e.ctrlKey) || (e.key === 'p' && e.ctrlKey);
+		const moveDown = (e.key === 'ArrowDown' && !e.ctrlKey) || (e.key === 'n' && e.ctrlKey);
+		if ((moveUp || moveDown) && !e.altKey && !e.metaKey && !e.shiftKey) {
+			e.preventDefault();
+			todoPickIndex = (todoPickIndex + (moveDown ? 1 : -1) + choices.length) % choices.length;
+			void tick().then(() => document.getElementById(todoPickOptionId(choices[todoPickIndex].position))?.scrollIntoView({ block: 'nearest' }));
+			return true;
+		}
+		if ((e.key === 'Tab' || e.key === 'Enter') && !e.shiftKey) {
+			e.preventDefault();
+			pickTodo(choices[todoPickIndex] ?? choices[0]);
+			return true;
+		}
+		return false;
+	}
+
+	function todoPickOptionId(position: number): string {
+		return `todo-pick-option-${position}`;
+	}
+
+	/** Fill in the task's number; Enter then removes it. */
+	function pickTodo(entry: { position: number }) {
+		todoPickDismissed = null;
+		input = `/todo rm ${entry.position}`;
+		void tick().then(() => {
+			if (!composerTextareaEl) return;
+			composerTextareaEl.focus();
+			composerTextareaEl.setSelectionRange(input.length, input.length);
+		});
 	}
 
 	function slashOptionId(cmd: SlashCommandInfo): string {
@@ -4363,6 +4398,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	$effect(() => {
 		slashToken;
 		slashIndex = 0;
+	});
+	$effect(() => {
+		todoPickToken;
+		todoPickIndex = 0;
 	});
 
 	function onCwdKeydown(e: KeyboardEvent) {
@@ -7195,6 +7234,31 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</div>
 					{/if}
 					<div class="composer-anchor">
+						{#if todoPickVisible}
+							<div class="slash-popup todo-pick" id="todo-pick-popup" role="listbox" aria-label="Tasks to remove">
+								{#each todoPickEntries as entry (entry.position)}
+									{@const pickIndex = todoPickable.indexOf(entry)}
+									<button
+										type="button"
+										class="slash-option todo-pick-option {entry.state}"
+										class:selected={pickIndex >= 0 && pickIndex === todoPickIndex}
+										id={todoPickOptionId(entry.position)}
+										role="option"
+										aria-selected={pickIndex >= 0 && pickIndex === todoPickIndex}
+										aria-disabled={entry.state !== 'queued'}
+										disabled={entry.state !== 'queued'}
+										title={entry.state === 'queued' ? `Remove task ${entry.position}` : entry.state === 'current' ? 'Being worked on; cannot be removed' : 'Finished; cannot be removed'}
+										onmousedown={(e) => e.preventDefault()}
+										onclick={() => pickTodo(entry)}
+										onpointerenter={() => { if (pickIndex >= 0) todoPickIndex = pickIndex; }}
+									>
+										<span class="slash-name">{entry.position}</span>
+										<span class="slash-args">{entry.state === 'current' ? 'working' : entry.state}</span>
+										<span class="slash-desc">{entry.task}</span>
+									</button>
+								{/each}
+							</div>
+						{/if}
 						{#if slashPopupVisible}
 							<div class="slash-popup" id="slash-popup" role="listbox" aria-label="Slash commands">
 								{#each slashMatches as cmd, i (cmd.name)}
@@ -7242,11 +7306,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							role="combobox"
 							aria-autocomplete="list"
 							aria-haspopup="listbox"
-							aria-expanded={slashPopupVisible}
-							aria-controls={slashPopupVisible ? 'slash-popup' : undefined}
+							aria-expanded={slashPopupVisible || todoPickVisible}
+							aria-controls={slashPopupVisible ? 'slash-popup' : todoPickVisible ? 'todo-pick-popup' : undefined}
 							aria-activedescendant={slashPopupVisible && slashMatches[slashIndex]
 								? slashOptionId(slashMatches[slashIndex])
-								: undefined}
+								: todoPickVisible && todoPickable[todoPickIndex]
+									? todoPickOptionId(todoPickable[todoPickIndex].position)
+									: undefined}
 						></textarea>
 						<div class="composer-actions">
 							<button class="attach" type="button" onclick={chooseAttachments} title="Attach an image, PDF, text, or code file, or paste a file into the prompt" aria-label="Attach a supported file or paste from clipboard">
@@ -10568,6 +10634,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		cursor: pointer;
 		font: inherit;
 		text-align: start;
+	}
+
+	.todo-pick .slash-desc {
+		justify-self: start;
+		text-align: start;
+	}
+
+	.todo-pick-option:disabled {
+		cursor: default;
+	}
+
+	.todo-pick-option.done .slash-desc {
+		text-decoration: line-through;
+	}
+
+	.todo-pick-option.current .slash-args {
+		color: var(--color-accent);
 	}
 
 	.slash-option.selected {
