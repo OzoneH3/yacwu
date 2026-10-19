@@ -26,3 +26,20 @@ test('a scroll away without an input event also stops the jump', async () => {
 	expect(viewport.scrollTop).toBe(0);
 	expect(frames).toBe(2);
 });
+
+test('row height shrinkage and browser anchoring do not cancel an explicit bottom jump', async () => {
+ let height = 1000, top = 0, frames = 0;
+ const viewport = { get scrollHeight() { return height; }, get scrollTop() { return top; }, set scrollTop(value) { top = Math.min(value, height - 200); }, clientHeight: 200 };
+ await settleTranscriptBottom(viewport, { flush: async () => {}, update: () => {}, cancelled: () => false, atEnd: () => true,
+  frame: async () => { if (++frames === 1) { height = 600; top = 337; } } });
+ expect(top).toBe(400);
+});
+
+
+test('the first layout adjustment after clicking bottom does not cancel the jump', async () => {
+ let height = 1000, top = 0, frames = 0;
+ const viewport = { get scrollHeight() { return height; }, get scrollTop() { return top; }, set scrollTop(value) { top = Math.min(value, height - 200); }, clientHeight: 200 };
+ await settleTranscriptBottom(viewport, { flush: async () => {}, update: () => {}, cancelled: () => false, atEnd: () => true,
+  frame: async () => { if (++frames === 1) top -= 63; } });
+ expect(top).toBe(800);
+});
