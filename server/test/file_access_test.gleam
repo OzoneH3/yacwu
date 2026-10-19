@@ -157,3 +157,52 @@ pub fn spawned_agents_and_approval_requests_retain_read_only_access_test() {
   |> json.to_string
   |> should.equal("{\"permissions\":{},\"scope\":\"turn\"}")
 }
+
+pub fn claude_read_only_requires_the_backend_capability_test() {
+  let fixture =
+    filepath.join(
+      envoy.get("PWD") |> result.unwrap("."),
+      "../tests/fixtures/file-access-server.mjs",
+    )
+  let ready = process.new_name("claude_ready")
+  let old = process.new_name("claude_old")
+  let label = "claude-access-" <> int.to_string(unique())
+  let assert Ok(_) =
+    codex.start(ready, label, codex.Local(["node", fixture, "read-only-ready"]))
+  let assert Ok(_) =
+    codex.start(old, label <> "-old", codex.Local(["node", fixture]))
+  // Initialize both processes before querying their advertised capabilities.
+  let assert Ok(_) = codex.request(ready, "test/seen", json.object([]))
+  let assert Ok(_) = codex.request(old, "test/seen", json.object([]))
+  let params = json.object([#("threadId", json.string("existing"))])
+  let assert Ok(ready_state) =
+    codex.request(ready, "yacwu/fileAccess/read", params)
+  jsonx.field_bool(ready_state, ["readOnlySupported"]) |> should.equal(Ok(True))
+  jsonx.field_string(ready_state, ["readOnlyKind"]) |> should.equal(Ok("tools"))
+  let assert Ok(old_state) = codex.request(old, "yacwu/fileAccess/read", params)
+  jsonx.field_bool(old_state, ["readOnlySupported"]) |> should.equal(Ok(False))
+  jsonx.field_string(old_state, ["readOnlyReason"])
+  |> should.equal(Ok(
+    "Restart the Claude backend daemon to enable read-only file access.",
+  ))
+  let create = json.object([#("sandbox", json.string("read-only"))])
+  codex.request(old, "thread/start", create) |> should.be_error
+  let assert Ok(created) = codex.request(ready, "thread/start", create)
+  let assert Ok(thread) = jsonx.field_string(created, ["thread", "id"])
+  file_access.load(label, thread) |> should.equal(Ok("read-only"))
+  let assert Ok(_) =
+    codex.request(
+      ready,
+      "turn/start",
+      json.object([#("threadId", json.string(thread))]),
+    )
+  let assert Ok(seen) = codex.request(ready, "test/seen", json.object([]))
+  let assert Ok(requests) =
+    decode.run(seen, decode.at(["seen"], decode.list(decode.dynamic)))
+  let assert Ok(turn) =
+    list.find(requests, fn(r) {
+      jsonx.field_string(r, ["method"]) == Ok("turn/start")
+    })
+  jsonx.field_string(turn, ["params", "sandboxPolicy", "type"])
+  |> should.equal(Ok("readOnly"))
+}

@@ -74,8 +74,8 @@ rules locally, and records usage/diagnostic journals on the server.
   quiet background worker can be told from a hang
 - 🤝 Multi-agent visibility: switch between a session and its spawned agents,
   with read-only agent transcripts
-- 🔒 Codex file access: choose a default in Settings, override at creation or in
-  Session details, and keep read-only access through resumes and forks
+- 🔒 File access for Codex and Claude: choose a default in Settings, override at
+  creation or in Session details, and keep read-only access through resumes and forks
 - 🧠 Per-session model and reasoning effort, with "Suggest settings" and
   capability/efficiency indicators in the picker
   (see [rating methodology](docs/model-ratings.md))
@@ -608,8 +608,17 @@ Codex read-only sessions use its filesystem sandbox for commands and edits,
 deny permission escalation, and disable shell shortcuts and browser editor
 saves. Resumes, forks, spawned agents and cleared-session replacements retain
 the restriction. Connected external services retain their own permissions.
-Claude and Copilot currently offer read/write access only; their adapters do
-not expose an equivalent enforced filesystem sandbox.
+Claude read-only sessions expose only Read, Glob, Grep and interactive questions.
+Commands, edits, subagents, workflows, skills and external tools are disabled;
+permissions and tool hooks enforce the same limit even when resuming a writable
+conversation. This is a restricted tool mode, while Codex uses its filesystem
+sandbox. SDK session bookkeeping can still write its own state.
+
+The Claude backend must advertise the updated read-only guard before Yacwu
+allows the mode. After updating, finish ongoing Claude work and restart its
+persistent daemon to load the guard, then reload the browser. A Yacwu service
+restart alone does not update persistent backends. Copilot currently supports
+read/write access only.
 
 ### Per-session profiles
 

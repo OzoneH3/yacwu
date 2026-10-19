@@ -522,6 +522,7 @@ type State {
     /// Questions a backend asked the user (`item/tool/requestUserInput`),
     /// by item id, with the request's wire id to answer under.
     user_input: Dict(String, Dynamic),
+    claude_read_only_support: Bool,
   )
 }
 
@@ -562,6 +563,7 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     tickets: dict.new(),
     lifecycle: [],
     user_input: dict.new(),
+    claude_read_only_support: False,
   )
 }
 
@@ -912,6 +914,14 @@ fn account_provider(state: State) -> String {
   }
 }
 
+/// Only a Claude process with Yacwu's read-only guard can opt into this mode.
+fn file_access_provider(state: State) -> String {
+  case account_provider(state), state.claude_read_only_support {
+    "claude", True -> "claude-read-only"
+    provider, _ -> provider
+  }
+}
+
 fn account_limit_reason(state: State) -> Option(String) {
   let limits = account_limits.load(account_limits.path())
   let #(at, data) = case
@@ -1128,7 +1138,7 @@ fn session_file_access(
 ) -> actor.Next(State, Msg) {
   let body = file_access.dynamic(params)
   let thread = jsonx.field_string(body, ["threadId"]) |> result.unwrap("")
-  let provider = account_provider(state)
+  let provider = file_access_provider(state)
   let result = case method {
     "yacwu/fileAccess/read" -> file_access.load(state.label, thread)
     _ -> {
@@ -1199,7 +1209,7 @@ fn dispatch_queued(state: State, conn: Conn, request: Queued) -> State {
       case
         file_access.prepare(
           state.label,
-          account_provider(state),
+          file_access_provider(state),
           request.method,
           request.params,
         )
@@ -1822,12 +1832,17 @@ fn on_response(
   case state.status {
     Initializing(conn, init_id, queued) if id == init_id ->
       case reply {
-        Ok(_) -> {
+        Ok(initialized) -> {
           write_notification(conn, "initialized", json.object([]))
           let state =
             State(
               ..state,
               status: Running(conn),
+              claude_read_only_support: jsonx.field_string(initialized, [
+                  "yacwuCapabilities",
+                  "readOnlyFileAccess",
+                ])
+                == Ok("read-tools-v1"),
               backoff: 0,
               last_error: "",
               generation: unique_integer([Monotonic, Positive]),

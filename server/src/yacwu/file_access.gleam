@@ -1,5 +1,6 @@
 //// Persistent file access for sessions. Missing records preserve legacy access;
-//// unreadable records fail closed. Only Codex exposes an enforced sandbox.
+//// unreadable records fail closed. Codex uses its sandbox; a capable Claude
+//// backend restricts tools to reads/searches/questions.
 
 import envoy
 import filepath
@@ -71,7 +72,23 @@ pub fn save(host: String, thread: String, mode: String) -> Result(Nil, String) {
 pub fn state(mode: String, provider: String) -> Json {
   json.object([
     #("mode", json.string(mode)),
-    #("readOnlySupported", json.bool(provider == "codex")),
+    #("readOnlySupported", json.bool(supported(provider))),
+    #(
+      "readOnlyKind",
+      json.string(case provider {
+        "claude-read-only" -> "tools"
+        _ -> "sandbox"
+      }),
+    ),
+    #(
+      "readOnlyReason",
+      json.string(case provider {
+        "claude" ->
+          "Restart the Claude backend daemon to enable read-only file access."
+        "codex" | "claude-read-only" -> ""
+        _ -> "Read-only file access is not available for this backend."
+      }),
+    ),
   ])
 }
 
@@ -164,14 +181,20 @@ pub fn prepare(
   }
 }
 
+fn supported(provider: String) -> Bool {
+  provider == "codex" || provider == "claude-read-only"
+}
+
 pub fn authorize(provider: String, mode: String) -> Result(Nil, String) {
-  case valid(mode), mode, provider {
-    False, _, _ -> Error("File access must be read-only or read-write")
-    True, "read-only", provider if provider != "codex" ->
+  case valid(mode), mode, supported(provider), provider {
+    False, _, _, _ -> Error("File access must be read-only or read-write")
+    True, "read-only", False, "claude" ->
       Error(
-        "Enforced read-only file access is currently supported by Codex only",
+        "Restart the Claude backend daemon to enable read-only file access.",
       )
-    _, _, _ -> Ok(Nil)
+    True, "read-only", False, _ ->
+      Error("Read-only file access is not available for this backend.")
+    _, _, _, _ -> Ok(Nil)
   }
 }
 

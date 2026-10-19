@@ -6,6 +6,7 @@ createInterface({ input: process.stdin }).on('line', line => {
  const { id, method, params = {} } = JSON.parse(line);
  if (id == null) return;
  seen.push({ method, params }); let result = {};
+ if (method === 'initialize' && process.argv[2] === 'read-only-ready') result = { yacwuCapabilities: { readOnlyFileAccess: 'read-tools-v1' } };
  if (method === 'thread/start' || method === 'thread/fork') result = { thread: { id: `file-access-${++next}`, status: { type: 'idle' }, turns: [] } };
  if (method === 'thread/resume') result = { thread: { id: params.threadId, status: { type: 'idle' }, turns: [] } };
  if (method === 'turn/start') {

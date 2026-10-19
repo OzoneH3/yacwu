@@ -296,7 +296,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let showBottomJump = $state(false);
 	let archiveNotice = $state<ArchiveNotice | null>(null);
 	let sessionInfoDialog = $state<HTMLDialogElement | null>(null);
-	let fileAccessBySession = $state<Record<string, { mode: FileAccess; readOnlySupported: boolean }>>({});
+	let fileAccessBySession = $state<Record<string, { mode: FileAccess; readOnlySupported: boolean; readOnlyKind?: 'tools' | 'sandbox'; readOnlyReason?: string }>>({});
 	let fileAccessPending = $state<Record<string, boolean>>({});
 	let fileAccessErrors = $state<Record<string, string>>({});
 	let usageHistoryOpen = $state(false);
@@ -2537,7 +2537,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const id = data.thread?.id;
 		if (id) {
 			rememberEmptySession(id, data.host ?? host);
-			fileAccessBySession[id] = { mode: newFileAccess, readOnlySupported: newProvider === 'codex' };
+			fileAccessBySession[id] = { mode: newFileAccess, readOnlySupported: newProvider === 'codex' || (newProvider === 'claude' && newFileAccess === 'read-only'), readOnlyKind: newProvider === 'claude' ? 'tools' : 'sandbox' };
 			const thread = ensureThread(id);
 			thread.status = data.thread?.status?.type === 'active' ? 'running' : 'idle';
 			// thread/start already gave us an empty transcript. Avoid immediately
@@ -3744,7 +3744,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				addLocalNote(id, 'File access mode not loaded yet');
 			} else {
 				const label = mode === 'read-only' ? 'Read-only' : 'Read/write';
-				addLocalNote(id, `File access: ${label}${!readOnlySupported && mode === 'read-only' ? ' (supported for Codex)' : ''}`);
+				addLocalNote(id, `File access: ${label}${!readOnlySupported && mode === 'read-only' ? ' (backend update required)' : ''}`);
 			}
 			break;
 		}
@@ -6204,12 +6204,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<label for="new-file-access">File access</label>
 					<select id="new-file-access" bind:value={newFileAccess}>
 						<option value="read-write">Read/write</option>
-						<option value="read-only" disabled={newProvider !== 'codex'}>Read-only</option>
+						<option value="read-only" disabled={newProvider === 'copilot'}>Read-only</option>
 					</select>
 				</div>
-				{#if newProvider !== 'codex'}<p class="create-hint">Enforced read-only access is currently available for Codex. Choose Read/write for this provider.</p>{/if}
+				{#if newProvider === 'copilot'}<p class="create-hint">Copilot currently supports Read/write access only.</p>{:else if newProvider === 'claude' && newFileAccess === 'read-only'}<p class="create-hint">Claude can read and search files and ask questions. Commands, edits, subagents and external tools are disabled. Requires the updated Claude backend.</p>{/if}
 				<div class="create-actions">
-					<button class="mini" disabled={cwdBrowseLoading || (newFileAccess === 'read-only' && newProvider !== 'codex')} onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
+					<button class="mini" disabled={cwdBrowseLoading || (newFileAccess === 'read-only' && newProvider === 'copilot')} onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
 				</div>
 				{#if createError}
 					<div id="create-helper" class="create-err" role="alert">{createError}</div>
@@ -6721,7 +6721,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<option value="read-only" disabled={!fileAccessBySession[activeId]?.readOnlySupported}>Read-only</option>
 								</select>
 								<p class="access-note">Changes apply to the next turn. Stop running work before changing access.</p>
-								{#if fileAccessBySession[activeId] && !fileAccessBySession[activeId].readOnlySupported}<p class="access-note">Enforced read-only access is currently available for Codex.</p>{/if}
+								{#if fileAccessBySession[activeId] && !fileAccessBySession[activeId].readOnlySupported}<p class="access-note">{fileAccessBySession[activeId].readOnlyReason || 'Read-only file access is not available for this backend.'}</p>{/if}
+								{#if fileAccessBySession[activeId]?.readOnlyKind === 'tools'}<p class="access-note">Claude read-only sessions can read and search files and ask questions. Commands, edits, subagents and external tools are disabled.</p>{/if}
 								{#if fileAccessErrors[activeId]}<p role="alert">{fileAccessErrors[activeId]}</p><button class="mini ghost" type="button" onclick={() => void loadFileAccess(activeId!)}>Retry file access</button>{/if}
 							</dd>
 						</div>

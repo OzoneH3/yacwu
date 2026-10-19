@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function mockAccess(page: Page, provider = 'codex', running = false) {
+async function mockAccess(page: Page, provider = 'codex', running = false, claudeReady = false) {
  const modeById: Record<string, string> = { existing: 'read-write' };
  const created: any[] = []; let next = 0;
  const host = provider === 'codex' ? 'local' : provider;
@@ -11,13 +11,13 @@ async function mockAccess(page: Page, provider = 'codex', running = false) {
   if (path === '/api/hosts') data = { hosts: [{ name: 'local', provider: 'codex', kind: 'local', state: 'connected' }, ...(provider === 'codex' ? [] : [{ name: host, provider, kind: 'backend', state: 'connected' }])] };
   else if (path === '/api/threads') {
    if (route.request().method() === 'POST') {
-    const body = route.request().postDataJSON(); created.push(body); const id = `new-${++next}`; modeById[id] = body.fileAccess; data = { host: 'local', thread: thread(id) };
+    const body = route.request().postDataJSON(); created.push(body); const id = `new-${++next}`; modeById[id] = body.fileAccess; data = { host, thread: thread(id) };
    } else data = { data: [thread()] };
   } else if (path === '/api/threads/loaded') data = { data: [] };
   else if (path.endsWith('/file-access')) {
    const id = path.split('/')[3];
    if (route.request().method() === 'POST') modeById[id] = route.request().postDataJSON().mode;
-   data = { mode: modeById[id] ?? 'read-write', readOnlySupported: provider === 'codex' };
+   data = { mode: modeById[id] ?? 'read-write', readOnlySupported: provider === 'codex' || claudeReady, readOnlyKind: provider === 'claude' && claudeReady ? 'tools' : 'sandbox', readOnlyReason: provider === 'claude' ? 'Restart the Claude backend daemon to enable read-only file access.' : 'Read-only file access is not available for this backend.' };
   } else if (path.endsWith('/model')) data = { model: 'test', effort: 'medium', models: [] };
   else if (path.startsWith('/api/threads/')) data = { thread: thread(path.split('/')[3]) };
   await route.fulfill({ json: data });
@@ -58,13 +58,13 @@ test('access changes are unavailable during a running turn', async ({ page }) =>
  await expect(page.getByRole('dialog', { name: 'Session details' }).getByLabel('File access', { exact: true })).toBeDisabled();
 });
 
-test('unsupported providers explain why read-only access is unavailable', async ({ page }) => {
+test('an old Claude daemon explains the required update', async ({ page }) => {
  await mockAccess(page, 'claude');
  await page.getByRole('button', { name: /^Session details,/ }).click();
  const details = page.getByRole('dialog', { name: 'Session details' });
  await expect(details.getByLabel('File access', { exact: true })).toBeEnabled();
  await expect(details.locator('option[value="read-only"]')).toBeDisabled();
- await expect(details).toContainText('Enforced read-only access is currently available for Codex.');
+ await expect(details).toContainText('Restart the Claude backend daemon to enable read-only file access.');
 });
 
 test('real API persists access, rejects unsandboxed shortcuts and file saves, and lets idle sessions change access', async ({ request }) => {
@@ -104,4 +104,37 @@ test('a rejected access change keeps the saved choice visible', async ({ page })
  await expect(details.getByRole('alert')).toHaveText('Access change rejected');
  await expect(select).toHaveValue('read-write');
  await expect(page.getByLabel('Read-only session', { exact: true })).toHaveCount(0);
+});
+
+
+test('an updated Claude backend offers read-only mode and explains its restricted tools', async ({ page }) => {
+ const { modeById } = await mockAccess(page, 'claude', false, true);
+ await page.getByRole('button', { name: /^Session details,/ }).click();
+ const details = page.getByRole('dialog', { name: 'Session details' });
+ const select = details.getByLabel('File access', { exact: true });
+ await expect(select).toBeEnabled();
+ await expect(details.locator('option[value="read-only"]')).toBeEnabled();
+ await expect(details).toContainText('Commands, edits, subagents and external tools are disabled.');
+ await select.selectOption('read-only');
+ await expect.poll(() => modeById.existing).toBe('read-only');
+ await details.getByRole('button', { name: 'Close session details' }).click();
+ await expect(page.getByLabel('Read-only session', { exact: true })).toBeVisible();
+ await page.reload();
+ await expect(page.getByLabel('Read-only session', { exact: true })).toBeVisible();
+});
+
+
+test('Claude creation can inherit the read-only default', async ({ page }) => {
+ const { created } = await mockAccess(page, 'claude', false, true);
+ await page.getByRole('button', { name: 'Settings', exact: true }).click();
+ await page.getByLabel('Default file access', { exact: true }).selectOption('read-only');
+ await page.getByRole('button', { name: 'Close settings' }).click();
+ await page.getByRole('button', { name: 'New session', exact: true }).click();
+ await page.locator('#new-provider').selectOption('claude');
+ const create = page.getByRole('group', { name: 'Start a session', exact: true });
+ await expect(create.getByLabel('File access', { exact: true })).toHaveValue('read-only');
+ await expect(create.getByRole('button', { name: 'Start session', exact: true })).toBeEnabled();
+ await create.getByRole('button', { name: 'Start session', exact: true }).click();
+ await expect.poll(() => created.length).toBe(1);
+ expect(created[0]).toMatchObject({ host: 'claude', fileAccess: 'read-only' });
 });
