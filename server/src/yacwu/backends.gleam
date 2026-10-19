@@ -86,8 +86,8 @@ pub fn command(name: String) -> Result(List(String), Nil) {
 
 /// Which agent a backend runs: "copilot" or "claude" when its name says so,
 /// else when its command does, otherwise the backend's own name. In the
-/// command only a file name counts for Copilot (its command also names the
-/// claude-codex adapter it reuses, and folders may be called anything).
+/// command, identify executable/script names or the known adapter entrypoint;
+/// unrelated parent directory names do not identify a provider.
 pub fn provider(backend: Backend) -> String {
   let name = string.lowercase(backend.name)
   let args = list.map(backend.command, string.lowercase)
@@ -99,7 +99,10 @@ pub fn provider(backend: Backend) -> String {
     string.contains(name, "copilot"),
     string.contains(name, "claude"),
     any_contains(file_names, "copilot"),
-    any_contains(args, "claude")
+    any_contains(file_names, "claude")
+    || list.any(args, fn(arg) {
+      string.ends_with(arg, "claude-codex/dist/src/adapter.mjs")
+    })
   {
     True, _, _, _ -> "copilot"
     _, True, _, _ -> "claude"

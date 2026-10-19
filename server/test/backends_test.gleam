@@ -135,3 +135,14 @@ pub fn folder_names_do_not_decide_the_provider_test() {
   assert backends.provider_of("anthropic") == Ok("claude")
   assert backends.provider_of("agent") == Ok("copilot")
 }
+
+pub fn generic_commands_inside_claude_named_folders_are_not_claude_test() {
+  assert backends.provider(
+      Backend("local", ["/srv/claude-project/bin/codex", "app-server"]),
+    )
+    == "local"
+  assert backends.provider(
+      Backend("mini", ["node", "/srv/claude-project/server.mjs"]),
+    )
+    == "mini"
+}
