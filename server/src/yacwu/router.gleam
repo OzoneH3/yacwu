@@ -560,6 +560,19 @@ fn dispatch(
       use _, cx <- with_codex(ctx, req, Some(id))
       read_thread(cx, req, id)
     }
+    ["api", "threads", id, "history"], Get -> {
+      use _, cx <- with_codex(ctx, req, Some(id))
+      case
+        thread_history.page(
+          fn(method, params) { codex.request(cx, method, params) },
+          id,
+          query_value(req, "cursor"),
+        )
+      {
+        Ok(data) -> json_response(200, data)
+        Error(message) -> json_response(502, error_body(message))
+      }
+    }
     ["api", "threads", id, "runtime"], Get -> {
       use _, cx <- with_codex(ctx, req, Some(id))
       case
@@ -2010,14 +2023,27 @@ fn read_thread(
   req: Request(Connection),
   thread_id: String,
 ) -> Response(ResponseData) {
-  rpc(
-    cx,
-    "thread/read",
-    json.object([
-      #("threadId", json.string(thread_id)),
-      #("includeTurns", json.bool(query_value(req, "turns") == "1")),
-    ]),
-  )
+  case query_value(req, "turns") {
+    "recent" ->
+      case
+        thread_history.recent(
+          fn(method, params) { codex.request(cx, method, params) },
+          thread_id,
+        )
+      {
+        Ok(data) -> json_response(200, jsonx.to_json(data))
+        Error(message) -> json_response(502, error_body(message))
+      }
+    _ ->
+      rpc(
+        cx,
+        "thread/read",
+        json.object([
+          #("threadId", json.string(thread_id)),
+          #("includeTurns", json.bool(query_value(req, "turns") == "1")),
+        ]),
+      )
+  }
 }
 
 /// Set a user-facing name for a persisted thread.
@@ -2475,11 +2501,12 @@ fn open_thread(
   // thread/read returns the rollout path + history WITHOUT loading the
   // thread. A brand-new thread isn't materialized until its first user
   // message, so thread/read can fail — treat that as "no history yet".
+  let reader = case jsonx.field_bool(body, ["recent"]), host {
+    Ok(True), "local" -> thread_history.recent
+    _, _ -> thread_history.read
+  }
   let read =
-    thread_history.read(
-      fn(method, params) { codex.request(cx, method, params) },
-      thread_id,
-    )
+    reader(fn(method, params) { codex.request(cx, method, params) }, thread_id)
   let rollout_path = case read {
     Ok(read) ->
       jsonx.field_string(read, ["thread", "path"]) |> result.unwrap("")

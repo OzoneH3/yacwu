@@ -116,3 +116,82 @@ pub fn resume_without_history(
     json.object([#("excludeTurns", json.bool(True)), ..params]),
   )
 }
+
+/// Read a bounded newest-first page and present it in transcript order.
+pub fn page(
+  request: Request,
+  thread: String,
+  cursor: String,
+) -> Result(Json, String) {
+  let params = [
+    #("threadId", json.string(thread)),
+    #("limit", json.int(3)),
+    #("sortDirection", json.string("desc")),
+    #("itemsView", json.string("full")),
+  ]
+  let params = case cursor {
+    "" -> params
+    _ -> [#("cursor", json.string(cursor)), ..params]
+  }
+  use response <- result.try(request("thread/turns/list", json.object(params)))
+  use turns <- result.try(
+    decode.run(response, decode.at(["data"], decode.list(decode.dynamic)))
+    |> result.replace_error("Invalid history page"),
+  )
+  // Older adapters may ignore pagination. Use the full-history fallback.
+  case list.length(turns) > 3 {
+    True -> Error("Backend does not support bounded history pages")
+    False ->
+      Ok(
+        json.object([
+          #("turns", json.array(list.reverse(turns), jsonx.to_json)),
+          #(
+            "cursor",
+            jsonx.field(response, ["nextCursor"])
+              |> result.map(jsonx.to_json)
+              |> result.unwrap(json.null()),
+          ),
+        ]),
+      )
+  }
+}
+
+pub fn recent(request: Request, thread: String) -> Result(Dynamic, String) {
+  let recent = fn() {
+    use metadata <- result.try(request(
+      "thread/read",
+      json.object([
+        #("threadId", json.string(thread)),
+        #("includeTurns", json.bool(False)),
+      ]),
+    ))
+    use history <- result.try(page(request, thread, ""))
+    use history <- result.try(
+      json.parse(json.to_string(history), decode.dynamic)
+      |> result.replace_error("Invalid history page"),
+    )
+    use thread_data <- result.try(
+      jsonx.field(metadata, ["thread"])
+      |> result.replace_error("Missing thread metadata"),
+    )
+    let turns =
+      jsonx.field(history, ["turns"])
+      |> result.map(jsonx.to_json)
+      |> result.unwrap(json.array([], json.string))
+    let cursor =
+      jsonx.field(history, ["cursor"])
+      |> result.map(jsonx.to_json)
+      |> result.unwrap(json.null())
+    jsonx.object_with(metadata, [
+      #("thread", jsonx.object_with(thread_data, [#("turns", turns)])),
+      #("historyCursor", cursor),
+    ])
+    |> json.to_string
+    |> json.parse(decode.dynamic)
+    |> result.replace_error("Invalid thread metadata")
+  }
+  case recent() {
+    Ok(data) -> Ok(data)
+    Error(_) -> read(request, thread)
+  }
+}

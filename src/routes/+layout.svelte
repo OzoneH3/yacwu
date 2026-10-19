@@ -1193,7 +1193,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (sessionHistoryLoaded[id] || sessionOpening[id] || id === activeId) return;
 		try {
 			const url = new URL(threadApi(id), window.location.origin);
-			url.searchParams.set('turns', '1');
+			url.searchParams.set('turns', sessionHost(id) === LOCAL_HOST ? 'recent' : '1');
 			const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
 			if (!res.ok) return;
 			const thread: { status?: { type: string }; turns?: Turn[] } | undefined = (await res.json()).thread;
@@ -1396,6 +1396,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		delete threads[id];
 		// Its history went with it: a restored session must load it again.
 		delete sessionHistoryLoaded[id];
+		delete historyCursors[id];
+		delete historyPageErrors[id];
 		delete sessionOpening[id];
 		delete sessionConfigs[id];
 		delete sessionModels[id];
@@ -2747,6 +2749,43 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	let historyCursors = $state<Record<string, string | null>>({});
+	let historyPageLoading = $state<Record<string, boolean>>({});
+	let historyPageErrors = $state<Record<string, string>>({});
+	async function loadEarlierHistory(id: string) {
+		const cursor = historyCursors[id];
+		if (!cursor || historyPageLoading[id]) return;
+		historyPageLoading[id] = true;
+		delete historyPageErrors[id];
+		try {
+			const url = new URL(threadApi(id, '/history'), window.location.origin);
+			url.searchParams.set('cursor', cursor);
+			const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.error ?? 'Could not load earlier messages');
+			if (historyCursors[id] !== cursor) return;
+			if (!Array.isArray(data.turns) || data.cursor === cursor) throw new Error('Invalid history page; try again');
+			const savedAgents = Object.fromEntries(Object.entries(agents).map(([key, agent]) => [key, { ...agent }]));
+			const savedOrders = { ...latestWorkOrderBySession };
+			const thread = ensureThread(id);
+			const previousOrder = thread.order.slice();
+			const known = new Set(previousOrder);
+			const added: string[] = [];
+			replayHistory(data.turns ?? [], (item, turn) => {
+				if (known.has(item.id)) return; // Keep newer live updates and overlapping page items.
+				known.add(item.id);
+				added.push(item.id);
+				upsertItem(id, item.type === 'localNote' ? { ...item, resumeAvailable: false } : item, false, turn.id, turn.status !== 'inProgress');
+			});
+			Object.assign(agents, savedAgents);
+			Object.assign(latestWorkOrderBySession, savedOrders);
+			thread.order = [...added, ...previousOrder];
+			historyCursors[id] = typeof data.cursor === 'string' && data.cursor !== cursor ? data.cursor : null;
+		} catch (error) {
+			historyPageErrors[id] = error instanceof Error ? error.message : 'Could not load earlier messages';
+		} finally { delete historyPageLoading[id]; }
+	}
+
 	async function openSession(id: string, force: boolean) {
 		if (sessionHistoryLoaded[id] || sessionOpening[id]) return;
 		sessionOpening[id] = true;
@@ -2755,7 +2794,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			const res = await fetch(threadApi(id, '/open'), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ force })
+				body: JSON.stringify({ force, recent: true })
 			});
 			const data = await res.json();
 			if (res.status === 409 && data.conflict) {
@@ -2764,6 +2803,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 			if (!res.ok) throw new Error(data.error ?? `Could not load session history (${res.status})`);
 			conflict = null;
+			historyCursors[id] = typeof data.historyCursor === 'string' ? data.historyCursor : null;
 			const thr = data.thread;
 			if (thr?.cwd) cwds[id] = thr.cwd;
 			if ('serviceTier' in data) setFastSession(id, data.serviceTier === 'priority');
@@ -6765,6 +6805,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								</p>
 							</div>
 						{/if}
+					{/if}
+					{#if !viewedAgentId && viewedId && historyCursors[viewedId]}
+						<div class="sys">
+							<button class="mini ghost" type="button" disabled={historyPageLoading[viewedId]} onclick={() => viewedId && loadEarlierHistory(viewedId)}>{historyPageLoading[viewedId] ? 'Loading earlier messages…' : 'Load earlier messages'}</button>
+							{#if historyPageErrors[viewedId]}<span role="alert">{historyPageErrors[viewedId]}</span>{/if}
+						</div>
 					{/if}
 					<div class="transcript-spacer" style={`height: ${virtualTranscript.before}px`}></div>
 					{#each virtualTranscript.items as item (item.id)}

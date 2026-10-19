@@ -110,3 +110,64 @@ pub fn open_resume_omits_duplicate_history_and_preserves_settings_test() {
   ])
   |> should.equal(Ok(reply))
 }
+
+pub fn recent_history_reads_only_metadata_and_a_bounded_page_test() {
+  let request = fn(method, params) {
+    let params = value(json.to_string(params))
+    case method {
+      "thread/read" -> {
+        jsonx.field_bool(params, ["includeTurns"]) |> should.equal(Ok(False))
+        Ok(value(
+          "{\"thread\":{\"id\":\"large\",\"path\":\"/rollout\",\"cwd\":\"/project\"}}",
+        ))
+      }
+      _ -> {
+        method |> should.equal("thread/turns/list")
+        jsonx.field_int(params, ["limit"]) |> should.equal(Ok(3))
+        jsonx.field_string(params, ["sortDirection"])
+        |> should.equal(Ok("desc"))
+        jsonx.field_string(params, ["itemsView"]) |> should.equal(Ok("full"))
+        Ok(value(
+          "{\"data\":[{\"id\":\"newer\",\"items\":[]},{\"id\":\"older\",\"items\":[]}],\"nextCursor\":\"next-page\"}",
+        ))
+      }
+    }
+  }
+  let assert Ok(data) = thread_history.recent(request, "large")
+  jsonx.field_string(data, ["historyCursor"]) |> should.equal(Ok("next-page"))
+  jsonx.field_string(data, ["thread", "cwd"]) |> should.equal(Ok("/project"))
+  let text = json.to_string(jsonx.to_json(data))
+  string.contains(text, "older") |> should.be_true
+}
+
+pub fn history_page_preserves_cursor_and_chronological_order_test() {
+  let assert Ok(data) =
+    thread_history.page(
+      fn(_, params) {
+        jsonx.field_string(value(json.to_string(params)), ["cursor"])
+        |> should.equal(Ok("opaque cursor"))
+        Ok(value(
+          "{\"data\":[{\"id\":\"b\"},{\"id\":\"a\"}],\"nextCursor\":null}",
+        ))
+      },
+      "t",
+      "opaque cursor",
+    )
+  json.to_string(data)
+  |> should.equal("{\"turns\":[{\"id\":\"a\"},{\"id\":\"b\"}],\"cursor\":null}")
+}
+
+pub fn unavailable_pagination_falls_back_to_full_history_test() {
+  let full = value("{\"thread\":{\"id\":\"t\",\"turns\":[]}}")
+  let request = fn(method, params) {
+    case
+      method,
+      jsonx.field_bool(value(json.to_string(params)), ["includeTurns"])
+    {
+      "thread/read", Ok(True) -> Ok(full)
+      "thread/read", _ -> Ok(value("{\"thread\":{\"id\":\"t\"}}"))
+      _, _ -> Error("unsupported method")
+    }
+  }
+  thread_history.recent(request, "t") |> should.equal(Ok(full))
+}
