@@ -60,6 +60,8 @@ export const SLASH_HELP = COMMANDS.map(([cmd, desc]) => `${cmd.padEnd(25)}${desc
 export interface SlashCommandInfo {
 	/** Command token including the leading slash, e.g. "/model". */
 	name: string;
+	/** Full command to insert when it differs from the command token. */
+	completion?: string;
 	/** Argument summary, e.g. "<model> [effort]", or null for none. */
 	args: string | null;
 	description: string;
@@ -88,12 +90,20 @@ export const SLASH_COMMANDS: ReadonlyArray<SlashCommandInfo> = (() => {
  * presentation order; otherwise case-insensitive exact matches rank ahead of
  * prefix matches.
  */
-export function filterSlashCommands(fragment: string): SlashCommandInfo[] {
+export function filterSlashCommands(
+	fragment: string,
+	fileAccess?: 'read-only' | 'read-write'
+): SlashCommandInfo[] {
+	const commands = fileAccess === 'read-only'
+		? SLASH_COMMANDS.map((cmd) => cmd.name === '/mode'
+			? { ...cmd, args: 'rw', completion: '/mode rw', description: 'set read-write file access' }
+			: cmd)
+		: SLASH_COMMANDS;
 	const filter = fragment.trim().toLowerCase();
-	if (!filter) return [...SLASH_COMMANDS];
+	if (!filter) return [...commands];
 	const exact: SlashCommandInfo[] = [];
 	const prefix: SlashCommandInfo[] = [];
-	for (const cmd of SLASH_COMMANDS) {
+	for (const cmd of commands) {
 		const name = cmd.name.slice(1).toLowerCase();
 		if (name === filter) exact.push(cmd);
 		else if (name.startsWith(filter)) prefix.push(cmd);

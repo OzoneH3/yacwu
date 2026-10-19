@@ -89,3 +89,12 @@ test('filterSlashCommands lists all for an empty fragment and prefix-matches oth
 	expect(filterSlashCommands('FAST').map((c) => c.name)).toEqual(['/fast']);
 	expect(filterSlashCommands('zzz')).toEqual([]);
 });
+
+test('read-only mode completion offers read-write access', async () => {
+	const { filterSlashCommands } = await import('../../src/lib/slash');
+	const mode = filterSlashCommands('mode', 'read-only').find((cmd) => cmd.name === '/mode');
+	expect(mode?.args).toBe('rw');
+	expect(mode?.completion).toBe('/mode rw');
+	expect(mode?.description).toBe('set read-write file access');
+	expect(filterSlashCommands('mode', 'read-write').find((cmd) => cmd.name === '/mode')?.completion).toBeUndefined();
+});

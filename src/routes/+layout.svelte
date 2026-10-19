@@ -827,7 +827,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const slashToken = $derived(/^\/\S*$/.test(input) ? input : null);
 	const slashMatches = $derived(
 		slashToken !== null && slashToken !== slashDismissedToken
-			? filterSlashCommands(slashToken.slice(1))
+			? filterSlashCommands(slashToken.slice(1), activeId ? fileAccessBySession[activeId]?.mode : undefined)
 			: []
 	);
 	const slashPopupVisible = $derived(slashMatches.length > 0);
@@ -4430,7 +4430,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		slashDismissedToken = null;
 		// Tab completion leaves a trailing space when the command takes
 		// arguments, so typing continues naturally.
-		input = submit ? cmd.name : cmd.name + (cmd.args ? ' ' : '');
+		input = cmd.completion ?? (submit ? cmd.name : cmd.name + (cmd.args ? ' ' : ''));
 		if (submit) {
 			void send();
 			return;
