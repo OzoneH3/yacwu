@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { observeWhileVisible } from './polling';
 	import { hostQuery } from './protocol';
 	interface Choice { id: string; displayName: string; efforts: string[] }
 	interface StageChoice { model: string; effort: string; targetPercent?: number }
@@ -17,6 +17,9 @@
 	const eligibleStages = $derived(eligibleModels.flatMap((choice) => choice.efforts.map((level) => ({ key: `${choice.id}::${level}`, model: choice.id, effort: level }))));
 	const batchStages = $derived((selectedBatchStages ?? eligibleStages.filter((stage) => ['low', 'medium'].includes(stage.effort)).slice(0, 6).map((stage) => stage.key)).flatMap((key) => { const stage = eligibleStages.find((item) => item.key === key); return stage ? [stage] : []; }));
 	const batchTarget = $derived(batchStages.length ? (economical ? batchStages.length + 1 : batchStages.length * 2) : 0);
+	let expanded = $state(false);
+	let lastPoll = 0;
+	let polledHost = '';
 	let status = $state<Status>({ status: 'idle' });
 	let error = $state('');
 	let pending = $state(false);
@@ -32,7 +35,9 @@
 		if (efforts.length && !efforts.includes(effort)) effort = selectedEffort && efforts.includes(selectedEffort) ? selectedEffort : efforts[0];
 	});
 	async function poll() {
-		if (pollPending) return;
+		const interval = running ? 3000 : expanded ? 30000 : 60000;
+		if (pollPending || (polledHost === host && Date.now() - lastPoll < interval)) return;
+		lastPoll = Date.now(); polledHost = host;
 		pollPending = true;
 		const requestedHost = host;
 		const version = requestVersion;
@@ -65,10 +70,16 @@
 		} catch (e) { error = e instanceof Error ? e.message : String(e); }
 		finally { pending = false; }
 	}
-	onMount(() => { void poll(); const timer = setInterval(() => { clock = Date.now() / 1000; void poll(); }, 3000); return () => clearInterval(timer); });
+	$effect(() => {
+		const currentHost = host;
+		const interval = running ? 3000 : expanded ? 30000 : 60000;
+		return observeWhileVisible(() => {
+			void currentHost; clock = Date.now() / 1000; return poll();
+		}, interval);
+	});
 </script>
 
-<details>
+<details bind:open={expanded}>
 	<summary>Manual calibration benchmark</summary>
 	<p>Measures allowance use with text workloads in dedicated sessions. Only one benchmark can run across all hosts. Pause other work on the same account first.</p>
 	<form onsubmit={(event) => { event.preventDefault(); void submit(); }}>

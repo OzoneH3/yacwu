@@ -86,3 +86,27 @@ test('a compact stopped status hydrates missed final output once', async ({ page
  expect(historyReads).toBe(reads);
  expect(reads).toBe(1);
 });
+
+test('two browser tabs share runtime checks and a remaining tab keeps checking', async ({ context }) => {
+ const id = 'shared-running-task'; let runtimeReads = 0;
+ const thread = { id, host: 'local', name: 'Shared running task', cwd: '/workspace', status: { type: 'active' }, turns: [{ id: 'turn', status: 'inProgress', items: [] }] };
+ await context.addInitScript(id => localStorage.setItem('yacwu-running-tasks', JSON.stringify({ [id]: id })), id);
+ await context.route('**/api/**', async route => {
+  const path = new URL(route.request().url()).pathname;
+  let data: object = {};
+  if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+  if (path === '/api/threads') data = { data: [thread] };
+  else if (path === '/api/threads/loaded') data = { data: [] };
+  else if (path.startsWith(`/api/threads/${id}`)) { if (path.endsWith('/runtime')) runtimeReads++; data = { thread }; }
+  await route.fulfill({ json: data });
+ });
+ const first = await context.newPage(); await first.goto(`/s/${id}`);
+ await expect(first.getByRole('button', { name: 'Stop current turn', exact: true })).toBeVisible();
+ await expect.poll(() => runtimeReads).toBe(1);
+ const second = await context.newPage(); await second.clock.install(); await second.goto(`/s/${id}`);
+ await expect(second.getByRole('button', { name: 'Stop current turn', exact: true })).toBeVisible();
+ // The second tab has reconciled its own UI from the shared snapshot.
+ await second.waitForTimeout(250); expect(runtimeReads).toBe(1);
+ await first.close(); await second.clock.fastForward(16000);
+ await expect.poll(() => runtimeReads).toBe(2);
+});

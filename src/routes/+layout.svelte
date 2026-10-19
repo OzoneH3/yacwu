@@ -4,6 +4,8 @@
 	import '@fontsource-variable/inter';
 	import '@fontsource-variable/jetbrains-mono';
 	import { onMount, tick, untrack } from 'svelte';
+	import { createSharedRuntime } from '$lib/shared-runtime';
+	import { createRefreshThrottle } from '$lib/refresh-throttle';
 	import McpToolActivity from '$lib/McpToolActivity.svelte';
 	import { mcpActivityLabel } from '$lib/mcp-activity';
 	import { compactActivity, compactActivityLabel } from '$lib/compact-activity';
@@ -752,7 +754,11 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		return result;
 	});
 
-	async function refreshTaskUsage(host: string) {
+	const usageThrottle = createRefreshThrottle(5000);
+	function refreshTaskUsage(host: string) {
+		return usageThrottle.request(host, () => refreshTaskUsageNow(host));
+	}
+	async function refreshTaskUsageNow(host: string) {
 		if (document.visibilityState !== 'visible' || usageLoading.has(host)) return;
 		usageLoading.add(host);
 		try {
@@ -1595,6 +1601,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	let sharedRuntime: ReturnType<typeof createSharedRuntime> | null = null;
+	function runtimeUrl(id: string) { return new URL(threadApi(id, '/runtime'), window.location.origin).href; }
 	let reconcilingRuntime = false;
 	async function reconcileInterruptedSessions() {
 		if (reconcilingRuntime) return;
@@ -1629,10 +1637,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			await forEachConcurrent(Object.entries(previouslyRunning), 4, async ([threadId, sessionId]) => {
 				const observedTurnId = threads[threadId]?.turnId;
 				try {
-					const url = new URL(threadApi(threadId, '/runtime'), window.location.origin);
-					const read = await fetch(url, { signal: AbortSignal.timeout(5000) });
-					if (!read.ok) return;
-					const data = await read.json();
+					const data = await sharedRuntime!.load(runtimeUrl(threadId));
 					if (!data.thread) return;
 					let thread: { status?: { type: string }; turns?: Turn[] } = data.thread;
 					const outcome = runtimeOutcome(thread);
@@ -1925,6 +1930,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 			case 'turn/started': {
+				if (tid) sharedRuntime?.invalidate(runtimeUrl(tid));
 				if (tid) {
 					scheduleTaskUsageRefresh(tid);
 					if (!turnModels[tid] && sessionConfigs[tid]?.model) {
@@ -1948,6 +1954,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 			case 'turn/completed': {
+				if (tid) sharedRuntime?.invalidate(runtimeUrl(tid));
 				if (tid) scheduleTaskUsageRefresh(tid);
 				if (tid) noteLiveActivity(tid);
 				// A session (not an agent) finished. A question or error sound
@@ -5637,6 +5644,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		updateMobileViewport();
 		mobileQuery.addEventListener('change', updateMobileViewport);
 
+		let runtimeStorage: Storage | null = null;
+		try { runtimeStorage = localStorage; } catch { /* recovery still works without storage */ }
+		sharedRuntime = createSharedRuntime(fetch, runtimeStorage, navigator.locks);
 		void reconcileInterruptedSessions().finally(() => (startupRecoveryComplete = true));
 		try { sessionRules = readSessionRules(localStorage.getItem(SESSION_RULES_KEY)); } catch { /* Defaults if storage is disabled. */ }
 		try {
@@ -5725,6 +5735,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			stopAccountUsagePolling();
 			stopResetFeedPolling();
 			clearInterval(runtimeCheckTimer);
+			usageThrottle.dispose();
 			for (const timer of usageRefreshTimers.values()) clearTimeout(timer);
 			usageRefreshTimers.clear();
 			if (archiveNoticeTimer) clearTimeout(archiveNoticeTimer);

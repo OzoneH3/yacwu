@@ -990,15 +990,19 @@ fn delete_archived_thread(
 /// always JSON objects, so a bare "ping" cannot collide.
 const ping = "ping"
 
-/// Like ping: a bare word, so it cannot collide with a JSON notification.
-const build_check = "build-check"
+@external(erlang, "yacwu_build_watch", "subscribe")
+fn watch_build(
+  owner: process.Pid,
+  path: String,
+  notify: fn(String) -> Nil,
+) -> Nil
 
-const build_check_ms = 2000
-
-/// The deployed web UI's version file; "" while missing (mid-build).
-fn build_version(ctx: Context) -> String {
-  simplifile.read(filepath.join(ctx.static_dir, "_app/version.json"))
-  |> result.unwrap("")
+fn subscribe_build(ctx: Context, subject: process.Subject(String)) -> Nil {
+  watch_build(
+    process.self(),
+    filepath.join(ctx.static_dir, "_app/version.json"),
+    fn(message) { process.send(subject, message) },
+  )
 }
 
 /// Server-Sent Events stream of every codex notification (all sessions).
@@ -1013,11 +1017,11 @@ fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
       hosts.subscribe_all(ctx.registry, process.self(), subject)
       relay.subscribe(ctx.relay, process.self(), subject)
       let _ = process.send_after(subject, 15_000, ping)
-      let _ = process.send_after(subject, build_check_ms, build_check)
-      #(subject, build_version(ctx))
+      subscribe_build(ctx, subject)
+      subject
     },
     fn(state, message, conn) {
-      let #(subject, version) = state
+      let subject = state
       case message {
         m if m == ping -> {
           let event =
@@ -1029,29 +1033,11 @@ fn sse(ctx: Context, req: Request(Connection)) -> Response(ResponseData) {
               // host registry restarted since the last tick.
               hosts.subscribe_all(ctx.registry, process.self(), subject)
               relay.subscribe(ctx.relay, process.self(), subject)
+              subscribe_build(ctx, subject)
               let _ = process.send_after(subject, 15_000, ping)
               actor.continue(state)
             }
             Error(_) -> actor.stop()
-          }
-        }
-        m if m == build_check -> {
-          let _ = process.send_after(subject, build_check_ms, build_check)
-          case build_version(ctx) {
-            current if current == "" || current == version ->
-              actor.continue(state)
-            current ->
-              case
-                mist.send_event(
-                  conn,
-                  mist.event(string_tree.from_string(
-                    "{\"method\":\"yacwu/buildUpdated\",\"params\":{}}",
-                  )),
-                )
-              {
-                Ok(_) -> actor.continue(#(subject, current))
-                Error(_) -> actor.stop()
-              }
           }
         }
         notification ->

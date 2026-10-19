@@ -77,6 +77,9 @@ rules locally, and records usage/diagnostic journals on the server.
   capability/efficiency indicators in the picker
   (see [rating methodology](docs/model-ratings.md))
   — restart running work on changed settings while preserving queued todos
+- Background checks share runtime reads across tabs and build checks across
+  connections; usage refreshes coalesce and idle calibration polling backs off
+  and pauses in hidden tabs
 - 💸 Learned allowance cost per model and thinking level, projected task cost
   while work runs, and a task usage history with manual benchmarks
 - 💬 Interactive answers: questions and action requests dock below the
