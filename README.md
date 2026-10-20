@@ -714,6 +714,10 @@ still block new work.
 Repeated forced checks after a failed read are throttled to one attempt every
 two minutes; endpoint rate limits take precedence.
 
+Configured Codex and Copilot account limits retain the last verified usage
+reading through refresh errors for up to five minutes from that reading. Missing
+or older readings still block work; a refresh error never extends this deadline.
+
 Logs live in `$XDG_STATE_HOME/yacwu/diagnostics` (default
 `~/.local/state/yacwu/diagnostics`). Set `YACWU_DIAGNOSTICS_DIR` to override it.
 Each host has a `codex-*.jsonl` metadata log and a `codex-*.stderr.log` log.

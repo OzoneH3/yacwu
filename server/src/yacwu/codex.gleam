@@ -1924,7 +1924,14 @@ fn on_response(
                 account_cache: case reply {
                   Ok(_) ->
                     dict.insert(state.account_cache, method, #(at, reply))
-                  Error(_) -> dict.delete(state.account_cache, method)
+                  Error(_) ->
+                    case method {
+                      // A refresh failure is not a new usage reading. Keep the
+                      // verified sample and its original timestamp; account
+                      // limits still reject it after their freshness deadline.
+                      "account/rateLimits/read" -> state.account_cache
+                      _ -> dict.delete(state.account_cache, method)
+                    }
                 },
                 account_waiters: dict.delete(state.account_waiters, method),
               )

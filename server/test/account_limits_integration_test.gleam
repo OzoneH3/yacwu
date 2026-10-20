@@ -45,6 +45,8 @@ fn check_provider(provider, fixture) {
       json.object([#("threadId", json.string(thread))]),
     )
   }
+  // A failed refresh must not erase the still-recent verified sample.
+  fail_quota_refresh(name)
   start("one") |> should.be_ok
   start("two") |> should.be_ok
   let assert Ok(_) = codex.request(name, "test/exhaust", json.object([]))
@@ -54,6 +56,7 @@ fn check_provider(provider, fixture) {
   let assert Ok(interrupted) =
     decode.run(stats, decode.at(["interrupted"], decode.list(decode.string)))
   interrupted |> list.sort(string.compare) |> should.equal(["one", "two"])
+  fail_quota_refresh(name)
   start("three") |> should.be_error
   codex.request(
     name,
@@ -64,4 +67,17 @@ fn check_provider(provider, fixture) {
   let assert Ok(stats) = codex.request(name, "test/stats", json.object([]))
   jsonx.field_int(stats, ["starts"]) |> should.equal(Ok(2))
   jsonx.field_int(stats, ["steers"]) |> should.equal(Ok(0))
+}
+
+fn fail_quota_refresh(name) {
+  let assert Ok(_) = codex.request(name, "test/fail-usage", json.object([]))
+  // Tracked requests go to the backend even while the read cache is fresh.
+  let codex.TrackedReply(_, reply) =
+    codex.request_tracked(
+      name,
+      "account/rateLimits/read",
+      json.object([]),
+      5000,
+    )
+  reply |> should.be_error
 }

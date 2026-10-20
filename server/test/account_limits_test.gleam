@@ -70,3 +70,15 @@ pub fn account_usage_thresholds_test() {
   )
   |> should.not_equal(None)
 }
+
+pub fn preserved_quota_still_expires_and_blocks_at_reserve_test() {
+  let limits = account_limits.Limits(5, 0)
+  let below = data("{\"rateLimits\":{\"primary\":{\"usedPercent\":7}}}")
+  account_limits.reason(limits, "codex", below, 1000, 1300)
+  |> should.equal(None)
+  account_limits.reason(limits, "codex", below, 1000, 1301)
+  |> should.not_equal(None)
+  let reached = data("{\"rateLimits\":{\"primary\":{\"usedPercent\":95}}}")
+  account_limits.reason(limits, "codex", reached, 1000, 1000)
+  |> should.not_equal(None)
+}
