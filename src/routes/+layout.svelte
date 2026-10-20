@@ -1402,7 +1402,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			delete interruptedSessions[id];
 			persistInterruptedSessions();
 		}
-		if (finishedSessions[id]) clearFinishedSession(id);
 		const relatedAttentionIds = [id, ...sessionAgents(id).map((agent) => agent.id)];
 		const remainingAttention = { ...dismissedAttentionByThread };
 		for (const threadId of relatedAttentionIds) delete remainingAttention[threadId];
@@ -5620,6 +5619,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const unlockSounds = () => { if (settings.sounds) soundPlayer.unlock(); };
 		window.addEventListener('pointerdown', unlockSounds);
 		window.addEventListener('keydown', unlockSounds);
+		// Clear all finished session indicators on any click.
+		document.addEventListener('click', () => {
+			finishedSessions = {};
+			localStorage.setItem(FINISHED_SESSIONS_KEY, JSON.stringify(finishedSessions));
+		});
 		// Besides SvelteKit's own polling, look for a new build when the tab comes back.
 		const checkOnVisible = () => { if (document.visibilityState === 'visible') checkForNewBuild(); };
 		document.addEventListener('visibilitychange', checkOnVisible);
