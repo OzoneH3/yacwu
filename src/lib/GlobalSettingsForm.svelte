@@ -85,7 +85,7 @@
 				<option value="read-write">Read/write</option><option value="read-only">Read-only</option>
 			</select>
 		</label>
-		<p class="description">Applies to new sessions. Choose access during creation or in Session details. Read-only access is available for Codex and updated Claude backends.</p>
+		<p class="description">Applies to new sessions. Choose access during creation or in Session details. Read-only access is available for Codex{claudeEnabled ? ' and updated Claude backends' : ''}.</p>
 		<p class="description note">For sessions without their own saved rules. Session details can still override them per session.</p>
 		<label class="check"><input type="checkbox" checked={settings.defaultProgressReporting} onchange={(e) => set('defaultProgressReporting', e.currentTarget.checked)} /> Default: progress reporting</label>
 		<label class="check"><input type="checkbox" checked={settings.defaultSharedCoordination} onchange={(e) => set('defaultSharedCoordination', e.currentTarget.checked)} /> Default: shared background coordination</label>
