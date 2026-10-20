@@ -40,3 +40,9 @@ test('todo entries number every task as /todo does and mark finished and running
 	// Every queued position is one /todo rm accepts.
 	for (const entry of todoEntries(queue, true)) expect('error' in removePendingTodo(queue, entry.position)).toBe(entry.state !== 'queued');
 });
+
+test('removing a queued task removes only its attachments', () => {
+	const queue = { tasks: ['first', 'second', 'third'], startedCount: 0, initialTask: null, attachments: [['a'], ['b'], ['c']] };
+	const result = removePendingTodo(queue, 2);
+	expect(result).toEqual({ queue: { ...queue, tasks: ['first', 'third'], attachments: [['a'], ['c']] }, removed: 'second' });
+});

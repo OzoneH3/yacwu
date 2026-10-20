@@ -61,6 +61,7 @@
 		type AgentInfo,
 		type AgentRegistry
 	} from '$lib/agents';
+	import { saveTodoAttachments, restoreTodoAttachments, validTodoAttachments, type SavedTodoAttachment } from '$lib/todo-attachments';
 	import { parseSlash, SLASH_HELP, filterSlashCommands, type SlashCommandInfo } from '$lib/slash';
 	import { ComposerHistory } from '$lib/history';
 	import FileBrowser from '$lib/FileBrowser.svelte';
@@ -163,6 +164,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 
 	interface TodoQueue {
 		tasks: string[];
+		attachments?: SavedTodoAttachment[][];
 		startedCount: number;
 		currentTask: string | null;
 		initialTask: string | null;
@@ -1544,7 +1546,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		localStorage.setItem(TODO_QUEUES_KEY, JSON.stringify(todoQueues));
 	}
 
-	function queueTodo(id: string, task: string) {
+	function queueTodo(id: string, task: string, attachments: SavedTodoAttachment[] = []) {
 		const existing = todoQueues[id] ?? {
 			tasks: [], startedCount: 0, currentTask: null,
 			initialTask: threads[id]?.status === 'running'
@@ -1552,9 +1554,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					?.content?.map((part: any) => typeof part?.text === 'string' ? visibleUserText(part.text) : '').join('').trim() || 'Current task'
 				: null
 		};
-		const queue = { ...existing, tasks: [...existing.tasks, task] };
-		todoQueues = { ...todoQueues, [id]: queue };
-		persistTodoQueues();
+		const queue: TodoQueue = {
+			...existing, tasks: [...existing.tasks, task],
+			attachments: [...(existing.attachments ?? existing.tasks.map(() => [])), attachments]
+		};
+		const updated = { ...todoQueues, [id]: queue };
+		try { localStorage.setItem(TODO_QUEUES_KEY, JSON.stringify(updated)); }
+		catch { throw new Error('Could not save this todo and its attachments: browser storage is full or unavailable. Your draft has been kept.'); }
+		todoQueues = updated;
 		addLocalNote(id, `Todo queued (${queue.tasks.length + (queue.initialTask ? 1 : 0)} total).`, 'info');
 		if (sessionHistoryLoaded[id] && threads[id]?.status !== 'running') advanceTodoQueue(id);
 	}
@@ -1587,9 +1594,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		thread.turnStartedAt = Date.now();
 		thread.turnId = null;
 		thread.error = null;
-		const echoId = addLocalUserMessage(id, task);
+		let echoId: string | null = null;
 		try {
-			const response = await sendMessageWithRetries(id, task, []);
+			const attachments = restoreTodoAttachments(queue.attachments?.[queue.startedCount - 1] ?? []);
+			echoId = addLocalUserMessage(id, task, attachments);
+			const response = await sendMessageWithRetries(id, task, attachments);
 			if (!response.ok) {
 				const data = await response.json().catch(() => ({}));
 				throw new Error(data.error ?? `failed to start todo (${response.status})`);
@@ -1597,7 +1606,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch (error) {
 			thread.status = 'idle';
 			thread.turnStartedAt = null;
-			removeLocalItem(id, echoId);
+			if (echoId) removeLocalItem(id, echoId);
 			const retryable = { ...queue, startedCount: Math.max(0, queue.startedCount - 1), currentTask: null };
 			todoQueues = { ...todoQueues, [id]: retryable };
 			persistTodoQueues();
@@ -3086,6 +3095,24 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 		// Slash commands are handled client-side and dispatched to dedicated RPCs,
 		// mirroring the Codex TUI. Everything else is a normal model turn.
+		if (/^\/todo(?:\s|$)/.test(text)) {
+			sendingMessage = true;
+			try {
+				const todoAdd = parseSlash(text).kind === 'todo-add';
+				const attachments = todoAdd ? await saveTodoAttachments(draftAttachments) : [];
+				await handleSlash(id, text, attachments);
+				if (input === draftInput) { input = ''; promptDrafts[id] = ''; }
+				if (todoAdd && selectedAttachments === draftAttachments) {
+					for (const attachment of draftAttachments) if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+					selectedAttachments = [];
+				}
+				composerHistoryOf(id).record(text);
+			} catch (error) {
+				addLocalNote(id, error instanceof Error ? error.message : 'Could not queue todo', 'err');
+			} finally { sendingMessage = false; }
+			return;
+		}
+
 		if (text.startsWith('/') && draftAttachments.length === 0) {
 			input = '';
 			promptDrafts[id] = '';
@@ -3440,7 +3467,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return { ok: res.ok, data: await res.json().catch(() => ({})) };
 	}
 
-	async function handleSlash(id: string, text: string) {
+	async function handleSlash(id: string, text: string, attachments: SavedTodoAttachment[] = []) {
 		const parsed = parseSlash(text);
 		addLocalNote(id, text);
 
@@ -3602,7 +3629,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 
 			case 'todo-add':
-				queueTodo(id, parsed.task);
+				queueTodo(id, parsed.task, attachments);
 				break;
 
 			case 'todo-remove': {
@@ -3627,7 +3654,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const queue = todoQueues[id];
 				if (!queue) addLocalNote(id, 'no queued todos');
 				else if (queue.currentTask && threads[id]?.status === 'running') {
-					todoQueues = { ...todoQueues, [id]: { ...queue, tasks: queue.tasks.slice(0, queue.startedCount) } };
+					todoQueues = { ...todoQueues, [id]: { ...queue, tasks: queue.tasks.slice(0, queue.startedCount), attachments: queue.attachments?.slice(0, queue.startedCount) } };
 					persistTodoQueues();
 					addLocalNote(id, 'cleared pending todos; current todo will finish', 'info');
 				} else {
@@ -5627,7 +5654,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const startedCount = Number(queue.startedCount);
 					if (!Number.isInteger(startedCount) || startedCount < 0 || startedCount > queue.tasks.length) return [];
 					if (queue.currentTask !== null && typeof queue.currentTask !== 'string') return [];
-					return [[id, { tasks: queue.tasks, startedCount, currentTask: queue.currentTask ?? null, initialTask: typeof queue.initialTask === 'string' ? queue.initialTask : null }]];
+					if (queue.attachments !== undefined && (!validTodoAttachments(queue.attachments) || queue.attachments.length !== queue.tasks.length)) return [];
+					return [[id, { tasks: queue.tasks, attachments: queue.attachments, startedCount, currentTask: queue.currentTask ?? null, initialTask: typeof queue.initialTask === 'string' ? queue.initialTask : null }]];
 				}));
 			}
 		} catch {

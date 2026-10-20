@@ -174,7 +174,7 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/mode r` / `/mode rw` | set read-only or read-write file access (changes apply to the next turn) |
 | `/goal <objective>` | set the thread goal (`--budget N` to add a token budget) |
 | `/goal` / `/goal clear` | show / clear the current goal |
-| `/todo <task>` | queue a follow-up task to start after the current task |
+| `/todo <task>` | queue a follow-up task with any attached files or images; saved across refreshes to start after the current task |
 | `/todo` | show queued tasks and their status |
 | `/todo clear` | clear queued tasks that have not started |
 | `/todo rm <number>` | remove a pending task by its `/todo` list number; typing `/todo rm ` lists the tasks to pick from, with started and finished ones marked (they cannot be removed) |
