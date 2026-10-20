@@ -279,6 +279,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let promptDrafts = $state<Record<string, string>>({});
 	let promptDraftSessionId = $state<string | null>(null);
 	let selectedAttachments = $state<SelectedAttachment[]>([]);
+	let attachmentDrafts = $state<Record<string, SelectedAttachment[]>>({});
+	let attachmentDraftSessionId = $state<string | null>(null);
 	let sendingMessage = $state(false);
 	let connected = $state(false);
 	let cwds = $state<Record<string, string>>({});
@@ -971,11 +973,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		untrack(() => {
 			if (promptDraftSessionId === id) {
 				if (id) promptDrafts[id] = input;
-				return;
+			} else {
+				if (promptDraftSessionId) promptDrafts[promptDraftSessionId] = input;
+				input = id ? (promptDrafts[id] ?? '') : '';
+				promptDraftSessionId = id;
 			}
-			if (promptDraftSessionId) promptDrafts[promptDraftSessionId] = input;
-			input = id ? (promptDrafts[id] ?? '') : '';
-			promptDraftSessionId = id;
+			if (attachmentDraftSessionId === id) {
+				if (id) attachmentDrafts[id] = selectedAttachments;
+			} else {
+				if (attachmentDraftSessionId) attachmentDrafts[attachmentDraftSessionId] = selectedAttachments;
+				selectedAttachments = id ? (attachmentDrafts[id] ?? []) : [];
+				attachmentDraftSessionId = id;
+			}
 		});
 	});
 
@@ -3156,6 +3165,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
 				}
 				selectedAttachments = [];
+				attachmentDrafts[id] = [];
 			}
 			composerHistoryOf(id).record(text);
 		} catch (err) {
