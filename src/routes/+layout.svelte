@@ -638,6 +638,16 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		}
 		return result;
 	});
+
+	const sessionHasPendingRelayById = $derived.by(() => {
+		const result: Record<string, boolean> = {};
+		if (relayStore.records) {
+			for (const session of sessions) {
+				result[session.id] = Object.values(relayStore.records).some(r => r.to.thread === session.id && r.state === 'queued');
+			}
+		}
+		return result;
+	});
 	// Notification sounds. Only live activity makes a sound: a question or
 	// error that appears because history loaded stays silent.
 	const soundPlayer = createSoundPlayer();
@@ -6385,6 +6395,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									aria-label={sessionAttentionById[s.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
 									title={sessionAttentionById[s.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
 								>{sessionAttentionById[s.id] === 'choice' ? '?' : '!'}</span>
+							{:else if sessionHasPendingRelayById[s.id]}
+								<span
+									class="relay-pending-indicator"
+									role="img"
+									aria-label="Pending relay messages"
+									title="Pending relay messages available"
+								>!</span>
 							{/if}
 							{#if finishedSessions[s.id] && s.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
 					{#if isSideChat(s)}⎇ {/if}<span class="session-name">{shortLabel(s)}</span>
@@ -8408,6 +8425,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	.needs-input-indicator.choice {
 		background: var(--color-warning);
 		color: var(--color-paper);
+	}
+
+	.relay-pending-indicator {
+		display: inline-grid;
+		place-items: center;
+		flex: none;
+		width: var(--space-sm);
+		height: var(--space-sm);
+		border-radius: var(--radius-pill);
+		background: var(--color-warning);
+		color: var(--color-paper);
+		font-size: var(--text-xs);
+		font-weight: 800;
+		line-height: 1;
 	}
 
 	.session-finished-indicator {
