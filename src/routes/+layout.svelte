@@ -1885,17 +1885,21 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					// Auto-claim relay messages: trigger the receiving session to claim them
 					if (record.state === 'queued' && record.to.thread) {
 						const toThread = record.to.thread;
+						console.log('[relay]', 'Triggering claim for', toThread, 'message', record.id, 'state', record.state);
 						void (async () => {
 							try {
 								// Send an empty message to trigger the receiving session to claim queued relay messages
 								// This activates auto-wake if the session's backend is disconnected
 								const host = sessionHost(toThread);
-								const response = await fetch(threadApi(toThread, '/message'), {
+								const url = threadApi(toThread, '/message');
+								console.log('[relay]', 'Claiming at', url);
+								const response = await fetch(url, {
 									method: 'POST',
 									headers: { 'content-type': 'application/json' },
 									body: JSON.stringify({ text: '', ...(host ? { host } : {}) })
 								});
-								if (!response.ok) throw new Error('claim failed');
+								console.log('[relay]', 'Claim response', response.status);
+								if (!response.ok) throw new Error('claim failed ' + response.status);
 								const data = await response.json();
 								// Update the thread with any claimed relay messages
 								if (data.thread?.turns) {
