@@ -119,6 +119,12 @@
 		</label>
 	</section>
 
+	<section aria-labelledby="settings-sessions">
+		<h3 id="settings-sessions">Sessions</h3>
+		<label class="check"><input type="checkbox" checked={settings.autoWakeSessions} onchange={(e) => set('autoWakeSessions', e.currentTarget.checked)} /> Auto-wake inactive sessions</label>
+		<p class="description">Automatically retry connections to sessions that receive messages while inactive. When off, failed connections are reported immediately.</p>
+	</section>
+
 	<div class="actions">
 		<button type="button" onclick={() => onchange({ ...defaultSettings })}>Reset to defaults</button>
 	</div>

@@ -33,6 +33,8 @@ export interface GlobalSettings {
 	sounds: boolean;
 	/** Sound volume, 0–100 (25 is the original level). */
 	soundVolume: number;
+	/** Automatically retry connections to inactive sessions receiving messages. */
+	autoWakeSessions: boolean;
 }
 
 export const GLOBAL_SETTINGS_KEY = 'yacwu-settings';
@@ -51,7 +53,8 @@ export const defaultSettings: GlobalSettings = {
 	usageRefreshSeconds: 30,
 	claudeAllowanceReserve: 10,
 	sounds: true,
-	soundVolume: 50
+	soundVolume: 50,
+	autoWakeSessions: false
 };
 
 /** Allowed ranges for numeric settings. */

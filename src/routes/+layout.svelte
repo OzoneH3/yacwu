@@ -3055,6 +3055,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			body.set('text', messageText);
 			if (turnId) body.set('turnId', turnId);
 			if (cwd) body.set('cwd', cwd);
+			body.set('autoWakeSessions', String(settings.autoWakeSessions));
 			for (const attachment of attachments) {
 				body.append(attachment.kind === 'image' ? 'images' : 'files', attachment.file, attachment.name);
 			}
@@ -3063,7 +3064,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			response = await fetch(threadApi(id, '/message'), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: messageText, ...(turnId ? { turnId } : {}), ...(cwd ? { cwd } : {}) })
+				body: JSON.stringify({ text: messageText, autoWakeSessions: settings.autoWakeSessions, ...(turnId ? { turnId } : {}), ...(cwd ? { cwd } : {}) })
 			});
 		}
 		if (response.ok && cwd) applySessionFolder(id, cwd);
