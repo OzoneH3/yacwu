@@ -7464,7 +7464,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{/each}
 						</div>
 					{/if}
-					{#if activeId}
+					{#if activeId && relayStore.records && Object.values(relayStore.records).some(r => r.to.thread === activeId && r.state === 'queued')}
 						<button
 							class="mini"
 							type="button"
