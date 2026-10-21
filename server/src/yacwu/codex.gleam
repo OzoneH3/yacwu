@@ -1590,10 +1590,7 @@ fn on_conn_result(
       // For socket-based transports with auto-wake enabled, schedule a reconnect on
       // connection failure. This ensures inactive sessions with failed connections
       // will retry when receiving new messages, rather than failing immediately.
-      let auto_wake_enabled =
-        envoy.get("YACWU_AUTO_WAKE_SESSIONS")
-        |> result.map(string.lowercase)
-        |> result.unwrap("false") == "true"
+      let auto_wake_enabled = is_auto_wake_enabled()
       case state.transport, auto_wake_enabled {
         Local(_), _ -> Nil
         _, False -> Nil
@@ -1620,11 +1617,14 @@ fn on_conn_result(
   }
 }
 
+pub fn is_auto_wake_enabled() -> Bool {
+  envoy.get("YACWU_AUTO_WAKE_SESSIONS")
+  |> result.map(string.lowercase)
+  |> result.unwrap("false") == "true"
+}
+
 fn schedule_reconnect(state: State) -> Nil {
-  let auto_wake_enabled =
-    envoy.get("YACWU_AUTO_WAKE_SESSIONS")
-    |> result.map(string.lowercase)
-    |> result.unwrap("false") == "true"
+  let auto_wake_enabled = is_auto_wake_enabled()
   let has_queued = case state.status {
     Connecting(queued) | Initializing(_, _, queued) -> !list.is_empty(queued)
     _ -> False
