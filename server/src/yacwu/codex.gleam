@@ -758,10 +758,11 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
         | NotRunning, Ssh(_)
         | NotRunning, LocalDaemon(_, _)
         ->
-          case state.resumed {
-            [] -> actor.continue(state)
-            _ -> begin_connect(state, [])
-          }
+          // Reconnect if there are resumed threads OR if a previous connection
+          // attempt failed with queued requests still waiting (they were failed
+          // but we want to retry). Since TryReconnect is only scheduled if either
+          // condition is true, we just attempt to connect.
+          begin_connect(state, [])
         _, _ -> actor.continue(state)
       }
     PortData(data) ->
@@ -1181,8 +1182,14 @@ fn session_file_access(
 fn on_request(state: State, request: Queued) -> actor.Next(State, Msg) {
   case state.status {
     NotRunning -> begin_connect(state, [request])
-    Connecting(queued) ->
-      actor.continue(State(..state, status: Connecting([request, ..queued])))
+    Connecting(queued) -> {
+      let state = State(..state, status: Connecting([request, ..queued]))
+      // Ensure we schedule a reconnect if one isn't already scheduled.
+      // Without this, a connection failure leaves queued requests hanging
+      // indefinitely for idle sessions with no resumed threads.
+      let _ = schedule_reconnect(state)
+      actor.continue(state)
+    }
     Initializing(conn, init_id, queued) ->
       actor.continue(
         State(..state, status: Initializing(conn, init_id, [request, ..queued])),
@@ -1580,7 +1587,23 @@ fn on_conn_result(
           backoff: state.backoff + 1,
         )
       let state = broadcast_status(state, "disconnected", message)
-      schedule_reconnect(state)
+      // For socket-based transports, always schedule a reconnect on connection
+      // failure. This ensures inactive sessions with failed connections will
+      // retry when receiving new messages, rather than failing immediately.
+      case state.transport {
+        Local(_) -> Nil
+        _ -> {
+          let delay =
+            int.min(30_000, 1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)))
+          let _ =
+            process.send_after(
+              process.named_subject(state.self),
+              delay,
+              TryReconnect,
+            )
+          Nil
+        }
+      }
       actor.continue(state)
     }
     // A stray result after the connection already moved on: close it.
@@ -1593,9 +1616,13 @@ fn on_conn_result(
 }
 
 fn schedule_reconnect(state: State) -> Nil {
-  case state.transport, state.resumed {
-    Local(_), _ | _, [] -> Nil
-    _, _ -> {
+  let has_queued = case state.status {
+    Connecting(queued) | Initializing(_, _, queued) -> !list.is_empty(queued)
+    _ -> False
+  }
+  case state.transport, state.resumed, has_queued {
+    Local(_), _, _ | _, [], False -> Nil
+    _, _, _ -> {
       // First retry after 1s, doubling to a 30s ceiling.
       let delay =
         int.min(30_000, 1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)))
