@@ -97,7 +97,8 @@ export function readSettings(raw: string | null): GlobalSettings {
 		usageRefreshSeconds: key(parsed, 'usageRefreshSeconds'),
 		claudeAllowanceReserve: key(parsed, 'claudeAllowanceReserve'),
 		sounds: flag('sounds'),
-		soundVolume: key(parsed, 'soundVolume')
+		soundVolume: key(parsed, 'soundVolume'),
+		autoWakeSessions: flag('autoWakeSessions')
 	};
 }
 
