@@ -1882,57 +1882,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (record?.id && typeof p.epoch === 'string') {
 					relayStore = applyRelayEvent(relayStore, p.epoch, record, ++relaySeq);
 					noteRelayRecord(relayStore.records[record.id] ?? record);
-					// Auto-claim relay messages: trigger the receiving session to claim them
-					if (record.state === 'queued' && record.to.thread) {
-						const toThread = record.to.thread;
-						console.log('[relay]', 'Triggering claim for', toThread, 'message', record.id, 'state', record.state);
-						void (async () => {
-							try {
-								// Send an empty message to trigger the receiving session to claim queued relay messages
-								// This activates auto-wake if the session's backend is disconnected
-								const host = sessionHost(toThread);
-								const url = threadApi(toThread, '/message');
-								console.log('[relay]', 'Claiming at', url);
-								const response = await fetch(url, {
-									method: 'POST',
-									headers: { 'content-type': 'application/json' },
-									body: JSON.stringify({ text: '', ...(host ? { host } : {}) })
-								});
-								console.log('[relay]', 'Claim response', response.status);
-								if (!response.ok) throw new Error('claim failed ' + response.status);
-								const data = await response.json();
-								// Update the thread with any claimed relay messages
-								if (data.thread?.turns) {
-									ensureThread(toThread);
-									for (const turn of data.thread.turns) {
-										if (turn.items) {
-											for (const item of turn.items) {
-												upsertItem(toThread, item, false, turn.id);
-											}
-										}
-									}
-								}
-							} catch {
-								// If claim fails (session disconnected), at least try to fetch and display the message
-								try {
-									const res = await fetch(`/api/relay/message/${record.id}`);
-									if (res.ok) {
-										const data = await res.json();
-										const msg = data.message as any;
-										if (msg?.body && threads[toThread]) {
-											upsertItem(toThread, {
-												type: 'userMessage',
-												id: `relayed-${record.id}`,
-												content: [{ type: 'text', text: `[From ${record.from.thread}]\n${msg.body}` }]
-											} as any, true);
-										}
-									}
-								} catch {
-									// Silently fail if message retrieval doesn't work
-								}
-							}
-						})();
-					}
 				}
 				break;
 			}
@@ -3086,6 +3035,32 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function retryDelay(attempt: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+	}
+
+	async function claimRelayMessages(id: string) {
+		const host = sessionHost(id);
+		try {
+			const response = await fetch(threadApi(id, '/message'), {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ text: '', ...(host ? { host } : {}) })
+			});
+			if (response.ok) {
+				const data = await response.json();
+				if (data.thread?.turns) {
+					ensureThread(id);
+					for (const turn of data.thread.turns) {
+						if (turn.items) {
+							for (const item of turn.items) {
+								upsertItem(id, item, false, turn.id);
+							}
+						}
+					}
+				}
+			}
+		} catch {
+			// Silently fail if claim doesn't work
+		}
 	}
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
@@ -7482,6 +7457,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</svg>
 								</button>
 							{/each}
+						</div>
+					{/if}
+					{#if activeId && relayStore.records && Object.values(relayStore.records).some(r => r.to.thread === activeId && r.state === 'queued')}
+						<div class="relay-claim-notice">
+							<button
+								class="mini"
+								type="button"
+								onclick={() => claimRelayMessages(activeId!)}
+								title="Claim and process queued relay messages"
+							>
+								Process pending messages
+							</button>
 						</div>
 					{/if}
 					<div class="composer-anchor">
