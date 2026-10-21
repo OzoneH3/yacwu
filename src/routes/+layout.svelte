@@ -3038,15 +3038,20 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function claimRelayMessages(id: string) {
+		console.log('Claiming relay messages for session:', id);
 		const host = sessionHost(id);
 		try {
-			const response = await fetch(threadApi(id, '/message'), {
+			const url = threadApi(id, '/message');
+			console.log('Fetching:', url);
+			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ text: '', ...(host ? { host } : {}) })
 			});
+			console.log('Response status:', response.status);
 			if (response.ok) {
 				const data = await response.json();
+				console.log('Response data:', data);
 				if (data.thread?.turns) {
 					ensureThread(id);
 					for (const turn of data.thread.turns) {
@@ -3058,8 +3063,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					}
 				}
 			}
-		} catch {
-			// Silently fail if claim doesn't work
+		} catch (e) {
+			console.log('Error claiming relay messages:', e);
 		}
 	}
 
