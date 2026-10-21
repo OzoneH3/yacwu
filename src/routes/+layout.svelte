@@ -3049,14 +3049,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function claimRelayMessages(id: string) {
 		console.log('Claiming relay messages for session:', id);
-		const host = sessionHost(id);
 		try {
 			const url = threadApi(id, '/message');
 			console.log('Fetching:', url);
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: '', ...(host ? { host } : {}) })
+				body: JSON.stringify({ text: '', autoWakeSessions: settings.autoWakeSessions })
 			});
 			console.log('Response status:', response.status);
 			if (response.ok) {
@@ -3072,6 +3071,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						}
 					}
 				}
+			} else {
+				const text = await response.text();
+				console.log('Error response:', text);
 			}
 		} catch (e) {
 			console.log('Error claiming relay messages:', e);
