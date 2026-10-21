@@ -3055,7 +3055,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			const response = await fetch(url, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: '', autoWakeSessions: settings.autoWakeSessions })
+				body: JSON.stringify({ text: ' ', autoWakeSessions: settings.autoWakeSessions })
 			});
 			console.log('Response status:', response.status);
 			if (response.ok) {
