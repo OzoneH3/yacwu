@@ -3048,19 +3048,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	async function claimRelayMessages(id: string) {
-		console.log('Claiming relay messages for session:', id);
 		try {
-			const url = threadApi(id, '/message');
-			console.log('Fetching:', url);
-			const response = await fetch(url, {
+			const response = await fetch(threadApi(id, '/message'), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: '.', autoWakeSessions: settings.autoWakeSessions })
+				body: JSON.stringify({ text: 'process messages', autoWakeSessions: settings.autoWakeSessions })
 			});
-			console.log('Response status:', response.status);
 			if (response.ok) {
 				const data = await response.json();
-				console.log('Response data:', data);
 				if (data.thread?.turns) {
 					ensureThread(id);
 					for (const turn of data.thread.turns) {
@@ -3071,12 +3066,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						}
 					}
 				}
-			} else {
-				const text = await response.text();
-				console.log('Error response:', text);
 			}
-		} catch (e) {
-			console.log('Error claiming relay messages:', e);
+		} catch {
+			// Silently fail if claim doesn't work
 		}
 	}
 
@@ -7487,10 +7479,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						<button
 							class="mini"
 							type="button"
-							onclick={async () => {
-								console.log('Button clicked!');
-								await claimRelayMessages(activeId!);
-							}}
+							onclick={async () => { await claimRelayMessages(activeId!); }}
 							title="Claim and process queued relay messages"
 						>
 							Process pending messages
