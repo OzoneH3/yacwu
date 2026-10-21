@@ -1882,6 +1882,27 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (record?.id && typeof p.epoch === 'string') {
 					relayStore = applyRelayEvent(relayStore, p.epoch, record, ++relaySeq);
 					noteRelayRecord(relayStore.records[record.id] ?? record);
+					// Auto-claim relay messages to deliver them immediately without waiting for user input
+					if (record.state === 'queued' && record.to.thread && threads[record.to.thread]) {
+						void (async () => {
+							try {
+								const res = await fetch(`/api/relay/message/${record.id}`);
+								if (res.ok) {
+									const data = await res.json();
+									const msg = data.message as any;
+									if (msg?.body) {
+										upsertItem(record.to.thread, {
+											type: 'userMessage',
+											id: `relayed-${record.id}`,
+											content: [{ type: 'text', text: `[From ${record.from.thread}]\n${msg.body}` }]
+										} as any, true);
+									}
+								}
+							} catch {
+								// Silently fail if message retrieval doesn't work
+							}
+						})();
+					}
 				}
 				break;
 			}
