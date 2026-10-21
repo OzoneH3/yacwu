@@ -7459,17 +7459,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{/each}
 						</div>
 					{/if}
-					{#if activeId && relayStore.records && Object.values(relayStore.records).some(r => r.to.thread === activeId && r.state === 'queued')}
-						<div class="relay-claim-notice">
-							<button
-								class="mini"
-								type="button"
-								onclick={() => claimRelayMessages(activeId!)}
-								title="Claim and process queued relay messages"
-							>
-								Process pending messages
-							</button>
-						</div>
+					{#if activeId}
+						<button
+							class="mini"
+							type="button"
+							onclick={() => { void claimRelayMessages(activeId!); }}
+							title="Claim and process queued relay messages"
+						>
+							Process pending messages
+						</button>
 					{/if}
 					<div class="composer-anchor">
 						{#if todoPickVisible}
