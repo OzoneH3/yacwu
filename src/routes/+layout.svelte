@@ -7485,7 +7485,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						<button
 							class="mini"
 							type="button"
-							onclick={() => { void claimRelayMessages(activeId!); }}
+							onclick={async () => {
+								console.log('Button clicked!');
+								await claimRelayMessages(activeId!);
+							}}
 							title="Claim and process queued relay messages"
 						>
 							Process pending messages
