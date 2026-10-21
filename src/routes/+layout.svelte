@@ -1882,24 +1882,50 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (record?.id && typeof p.epoch === 'string') {
 					relayStore = applyRelayEvent(relayStore, p.epoch, record, ++relaySeq);
 					noteRelayRecord(relayStore.records[record.id] ?? record);
-					// Auto-claim relay messages to deliver them immediately without waiting for user input
-					if (record.state === 'queued' && record.to.thread && threads[record.to.thread]) {
+					// Auto-claim relay messages: trigger the receiving session to claim them
+					if (record.state === 'queued' && record.to.thread) {
+						const toThread = record.to.thread;
 						void (async () => {
 							try {
-								const res = await fetch(`/api/relay/message/${record.id}`);
-								if (res.ok) {
-									const data = await res.json();
-									const msg = data.message as any;
-									if (msg?.body) {
-										upsertItem(record.to.thread, {
-											type: 'userMessage',
-											id: `relayed-${record.id}`,
-											content: [{ type: 'text', text: `[From ${record.from.thread}]\n${msg.body}` }]
-										} as any, true);
+								// Send an empty message to trigger the receiving session to claim queued relay messages
+								// This activates auto-wake if the session's backend is disconnected
+								const host = sessionHost(toThread);
+								const response = await fetch(threadApi(toThread, '/message'), {
+									method: 'POST',
+									headers: { 'content-type': 'application/json' },
+									body: JSON.stringify({ text: '', ...(host ? { host } : {}) })
+								});
+								if (!response.ok) throw new Error('claim failed');
+								const data = await response.json();
+								// Update the thread with any claimed relay messages
+								if (data.thread?.turns) {
+									ensureThread(toThread);
+									for (const turn of data.thread.turns) {
+										if (turn.items) {
+											for (const item of turn.items) {
+												upsertItem(toThread, item, false, turn.id);
+											}
+										}
 									}
 								}
 							} catch {
-								// Silently fail if message retrieval doesn't work
+								// If claim fails (session disconnected), at least try to fetch and display the message
+								try {
+									const res = await fetch(`/api/relay/message/${record.id}`);
+									if (res.ok) {
+										const data = await res.json();
+										const msg = data.message as any;
+										if (msg?.body && threads[toThread]) {
+											upsertItem(toThread, {
+												type: 'userMessage',
+												id: `relayed-${record.id}`,
+												content: [{ type: 'text', text: `[From ${record.from.thread}]\n${msg.body}` }]
+											} as any, true);
+										}
+									}
+								} catch {
+									// Silently fail if message retrieval doesn't work
+								}
 							}
 						})();
 					}
