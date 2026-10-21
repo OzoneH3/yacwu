@@ -254,6 +254,11 @@ pub fn now_ms() -> Int {
 /// `request`, failures say whether the request can have reached the
 /// backend; see `Failure`. The manager answers by the deadline on its own,
 /// so a caller never waits much past it.
+/// Send a request whose whole lifetime — queued before a connection is
+/// ready, then pending on the wire — is bounded by `timeout_ms`. Unlike
+/// `request`, failures say whether the request can have reached the
+/// backend; see `Failure`. The manager answers by the deadline on its own,
+/// so a caller never waits much past it.
 pub fn request_tracked(
   codex: Codex,
   method: String,
@@ -1587,14 +1592,12 @@ fn on_conn_result(
           backoff: state.backoff + 1,
         )
       let state = broadcast_status(state, "disconnected", message)
-      // For socket-based transports with auto-wake enabled, schedule a reconnect on
-      // connection failure. This ensures inactive sessions with failed connections
-      // will retry when receiving new messages, rather than failing immediately.
-      let auto_wake_enabled = is_auto_wake_enabled()
-      case state.transport, auto_wake_enabled {
-        Local(_), _ -> Nil
-        _, False -> Nil
-        _, True -> {
+      // For socket-based transports, schedule a reconnect on connection failure.
+      // This ensures inactive sessions with failed connections will retry when
+      // receiving new messages, rather than failing immediately.
+      case state.transport {
+        Local(_) -> Nil
+        _ -> {
           let delay =
             int.min(30_000, 1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)))
           let _ =
@@ -1617,22 +1620,14 @@ fn on_conn_result(
   }
 }
 
-pub fn is_auto_wake_enabled() -> Bool {
-  envoy.get("YACWU_AUTO_WAKE_SESSIONS")
-  |> result.map(string.lowercase)
-  |> result.unwrap("false") == "true"
-}
-
 fn schedule_reconnect(state: State) -> Nil {
-  let auto_wake_enabled = is_auto_wake_enabled()
   let has_queued = case state.status {
     Connecting(queued) | Initializing(_, _, queued) -> !list.is_empty(queued)
     _ -> False
   }
-  case state.transport, state.resumed, has_queued, auto_wake_enabled {
-    Local(_), _, _, _ | _, [], False, _ -> Nil
-    _, _, _, False if !has_queued -> Nil
-    _, _, _, _ -> {
+  case state.transport, state.resumed, has_queued {
+    Local(_), _, _ | _, [], False -> Nil
+    _, _, _ -> {
       // First retry after 1s, doubling to a 30s ceiling.
       let delay =
         int.min(30_000, 1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)))
