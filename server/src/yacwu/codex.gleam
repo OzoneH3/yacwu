@@ -1587,12 +1587,17 @@ fn on_conn_result(
           backoff: state.backoff + 1,
         )
       let state = broadcast_status(state, "disconnected", message)
-      // For socket-based transports, always schedule a reconnect on connection
-      // failure. This ensures inactive sessions with failed connections will
-      // retry when receiving new messages, rather than failing immediately.
-      case state.transport {
-        Local(_) -> Nil
-        _ -> {
+      // For socket-based transports with auto-wake enabled, schedule a reconnect on
+      // connection failure. This ensures inactive sessions with failed connections
+      // will retry when receiving new messages, rather than failing immediately.
+      let auto_wake_enabled =
+        envoy.get("YACWU_AUTO_WAKE_SESSIONS")
+        |> result.map(string.lowercase)
+        |> result.unwrap("false") == "true"
+      case state.transport, auto_wake_enabled {
+        Local(_), _ -> Nil
+        _, False -> Nil
+        _, True -> {
           let delay =
             int.min(30_000, 1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)))
           let _ =
@@ -1616,13 +1621,18 @@ fn on_conn_result(
 }
 
 fn schedule_reconnect(state: State) -> Nil {
+  let auto_wake_enabled =
+    envoy.get("YACWU_AUTO_WAKE_SESSIONS")
+    |> result.map(string.lowercase)
+    |> result.unwrap("false") == "true"
   let has_queued = case state.status {
     Connecting(queued) | Initializing(_, _, queued) -> !list.is_empty(queued)
     _ -> False
   }
-  case state.transport, state.resumed, has_queued {
-    Local(_), _, _ | _, [], False -> Nil
-    _, _, _ -> {
+  case state.transport, state.resumed, has_queued, auto_wake_enabled {
+    Local(_), _, _, _ | _, [], False, _ -> Nil
+    _, _, _, False if !has_queued -> Nil
+    _, _, _, _ -> {
       // First retry after 1s, doubling to a 30s ceiling.
       let delay =
         int.min(30_000, 1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)))
