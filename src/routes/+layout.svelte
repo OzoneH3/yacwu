@@ -7505,12 +7505,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<button
 								class="mini"
 								type="button"
-								onclick={toggleRelayPopup}
-								title="View and manage queued relay messages"
+								onclick={() => {
+									if (settings.autoWakeSessions) {
+										void claimRelayMessages(activeId!);
+									} else {
+										toggleRelayPopup();
+									}
+								}}
+								title={settings.autoWakeSessions ? 'Process queued relay messages' : 'View and manage queued relay messages'}
 							>
 								Process pending messages
 							</button>
-							{#if relayPopupOpen}
+							{#if relayPopupOpen && !settings.autoWakeSessions}
 								<div class="relay-popup" role="dialog" aria-label="Pending relay messages">
 									<div class="relay-popup-header">
 										<h3>Pending relay messages ({activePendingRelayMessages.length})</h3>
