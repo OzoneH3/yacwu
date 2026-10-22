@@ -3055,6 +3055,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function toggleRelayPopup() {
+		console.log('Toggle relay popup, was:', relayPopupOpen, 'now:', !relayPopupOpen);
 		relayPopupOpen = !relayPopupOpen;
 	}
 
@@ -7500,46 +7501,48 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</div>
 					{/if}
 					{#if activeId && relayStore.records && Object.values(relayStore.records).some(r => r.to.thread === activeId && r.state === 'queued')}
-						<button
-							class="mini"
-							type="button"
-							onclick={toggleRelayPopup}
-							title="View and manage queued relay messages"
-						>
-							Process pending messages
-						</button>
-						{#if relayPopupOpen}
-							<div class="relay-popup" role="dialog" aria-label="Pending relay messages">
-								<div class="relay-popup-header">
-									<h3>Pending relay messages ({activePendingRelayMessages.length})</h3>
-									<button type="button" class="close" onclick={toggleRelayPopup} aria-label="Close">✕</button>
+						<div class="relay-button-wrapper">
+							<button
+								class="mini"
+								type="button"
+								onclick={toggleRelayPopup}
+								title="View and manage queued relay messages"
+							>
+								Process pending messages
+							</button>
+							{#if relayPopupOpen}
+								<div class="relay-popup" role="dialog" aria-label="Pending relay messages">
+									<div class="relay-popup-header">
+										<h3>Pending relay messages ({activePendingRelayMessages.length})</h3>
+										<button type="button" class="close" onclick={toggleRelayPopup} aria-label="Close">✕</button>
+									</div>
+									<div class="relay-popup-messages">
+										{#each activePendingRelayMessages as msg (msg.id)}
+											<div class="relay-message">
+												<div class="relay-message-from">From: <strong>{msg.from.thread.slice(0, 8)}</strong></div>
+												<div class="relay-message-text">{msg.text}</div>
+											</div>
+										{/each}
+									</div>
+									<div class="relay-popup-actions">
+										<button
+											type="button"
+											class="mini"
+											onclick={() => { void claimRelayMessages(activeId!); }}
+										>
+											Process
+										</button>
+										<button
+											type="button"
+											class="mini secondary"
+											onclick={() => removeRelayMessages(activeId!)}
+										>
+											Remove
+										</button>
+									</div>
 								</div>
-								<div class="relay-popup-messages">
-									{#each activePendingRelayMessages as msg (msg.id)}
-										<div class="relay-message">
-											<div class="relay-message-from">From: <strong>{msg.from.thread.slice(0, 8)}</strong></div>
-											<div class="relay-message-text">{msg.text}</div>
-										</div>
-									{/each}
-								</div>
-								<div class="relay-popup-actions">
-									<button
-										type="button"
-										class="mini"
-										onclick={() => { void claimRelayMessages(activeId!); }}
-									>
-										Process
-									</button>
-									<button
-										type="button"
-										class="mini secondary"
-										onclick={() => removeRelayMessages(activeId!)}
-									>
-										Remove
-									</button>
-								</div>
-							</div>
-						{/if}
+							{/if}
+						</div>
 					{/if}
 					<div class="composer-anchor">
 						{#if todoPickVisible}
@@ -8489,6 +8492,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-size: var(--text-xs);
 		font-weight: 800;
 		line-height: 1;
+	}
+
+	.relay-button-wrapper {
+		position: relative;
+		display: inline-block;
 	}
 
 	.relay-popup {
