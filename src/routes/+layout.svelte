@@ -219,6 +219,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let dragOverSessionId = $state<string | null>(null);
 	let suppressSessionClickId: string | null = null;
 	let relayPopupOpen = $state(false);
+	let sentAutoSendTo = $state(new Set<string>());
 	let pointerSessionDrag = $state<{
 		id: string;
 		pointerId: number;
@@ -658,10 +659,14 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	$effect(() => {
 		if (settings.autoSendRelayMessages && relayStore.records) {
 			for (const session of sessions) {
-				// Don't auto-send to finished sessions to preserve their completed state
-				if (finishedSessions[session.id]) continue;
+				// Don't auto-send to active sessions or finished sessions
+				if (session.id === activeId || finishedSessions[session.id]) continue;
+				// Don't send multiple times to the same session
+				if (sentAutoSendTo.has(session.id)) continue;
+
 				const hasPending = Object.values(relayStore.records).some(r => r.to.thread === session.id && r.state === 'queued');
 				if (hasPending) {
+					sentAutoSendTo.add(session.id);
 					void claimRelayMessages(session.id);
 				}
 			}
@@ -3092,6 +3097,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						}
 					}
 				}
+				// Clear from auto-send tracking since messages have been processed
+				sentAutoSendTo.delete(id);
 			}
 		} catch {
 			// Silently fail if claim doesn't work
@@ -3108,6 +3115,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 		}
 		relayStore = { ...relayStore, records: updatedRecords };
+		// Reset auto-send tracking for this session so it can be sent again
+		sentAutoSendTo.delete(id);
 	}
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
