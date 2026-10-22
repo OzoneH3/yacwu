@@ -121,8 +121,8 @@
 
 	<section aria-labelledby="settings-sessions">
 		<h3 id="settings-sessions">Sessions</h3>
-		<label class="check"><input type="checkbox" checked={settings.autoWakeSessions} onchange={(e) => set('autoWakeSessions', e.currentTarget.checked)} /> Auto-wake inactive sessions</label>
-		<p class="description">Automatically retry connections to sessions that receive messages while inactive. When off, failed connections are reported immediately.</p>
+		<label class="check"><input type="checkbox" checked={settings.autoSendRelayMessages} onchange={(e) => set('autoSendRelayMessages', e.currentTarget.checked)} /> Auto-send relay messages</label>
+		<p class="description">Automatically send messages to sessions that receive relay messages. When enabled, pending relay messages are processed immediately without user interaction.</p>
 	</section>
 
 	<div class="actions">

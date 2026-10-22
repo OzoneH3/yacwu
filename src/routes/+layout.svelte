@@ -655,6 +655,12 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		return Object.values(relayStore.records).filter(r => r.to.thread === activeId && r.state === 'queued');
 	});
 
+	$effect(() => {
+		if (settings.autoSendRelayMessages && activeId && activePendingRelayMessages.length > 0) {
+			void claimRelayMessages(activeId);
+		}
+	});
+
 	// Notification sounds. Only live activity makes a sound: a question or
 	// error that appears because history loaded stays silent.
 	const soundPlayer = createSoundPlayer();
@@ -3065,7 +3071,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			const response = await fetch(threadApi(id, '/message'), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: 'process messages', autoWakeSessions: settings.autoWakeSessions })
+				body: JSON.stringify({ text: 'process messages', autoSendRelayMessages: settings.autoSendRelayMessages })
 			});
 			if (response.ok) {
 				const data = await response.json();
@@ -3115,7 +3121,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			body.set('text', messageText);
 			if (turnId) body.set('turnId', turnId);
 			if (cwd) body.set('cwd', cwd);
-			body.set('autoWakeSessions', String(settings.autoWakeSessions));
+			body.set('autoSendRelayMessages', String(settings.autoSendRelayMessages));
 			for (const attachment of attachments) {
 				body.append(attachment.kind === 'image' ? 'images' : 'files', attachment.file, attachment.name);
 			}
@@ -3124,7 +3130,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			response = await fetch(threadApi(id, '/message'), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: messageText, autoWakeSessions: settings.autoWakeSessions, ...(turnId ? { turnId } : {}), ...(cwd ? { cwd } : {}) })
+				body: JSON.stringify({ text: messageText, autoSendRelayMessages: settings.autoSendRelayMessages, ...(turnId ? { turnId } : {}), ...(cwd ? { cwd } : {}) })
 			});
 		}
 		if (response.ok && cwd) applySessionFolder(id, cwd);
@@ -7506,17 +7512,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								class="mini"
 								type="button"
 								onclick={() => {
-									if (settings.autoWakeSessions) {
+									if (settings.autoSendRelayMessages) {
 										void claimRelayMessages(activeId!);
 									} else {
 										toggleRelayPopup();
 									}
 								}}
-								title={settings.autoWakeSessions ? 'Process queued relay messages' : 'View and manage queued relay messages'}
+								title={settings.autoSendRelayMessages ? 'Process queued relay messages' : 'View and manage queued relay messages'}
 							>
 								Process pending messages
 							</button>
-							{#if relayPopupOpen && !settings.autoWakeSessions}
+							{#if relayPopupOpen && !settings.autoSendRelayMessages}
 								<div class="relay-popup" role="dialog" aria-label="Pending relay messages">
 									<div class="relay-popup-header">
 										<h3>Pending relay messages ({activePendingRelayMessages.length})</h3>

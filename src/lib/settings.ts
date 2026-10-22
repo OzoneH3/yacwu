@@ -33,8 +33,8 @@ export interface GlobalSettings {
 	sounds: boolean;
 	/** Sound volume, 0–100 (25 is the original level). */
 	soundVolume: number;
-	/** Automatically retry connections to inactive sessions receiving messages. */
-	autoWakeSessions: boolean;
+	/** Automatically send messages to sessions that receive relay messages. */
+	autoSendRelayMessages: boolean;
 }
 
 export const GLOBAL_SETTINGS_KEY = 'yacwu-settings';
@@ -54,7 +54,7 @@ export const defaultSettings: GlobalSettings = {
 	claudeAllowanceReserve: 10,
 	sounds: true,
 	soundVolume: 50,
-	autoWakeSessions: false
+	autoSendRelayMessages: false
 };
 
 /** Allowed ranges for numeric settings. */
@@ -98,7 +98,7 @@ export function readSettings(raw: string | null): GlobalSettings {
 		claudeAllowanceReserve: key(parsed, 'claudeAllowanceReserve'),
 		sounds: flag('sounds'),
 		soundVolume: key(parsed, 'soundVolume'),
-		autoWakeSessions: flag('autoWakeSessions')
+		autoSendRelayMessages: flag('autoSendRelayMessages')
 	};
 }
 
