@@ -218,6 +218,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let draggingSessionId = $state<string | null>(null);
 	let dragOverSessionId = $state<string | null>(null);
 	let suppressSessionClickId: string | null = null;
+	let relayPopupOpen = $state(false);
 	let pointerSessionDrag = $state<{
 		id: string;
 		pointerId: number;
@@ -648,6 +649,12 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		}
 		return result;
 	});
+
+	const activePendingRelayMessages = $derived.by(() => {
+		if (!activeId || !relayStore.records) return [];
+		return Object.values(relayStore.records).filter(r => r.to.thread === activeId && r.state === 'queued');
+	});
+
 	// Notification sounds. Only live activity makes a sound: a question or
 	// error that appears because history loaded stays silent.
 	const soundPlayer = createSoundPlayer();
@@ -3047,7 +3054,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
 	}
 
+	function toggleRelayPopup() {
+		relayPopupOpen = !relayPopupOpen;
+	}
+
 	async function claimRelayMessages(id: string) {
+		relayPopupOpen = false;
 		try {
 			const response = await fetch(threadApi(id, '/message'), {
 				method: 'POST',
@@ -3070,6 +3082,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch {
 			// Silently fail if claim doesn't work
 		}
+	}
+
+	function removeRelayMessages(id: string) {
+		relayPopupOpen = false;
+		// Remove pending messages for this session from the relay store
+		const updatedRecords = { ...relayStore.records };
+		for (const [key, record] of Object.entries(updatedRecords)) {
+			if (record.to.thread === id && record.state === 'queued') {
+				delete updatedRecords[key];
+			}
+		}
+		relayStore = { ...relayStore, records: updatedRecords };
 	}
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
@@ -7479,11 +7503,43 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						<button
 							class="mini"
 							type="button"
-							onclick={async () => { await claimRelayMessages(activeId!); }}
-							title="Claim and process queued relay messages"
+							onclick={toggleRelayPopup}
+							title="View and manage queued relay messages"
 						>
 							Process pending messages
 						</button>
+						{#if relayPopupOpen}
+							<div class="relay-popup" role="dialog" aria-label="Pending relay messages">
+								<div class="relay-popup-header">
+									<h3>Pending relay messages ({activePendingRelayMessages.length})</h3>
+									<button type="button" class="close" onclick={toggleRelayPopup} aria-label="Close">✕</button>
+								</div>
+								<div class="relay-popup-messages">
+									{#each activePendingRelayMessages as msg (msg.id)}
+										<div class="relay-message">
+											<div class="relay-message-from">From: <strong>{msg.from.thread.slice(0, 8)}</strong></div>
+											<div class="relay-message-text">{msg.text}</div>
+										</div>
+									{/each}
+								</div>
+								<div class="relay-popup-actions">
+									<button
+										type="button"
+										class="mini"
+										onclick={() => { void claimRelayMessages(activeId!); }}
+									>
+										Process
+									</button>
+									<button
+										type="button"
+										class="mini secondary"
+										onclick={() => removeRelayMessages(activeId!)}
+									>
+										Remove
+									</button>
+								</div>
+							</div>
+						{/if}
 					{/if}
 					<div class="composer-anchor">
 						{#if todoPickVisible}
@@ -8433,6 +8489,88 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-size: var(--text-xs);
 		font-weight: 800;
 		line-height: 1;
+	}
+
+	.relay-popup {
+		position: absolute;
+		bottom: 100%;
+		right: 0;
+		margin-bottom: .5rem;
+		background: var(--color-paper);
+		border: 1px solid var(--color-rule);
+		border-radius: .6rem;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+		min-width: 300px;
+		max-width: 500px;
+		z-index: 1000;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.relay-popup-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: .75rem;
+		border-bottom: 1px solid var(--color-rule);
+	}
+
+	.relay-popup-header h3 {
+		margin: 0;
+		font-size: .9rem;
+		font-weight: 600;
+	}
+
+	.relay-popup-header .close {
+		background: none;
+		border: none;
+		color: var(--color-muted);
+		cursor: pointer;
+		font-size: 1.2rem;
+		padding: 0;
+		line-height: 1;
+	}
+
+	.relay-popup-messages {
+		flex: 1;
+		overflow-y: auto;
+		max-height: 250px;
+		padding: .5rem;
+	}
+
+	.relay-message {
+		padding: .5rem;
+		border: 1px solid var(--color-rule);
+		border-radius: .4rem;
+		margin-bottom: .5rem;
+		background: var(--color-surface);
+		font-size: .8rem;
+	}
+
+	.relay-message-from {
+		color: var(--color-muted);
+		margin-bottom: .25rem;
+	}
+
+	.relay-message-text {
+		word-break: break-word;
+		color: var(--color-ink);
+	}
+
+	.relay-popup-actions {
+		display: flex;
+		gap: .5rem;
+		padding: .75rem;
+		border-top: 1px solid var(--color-rule);
+	}
+
+	.relay-popup-actions button {
+		flex: 1;
+	}
+
+	.relay-popup-actions button.secondary {
+		background: var(--color-surface);
+		color: var(--color-ink);
 	}
 
 	.session-finished-indicator {
