@@ -656,8 +656,13 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	});
 
 	$effect(() => {
-		if (settings.autoSendRelayMessages && activeId && activePendingRelayMessages.length > 0) {
-			void claimRelayMessages(activeId);
+		if (settings.autoSendRelayMessages && relayStore.records) {
+			for (const session of sessions) {
+				const hasPending = Object.values(relayStore.records).some(r => r.to.thread === session.id && r.state === 'queued');
+				if (hasPending) {
+					void claimRelayMessages(session.id);
+				}
+			}
 		}
 	});
 
