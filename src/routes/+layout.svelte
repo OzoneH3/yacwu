@@ -8500,17 +8500,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	.relay-popup {
-		position: absolute;
-		bottom: 100%;
-		right: 0;
-		margin-bottom: .5rem;
+		position: fixed;
+		left: 50%;
+		top: 50%;
+		transform: translate(-50%, -50%);
 		background: var(--color-paper);
 		border: 1px solid var(--color-rule);
 		border-radius: .6rem;
 		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 		min-width: 300px;
 		max-width: 500px;
-		z-index: 1000;
+		z-index: 10000;
 		display: flex;
 		flex-direction: column;
 	}
