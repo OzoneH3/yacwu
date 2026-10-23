@@ -3093,6 +3093,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	async function claimRelayMessages(id: string) {
 		relayPopupOpen = false;
+		// Save finished states before sending to preserve them
+		const finishedBefore = { ...finishedSessions };
+
 		try {
 			const response = await fetch(threadApi(id, '/message'), {
 				method: 'POST',
@@ -3113,6 +3116,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				}
 				// Clear from auto-send tracking since messages have been processed
 				sentAutoSendTo.delete(id);
+
+				// Restore finished states that were cleared
+				for (const [sessionId, wasFinished] of Object.entries(finishedBefore)) {
+					if (wasFinished && !finishedSessions[sessionId]) {
+						finishedSessions[sessionId] = true;
+					}
+				}
 			}
 		} catch {
 			// Silently fail if claim doesn't work
