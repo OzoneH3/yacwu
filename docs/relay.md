@@ -27,7 +27,13 @@ that id, so the relay drops the duplicate; pass `--id` to retry by hand.
 - **Working recipient:** the message is steered into its current turn
   (`turn/steer`, guarded by the turn id), so it lands at the next input boundary.
 - **Idle recipient:** the message waits and goes out with the user's next
-  prompt, as a separate input part after it. Idle sessions are not woken.
+  prompt, as a separate input part after it. The relay itself never wakes an
+  idle session. A browser can: the composer shows how many messages are
+  waiting, with **Send now** (a prompt made only of them, via
+  `POST /api/threads/:id/relay/deliver`) and **Discard** (drops them as
+  rejected, via `POST /api/threads/:id/relay/discard`). With the
+  **Auto-send waiting session messages** setting on, the browser sends them
+  by itself as soon as the idle session they are for is open in it.
 - **Unknown state** (after a reconnect, say): the relay reads the thread's
   runtime status and its in-progress turn before steering. When that can't
   be established, the message keeps waiting.
@@ -67,6 +73,10 @@ Claude's SendMessage tool, only reaches that agent's own subagents.
   without its own choice. It is saved in Yacwu's state directory
   (`relay-settings.json`), so it survives restarts. Turning it off drops
   messages still queued for those sessions.
+- **Auto-send waiting session messages** (Settings) is a browser preference:
+  that browser starts a prompt of their own for messages waiting on an idle
+  session it has open. Off by default; without it they wait for the user's
+  next prompt or the **Send now** button.
 - Agent routes (`/api/relay/*`) need a bearer credential, kept in a 0600 file
   named by `YACWU_RELAY_AUTH_FILE`. Any agent running as your user can read
   it, so it keeps other users out, not one session from another.

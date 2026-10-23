@@ -608,6 +608,47 @@ pub fn disabling_rejects_only_queued_test() {
   let assert Error(_) = result
 }
 
+pub fn discarding_rejects_only_queued_and_keeps_messages_on_test() {
+  let core = bob_running("t1")
+  let #(core, effects) = send(core, 0, "msg-000a", "first")
+  let assert [#(_, _)] = steers(effects)
+  let #(core, _) = send(core, 1, "msg-000b", "second")
+  let #(core, _) = send(core, 2, "msg-000c", "third")
+  let #(core, count, effects) = relay_core.discard(core, bob)
+  count |> should.equal(2)
+  // Both dropped messages are published so browsers see them rejected.
+  list.filter_map(effects, fn(e) {
+    case e {
+      relay_core.Publish(m) -> Ok(m.id)
+      _ -> Error(Nil)
+    }
+  })
+  |> should.equal(["msg-000b", "msg-000c"])
+  state_of(core, "msg-000a") |> should.equal(Reserved)
+  state_of(core, "msg-000b") |> should.equal(Rejected)
+  state_of(core, "msg-000c") |> should.equal(Rejected)
+  // Unlike turning messages off, bob still accepts new ones.
+  let #(core, result, _) =
+    relay_core.send(
+      core,
+      3,
+      SendInput(
+        "msg-000d",
+        Address(host, alice),
+        to_bob(),
+        "x",
+        CodexBackend,
+        1,
+      ),
+    )
+  let assert Ok(_) = result
+  state_of(core, "msg-000d") |> should.equal(Queued)
+  // A thread nobody has written to has nothing to drop.
+  let #(_, count, effects) = relay_core.discard(core, "thr-nobody")
+  count |> should.equal(0)
+  effects |> should.equal([])
+}
+
 pub fn inflight_cap_is_per_host_test() {
   let limits = relay_core.Limits(..relay_core.default_limits(), max_inflight: 2)
   let core = relay_core.new("ep", limits) |> connected(1)

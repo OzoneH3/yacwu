@@ -3,8 +3,11 @@ import {
 	applyRelayEvent,
 	applyRelaySnapshot,
 	attributeRelayPart,
+	autoDeliveryTargets,
 	emptyRelayStore,
 	parseRelayBlock,
+	queuedByRecipient,
+	queuedKey,
 	relayStatusLabel,
 	type RelayRecord
 } from '../../src/lib/relay';
@@ -129,6 +132,37 @@ describe('relay store ordering', () => {
 		store = applyRelaySnapshot(store, { epoch: 'e2', messages: [record('msg-new')] }, 3, 4);
 		expect(store.epoch).toBe('e2');
 		expect(Object.keys(store.records)).toEqual(['msg-new']);
+	});
+});
+
+describe('waiting messages and auto-send', () => {
+	const bob = { host: 'local', thread: 'thr-bob' };
+	const carol = { host: 'local', thread: 'thr-carol' };
+	const queued = (id: string, to = bob, createdAt = 1) => record(id, { state: 'queued', to, createdAt });
+
+	test('only queued records count, grouped by recipient and ordered oldest first', () => {
+		let store = emptyRelayStore();
+		for (const r of [queued('b2', bob, 5), queued('b1', bob, 2), queued('c1', carol), record('done', { to: bob }), record('busy', { to: bob, state: 'sending' })]) {
+			store = applyRelayEvent(store, 'e1', r, 1);
+		}
+		const waiting = queuedByRecipient(store);
+		expect(Object.keys(waiting).sort()).toEqual(['thr-bob', 'thr-carol']);
+		expect(waiting['thr-bob'].map((r) => r.id)).toEqual(['b1', 'b2']);
+		expect(queuedKey(waiting['thr-bob'])).toBe(queuedKey([queued('b2'), queued('b1')]));
+		expect(queuedKey(waiting['thr-bob'])).not.toBe(queuedKey(waiting['thr-carol']));
+	});
+
+	test('targets skip ineligible, in-flight and already-failed waiting sets', () => {
+		const waiting = { 'thr-bob': [queued('b1')], 'thr-carol': [queued('c1', carol)], 'thr-dave': [] as RelayRecord[] };
+		const all = () => true;
+		expect(autoDeliveryTargets(waiting, all, new Set(), new Map())).toEqual(['thr-bob', 'thr-carol']);
+		expect(autoDeliveryTargets(waiting, (t) => t !== 'thr-bob', new Set(), new Map())).toEqual(['thr-carol']);
+		expect(autoDeliveryTargets(waiting, all, new Set(['thr-carol']), new Map())).toEqual(['thr-bob']);
+		// A failed attempt is retried only once the waiting set changes.
+		const failed = new Map([['thr-bob', queuedKey(waiting['thr-bob'])]]);
+		expect(autoDeliveryTargets(waiting, all, new Set(), failed)).toEqual(['thr-carol']);
+		const grown = { ...waiting, 'thr-bob': [queued('b1'), queued('b2')] };
+		expect(autoDeliveryTargets(grown, all, new Set(), failed)).toEqual(['thr-bob', 'thr-carol']);
 	});
 });
 

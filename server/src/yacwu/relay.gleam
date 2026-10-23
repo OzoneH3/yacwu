@@ -91,6 +91,7 @@ pub opaque type Msg {
   Wake
   Tick
   SetEnabled(thread: String, enabled: Bool, reply: Subject(Bool))
+  Discard(thread: String, reply: Subject(Int))
   SetAcceptByDefault(accept: Bool, reply: Subject(Bool))
   GetAcceptByDefault(reply: Subject(Bool))
   IsEnabled(thread: String, reply: Subject(Bool))
@@ -249,6 +250,11 @@ pub fn set_enabled(
   enabled: Bool,
 ) -> Result(Bool, Nil) {
   call(relay, 5000, SetEnabled(thread, enabled, _))
+}
+
+/// Drop the messages still queued for `thread`; returns how many.
+pub fn discard(relay: Relay, thread: String) -> Result(Int, Nil) {
+  call(relay, 5000, Discard(thread, _))
 }
 
 /// Whether sessions without their own choice accept messages.
@@ -424,6 +430,11 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
       let #(core, effects) =
         relay_core.set_enabled(state.core, now, thread, enabled)
       process.send(reply, enabled)
+      actor.continue(perform(State(..state, core: core), effects))
+    }
+    Discard(thread, reply) -> {
+      let #(core, count, effects) = relay_core.discard(state.core, thread)
+      process.send(reply, count)
       actor.continue(perform(State(..state, core: core), effects))
     }
     SetAcceptByDefault(accept, reply) -> {

@@ -1027,9 +1027,25 @@ pub fn set_enabled(
           disabled: set.insert(core.disabled, thread),
           allowed: set.delete(core.allowed, thread),
         )
-      reject_queued(core, targets)
+      reject_queued(core, targets, "the recipient turned off session messages")
     }
   }
+}
+
+/// Drop what is still queued for a recipient thread, at its user's request.
+/// Anything already sent or uncertain is left alone, as when turning
+/// messages off; the thread's own setting does not change. Returns how many
+/// messages were dropped.
+pub fn discard(core: Core, thread: String) -> #(Core, Int, List(Effect)) {
+  let targets =
+    dict.keys(core.recipients) |> list.filter(fn(to) { to.thread == thread })
+  let count =
+    list.fold(targets, 0, fn(n, to) {
+      n + list.length(get_recipient(core, to).queue)
+    })
+  let #(core, effects) =
+    reject_queued(core, targets, "the recipient discarded it unread")
+  #(core, count, effects)
 }
 
 /// Change what sessions without an explicit choice do. Turning the default
@@ -1047,7 +1063,12 @@ pub fn set_accept_by_default(
       && !set.contains(core.allowed, to.thread)
     })
   case accept {
-    False -> reject_queued(core, following)
+    False ->
+      reject_queued(
+        core,
+        following,
+        "the recipient turned off session messages",
+      )
     True ->
       list.fold(following, #(core, []), fn(acc, to) {
         let #(core, effects) = acc
@@ -1057,19 +1078,16 @@ pub fn set_accept_by_default(
   }
 }
 
-fn reject_queued(core: Core, targets: List(Address)) -> #(Core, List(Effect)) {
+fn reject_queued(
+  core: Core,
+  targets: List(Address),
+  reason: String,
+) -> #(Core, List(Effect)) {
   list.fold(targets, #(core, []), fn(acc, to) {
     let #(core, effects) = acc
     let r = get_recipient(core, to)
     let core = put_recipient(core, to, Recipient(..r, queue: []))
-    let #(core, more) =
-      settle(
-        core,
-        r.queue,
-        Rejected,
-        "the recipient turned off session messages",
-        "",
-      )
+    let #(core, more) = settle(core, r.queue, Rejected, reason, "")
     #(core, list.append(effects, more))
   })
 }

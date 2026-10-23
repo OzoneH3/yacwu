@@ -694,6 +694,11 @@ fn dispatch(
     ["api", "threads", id, "relay"], Get -> relay_log(ctx, id)
     ["api", "threads", id, "relay", "settings"], Post ->
       relay_settings(ctx, req, id)
+    ["api", "threads", id, "relay", "deliver"], Post -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      deliver_relay(ctx, host, cx, id)
+    }
+    ["api", "threads", id, "relay", "discard"], Post -> relay_discard(ctx, id)
     ["api", "threads", id, "message"], Post -> {
       use host, cx <- with_codex(ctx, req, Some(id))
       message(ctx, host, cx, req, id)
@@ -3057,6 +3062,22 @@ fn start_turn(
       relay.claim_start(ctx.relay, relay_core.Address(host, thread_id))
     _, _ -> None
   }
+  start_turn_with(ctx, host, cx, thread_id, input, turn_id, cwd, claim)
+}
+
+/// Start (or steer) a turn whose input is `input` followed by the text of
+/// an already claimed relay submission, if any. The claim's outcome is
+/// reported back to the relay.
+fn start_turn_with(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  thread_id: String,
+  input: List(Json),
+  turn_id: Option(String),
+  cwd: Option(String),
+  claim: Option(relay.Claim),
+) -> Response(ResponseData) {
   let input = case claim {
     Some(claim) ->
       list.append(input, [
@@ -4033,6 +4054,48 @@ fn relay_settings(
           json_response(200, json.object([#("enabled", json.bool(enabled))]))
         Error(_) -> json_response(503, error_body("the relay is restarting"))
       }
+  }
+}
+
+/// POST /api/threads/:id/relay/deliver — browser only. Start a turn on an
+/// idle session whose only input is what the relay has queued for it, so
+/// waiting messages reach the agent without a prompt from the user. 409
+/// when nothing is queued, the session refuses messages, or a delivery is
+/// already in flight; the relay settles the claim as for a user's prompt.
+fn deliver_relay(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  thread_id: String,
+) -> Response(ResponseData) {
+  case hosts.is_local(host) {
+    False ->
+      json_response(
+        400,
+        error_body("session messages are only relayed on this machine"),
+      )
+    True ->
+      case relay.claim_start(ctx.relay, relay_core.Address(host, thread_id)) {
+        None ->
+          json_response(
+            409,
+            error_body(
+              "no session messages are waiting, or a delivery is already in flight",
+            ),
+          )
+        Some(claim) ->
+          start_turn_with(ctx, host, cx, thread_id, [], None, None, Some(claim))
+      }
+  }
+}
+
+/// POST /api/threads/:id/relay/discard — browser only. Drop the messages
+/// still queued for the session; each is published as rejected.
+fn relay_discard(ctx: Context, thread: String) -> Response(ResponseData) {
+  case relay.discard(ctx.relay, thread) {
+    Ok(count) ->
+      json_response(200, json.object([#("discarded", json.int(count))]))
+    Error(_) -> json_response(503, error_body("the relay is restarting"))
   }
 }
 

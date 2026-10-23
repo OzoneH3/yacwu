@@ -8,6 +8,10 @@ describe('global settings', () => {
 		expect(readSettings('not json')).toEqual(defaultSettings);
 		expect(readSettings('[1,2]')).toEqual(defaultSettings);
 		expect(readSettings('{"enterToSend":false}')).toEqual({ ...defaultSettings, enterToSend: false });
+		// Auto-sending waiting session messages is opt-in and survives a reload.
+		expect(defaultSettings.autoSendRelayMessages).toBe(false);
+		expect(readSettings('{"autoSendRelayMessages":true}').autoSendRelayMessages).toBe(true);
+		expect(readSettings('{"autoSendRelayMessages":"yes"}').autoSendRelayMessages).toBe(false);
 	});
 
 	test('wrong types are ignored and numbers are clamped to their ranges', () => {

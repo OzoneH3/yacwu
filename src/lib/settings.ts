@@ -33,7 +33,7 @@ export interface GlobalSettings {
 	sounds: boolean;
 	/** Sound volume, 0–100 (25 is the original level). */
 	soundVolume: number;
-	/** Automatically send messages to sessions that receive relay messages. */
+	/** Waiting session messages start a prompt of their own on idle sessions. */
 	autoSendRelayMessages: boolean;
 }
 

@@ -127,6 +127,17 @@ pub fn bearer_cannot_change_settings_test() {
   |> should.equal(200)
 }
 
+pub fn bearer_cannot_deliver_or_discard_test() {
+  let port = serve(forward_auth())
+  status(port, http.Post, "/api/threads/thr-x/relay/discard", [bearer], "")
+  |> should.equal(401)
+  status(port, http.Post, "/api/threads/thr-x/relay/deliver", [bearer], "")
+  |> should.equal(401)
+  // Nothing queued for thr-x: discarding is a successful no-op.
+  status(port, http.Post, "/api/threads/thr-x/relay/discard", [browser], "")
+  |> should.equal(200)
+}
+
 /// With authentication bypassed the settings route is open to any local
 /// caller (documented); the agent routes still demand the credential.
 pub fn bypass_mode_test() {

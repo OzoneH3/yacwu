@@ -22,7 +22,10 @@
 		applyRelayEvent,
 		applyRelaySnapshot,
 		attributeRelayPart,
+		autoDeliveryTargets,
 		emptyRelayStore,
+		queuedByRecipient,
+		queuedKey,
 		relayStatusLabel,
 		shortSession,
 		type AttributedFrame,
@@ -218,8 +221,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let draggingSessionId = $state<string | null>(null);
 	let dragOverSessionId = $state<string | null>(null);
 	let suppressSessionClickId: string | null = null;
+	// The composer's list of session messages waiting for the open session.
 	let relayPopupOpen = $state(false);
-	let sentAutoSendTo = $state(new Set<string>());
 	let pointerSessionDrag = $state<{
 		id: string;
 		pointerId: number;
@@ -641,50 +644,37 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		return result;
 	});
 
-	const sessionHasPendingRelayById = $derived.by(() => {
-		const result: Record<string, boolean> = {};
-		if (relayStore.records) {
-			for (const session of sessions) {
-				result[session.id] = Object.values(relayStore.records).some(r => r.to.thread === session.id && r.state === 'queued');
-			}
-		}
-		return result;
-	});
-
-	const activePendingRelayMessages = $derived.by(() => {
-		if (!activeId || !relayStore.records) return [];
-		return Object.values(relayStore.records).filter(r => r.to.thread === activeId && r.state === 'queued');
-	});
-
+	// Session messages still waiting for each session, from the relay's
+	// delivery records (see $lib/relay).
+	const queuedRelayBySession = $derived(queuedByRecipient(relayStore));
+	const activeQueuedRelay = $derived(activeId ? (queuedRelayBySession[activeId] ?? []) : []);
 	$effect(() => {
-		if (settings.autoSendRelayMessages && relayStore.records) {
-			// Save finished state before auto-sending to preserve it
-			const finishedStateBefore = { ...finishedSessions };
+		void activeId;
+		untrack(() => { relayPopupOpen = false; });
+	});
 
-			for (const session of sessions) {
-				// Don't auto-send to active sessions or finished sessions
-				if (session.id === activeId || finishedSessions[session.id]) continue;
-				// Don't send multiple times to the same session
-				if (sentAutoSendTo.has(session.id)) continue;
-
-				const hasPending = Object.values(relayStore.records).some(r => r.to.thread === session.id && r.state === 'queued');
-				if (hasPending) {
-					sentAutoSendTo.add(session.id);
-					void claimRelayMessages(session.id);
-				}
-			}
-
-			// Restore any finished states that were cleared
-			untrack(() => {
-				setTimeout(() => {
-					for (const [sessionId, wasFinished] of Object.entries(finishedStateBefore)) {
-						if (wasFinished && !finishedSessions[sessionId]) {
-							finishedSessions[sessionId] = true;
-						}
-					}
-				}, 100);
-			});
-		}
+	// Auto-send: waiting messages start a prompt of their own as soon as the
+	// idle session they are for is known here. Working sessions need no help
+	// (the relay steers them), remote hosts are not relayed, and a failed
+	// attempt is not repeated until the waiting set changes.
+	const relayDeliveryInFlight = new Set<string>();
+	const relayDeliveryFailed = new Map<string, string>();
+	$effect(() => {
+		if (!settings.autoSendRelayMessages) return;
+		const targets = autoDeliveryTargets(
+			queuedRelayBySession,
+			(id) =>
+				sessions.some((s) => s.id === id) &&
+				!isRemoteHost(sessionHost(id)) &&
+				relayEnabled[id] !== false &&
+				threads[id]?.status !== 'running' &&
+				!activeTurnBySession[id],
+			relayDeliveryInFlight,
+			relayDeliveryFailed
+		);
+		untrack(() => {
+			for (const id of targets) void deliverRelayMessages(id);
+		});
 	});
 
 	// Notification sounds. Only live activity makes a sound: a question or
@@ -2836,6 +2826,17 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	/**
+	 * Delivery records for every session on this machine, so messages
+	 * waiting for a session show in the rail (and auto-send) without it
+	 * being opened first. Later changes arrive over the event stream.
+	 */
+	async function loadRelayLogs() {
+		if (!sessionsLoaded) await loadSessions();
+		const local = sessions.filter((s) => !isRemoteHost(s.host)).map((s) => s.id);
+		await forEachConcurrent(local, 4, loadRelayLog);
+	}
+
 	async function setRelayEnabled(id: string, enabled: boolean): Promise<boolean> {
 		try {
 			const res = await fetch(`/api/threads/${encodeURIComponent(id)}/relay/settings`, {
@@ -3086,72 +3087,60 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
 	}
 
-	function toggleRelayPopup() {
-		console.log('Toggle relay popup, was:', relayPopupOpen, 'now:', !relayPopupOpen);
+	// Clicks on the waiting-messages controls are not the "seen" click that
+	// clears every finished-task mark (see the document click handler).
+	function toggleRelayPopup(event?: Event) {
+		event?.stopPropagation();
 		relayPopupOpen = !relayPopupOpen;
 	}
 
-	async function claimRelayMessages(id: string) {
+	function relaySenderLabel(thread: string): string {
+		const session = sessions.find((s) => s.id === thread);
+		return session ? shortLabel(session) : shortSession(thread);
+	}
+
+	/** Start a prompt on `id` made only of the session messages waiting for it. */
+	async function deliverRelayMessages(id: string) {
+		if (relayDeliveryInFlight.has(id)) return;
+		const waiting = queuedRelayBySession[id] ?? [];
+		const key = queuedKey(waiting);
+		relayDeliveryInFlight.add(id);
 		relayPopupOpen = false;
-		// Save finished states before sending to preserve them
-		const finishedBefore = { ...finishedSessions };
-
 		try {
-			const response = await fetch(threadApi(id, '/message'), {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: 'process messages', autoSendRelayMessages: settings.autoSendRelayMessages })
-			});
-			if (response.ok) {
-				const data = await response.json();
-				if (data.thread?.turns) {
-					ensureThread(id);
-					for (const turn of data.thread.turns) {
-						if (turn.items) {
-							for (const item of turn.items) {
-								upsertItem(id, item, false, turn.id);
-							}
-						}
-					}
-				}
-				// Clear from auto-send tracking since messages have been processed
-				sentAutoSendTo.delete(id);
-
-				// Restore finished states that were cleared by the message send
-				for (const [sessionId, wasFinished] of Object.entries(finishedBefore)) {
-					if (wasFinished && !finishedSessions[sessionId]) {
-						finishedSessions[sessionId] = true;
-					}
-				}
-
-				// Keep checking and restoring for a bit in case backend updates arrive
-				let attempts = 0;
-				const restoreInterval = setInterval(() => {
-					for (const [sessionId, wasFinished] of Object.entries(finishedBefore)) {
-						if (wasFinished && !finishedSessions[sessionId]) {
-							finishedSessions[sessionId] = true;
-						}
-					}
-					if (++attempts >= 5) clearInterval(restoreInterval);
-				}, 50);
+			const res = await fetch(threadApi(id, '/relay/deliver'), { method: 'POST' });
+			if (!res.ok) {
+				const data = await res.json().catch(() => ({}));
+				throw new Error(data.error ?? `could not send the waiting session messages (${res.status})`);
 			}
-		} catch {
-			// Silently fail if claim doesn't work
+			relayDeliveryFailed.delete(id);
+			const t = ensureThread(id);
+			t.status = 'running';
+			t.error = null;
+			addLocalNote(id, waiting.length === 1
+				? 'A waiting session message started a new prompt.'
+				: `${waiting.length} waiting session messages started a new prompt.`);
+		} catch (err) {
+			relayDeliveryFailed.set(id, key);
+			addLocalNote(id, err instanceof Error ? err.message : 'could not send the waiting session messages', 'err');
+			void loadRelayLog(id);
+		} finally {
+			relayDeliveryInFlight.delete(id);
 		}
 	}
 
-	function removeRelayMessages(id: string) {
+	/** Drop the session messages waiting for `id`; the relay reports each as rejected. */
+	async function discardRelayMessages(id: string) {
 		relayPopupOpen = false;
-		// Remove pending messages for this session from the relay store
-		const updatedRecords = { ...relayStore.records };
-		for (const [key, record] of Object.entries(updatedRecords)) {
-			if (record.to.thread === id && record.state === 'queued') {
-				delete updatedRecords[key];
+		try {
+			const res = await fetch(threadApi(id, '/relay/discard'), { method: 'POST' });
+			if (!res.ok) {
+				const data = await res.json().catch(() => ({}));
+				throw new Error(data.error ?? `could not discard the waiting session messages (${res.status})`);
 			}
+			relayDeliveryFailed.delete(id);
+		} catch (err) {
+			addLocalNote(id, err instanceof Error ? err.message : 'could not discard the waiting session messages', 'err');
 		}
-		relayStore = { ...relayStore, records: updatedRecords };
-		// Reset auto-send tracking for this session so it can be sent again
-		sentAutoSendTo.delete(id);
 	}
 
 	async function sendMessageRequest(id: string, text: string, attachments: SelectedAttachment[], turnId: string | null): Promise<Response> {
@@ -3172,7 +3161,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			body.set('text', messageText);
 			if (turnId) body.set('turnId', turnId);
 			if (cwd) body.set('cwd', cwd);
-			body.set('autoSendRelayMessages', String(settings.autoSendRelayMessages));
 			for (const attachment of attachments) {
 				body.append(attachment.kind === 'image' ? 'images' : 'files', attachment.file, attachment.name);
 			}
@@ -3181,7 +3169,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			response = await fetch(threadApi(id, '/message'), {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ text: messageText, autoSendRelayMessages: settings.autoSendRelayMessages, ...(turnId ? { turnId } : {}), ...(cwd ? { cwd } : {}) })
+				body: JSON.stringify({ text: messageText, ...(turnId ? { turnId } : {}), ...(cwd ? { cwd } : {}) })
 			});
 		}
 		if (response.ok && cwd) applySessionFolder(id, cwd);
@@ -5922,7 +5910,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						streamConnectedBefore = true;
 						checkForNewBuild();
 						void reconcileInterruptedSessions();
-						if (activeId) void loadRelayLog(activeId);
+						void loadRelayLogs();
 						return;
 					}
 					if (msg.method === 'yacwu/buildUpdated') {
@@ -6471,12 +6459,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									aria-label={sessionAttentionById[s.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
 									title={sessionAttentionById[s.id] === 'choice' ? 'Waiting for your answer' : 'Session needs your attention'}
 								>{sessionAttentionById[s.id] === 'choice' ? '?' : '!'}</span>
-							{:else if sessionHasPendingRelayById[s.id]}
+							{:else if queuedRelayBySession[s.id]?.length}
 								<span
 									class="relay-pending-indicator"
 									role="img"
-									aria-label="Pending relay messages"
-									title="Pending relay messages available"
+									aria-label="Session messages waiting"
+									title={`${queuedRelayBySession[s.id].length} session message${queuedRelayBySession[s.id].length === 1 ? '' : 's'} waiting`}
 								>!</span>
 							{/if}
 							{#if finishedSessions[s.id] && s.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
@@ -7557,50 +7545,57 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{/each}
 						</div>
 					{/if}
-					{#if activeId && relayStore.records && Object.values(relayStore.records).some(r => r.to.thread === activeId && r.state === 'queued')}
+					{#if activeId && activeQueuedRelay.length > 0}
+						{@const relayTarget = activeId}
+						{@const relayTargetWorking = threads[relayTarget]?.status === 'running'}
 						<div class="relay-button-wrapper">
 							<button
 								class="mini"
 								type="button"
-								onclick={() => {
-									if (settings.autoSendRelayMessages) {
-										void claimRelayMessages(activeId!);
-									} else {
-										toggleRelayPopup();
-									}
-								}}
-								title={settings.autoSendRelayMessages ? 'Process queued relay messages' : 'View and manage queued relay messages'}
+								onclick={toggleRelayPopup}
+								aria-expanded={relayPopupOpen}
+								title="Session messages waiting for this session"
 							>
-								Process pending messages
+								{activeQueuedRelay.length === 1 ? '1 waiting message' : `${activeQueuedRelay.length} waiting messages`}
 							</button>
-							{#if relayPopupOpen && !settings.autoSendRelayMessages}
-								<div class="relay-popup" role="dialog" aria-label="Pending relay messages">
+							{#if relayPopupOpen}
+								<div class="relay-popup" role="dialog" aria-label="Waiting session messages">
 									<div class="relay-popup-header">
-										<h3>Pending relay messages ({activePendingRelayMessages.length})</h3>
+										<h3>Waiting session messages</h3>
 										<button type="button" class="close" onclick={toggleRelayPopup} aria-label="Close">✕</button>
 									</div>
 									<div class="relay-popup-messages">
-										{#each activePendingRelayMessages as msg (msg.id)}
+										{#each activeQueuedRelay as msg (msg.id)}
 											<div class="relay-message">
-												<div class="relay-message-from">From: <strong>{msg.from.thread.slice(0, 8)}</strong></div>
+												<div class="relay-message-from">From <strong>{relaySenderLabel(msg.from.thread)}</strong></div>
 												<div class="relay-message-text">{msg.text}</div>
 											</div>
 										{/each}
 									</div>
+									<p class="relay-popup-hint">
+										{#if relayTargetWorking}
+											The session is working; they are steered into its current turn.
+										{:else if settings.autoSendRelayMessages}
+											Auto-send is on; the last attempt did not go through. Send them now or discard them.
+										{:else}
+											They go out with your next prompt, or now as a prompt of their own.
+										{/if}
+									</p>
 									<div class="relay-popup-actions">
 										<button
 											type="button"
 											class="mini"
-											onclick={() => { void claimRelayMessages(activeId!); }}
+											disabled={relayTargetWorking}
+											onclick={(event) => { event.stopPropagation(); void deliverRelayMessages(relayTarget); }}
 										>
-											Process
+											Send now
 										</button>
 										<button
 											type="button"
 											class="mini secondary"
-											onclick={() => removeRelayMessages(activeId!)}
+											onclick={(event) => { event.stopPropagation(); void discardRelayMessages(relayTarget); }}
 										>
-											Remove
+											Discard
 										</button>
 									</div>
 								</div>
@@ -8607,6 +8602,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		overflow-y: auto;
 		max-height: 250px;
 		padding: .5rem;
+	}
+
+	.relay-popup-hint {
+		margin: 0;
+		padding: 0 .75rem .5rem;
+		color: var(--color-muted);
+		font-size: .8rem;
+		line-height: 1.4;
 	}
 
 	.relay-message {

@@ -40,6 +40,42 @@ export function emptyRelayStore(): RelayStore {
 	return { epoch: null, epochSeq: 0, records: {} };
 }
 
+/** Messages still waiting for each recipient thread, oldest first. */
+export function queuedByRecipient(store: RelayStore): Record<string, RelayRecord[]> {
+	const result: Record<string, RelayRecord[]> = {};
+	for (const record of Object.values(store.records)) {
+		if (record.state !== 'queued') continue;
+		(result[record.to.thread] ??= []).push(record);
+	}
+	for (const list of Object.values(result)) {
+		list.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+	}
+	return result;
+}
+
+/** Identifies one recipient's waiting set; changes when a message joins or leaves it. */
+export function queuedKey(records: RelayRecord[]): string {
+	return records.map((r) => r.id).sort().join('\n');
+}
+
+/**
+ * Recipients whose waiting messages should go out now as a prompt of their
+ * own: `eligible` says the thread is an idle session this browser may start,
+ * a thread with a delivery in flight waits, and a failed attempt is not
+ * repeated until its waiting set changes.
+ */
+export function autoDeliveryTargets(
+	queued: Record<string, RelayRecord[]>,
+	eligible: (thread: string) => boolean,
+	inFlight: ReadonlySet<string>,
+	failed: ReadonlyMap<string, string>
+): string[] {
+	return Object.entries(queued)
+		.filter(([thread, records]) =>
+			records.length > 0 && !inFlight.has(thread) && failed.get(thread) !== queuedKey(records) && eligible(thread))
+		.map(([thread]) => thread);
+}
+
 function mergeRecords(records: Record<string, RelayRecord>, incoming: RelayRecord[]): Record<string, RelayRecord> {
 	const next = { ...records };
 	for (const record of incoming) {
