@@ -665,7 +665,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 			queuedRelayBySession,
 			(id) =>
 				sessions.some((s) => s.id === id) &&
-				!isRemoteHost(sessionHost(id)) &&
+				relayedHost(sessionHost(id)) &&
 				relayEnabled[id] !== false &&
 				threads[id]?.status !== 'running' &&
 				!activeTurnBySession[id],
@@ -1120,6 +1120,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	/** The host a session runs on: its summary’s tag, the URL hint, or local. */
+	/** Hosts the relay delivers to: this machine and its backend hosts (the server's hosts.is_local). */
+	function relayedHost(host: string): boolean {
+		return !isRemoteHost(host) || hostChoices.some((h) => h.name === host && h.kind === 'backend');
+	}
+
 	function sessionHost(id: string | null): string {
 		if (!id) return LOCAL_HOST;
 		const summary = sessions.find((s) => s.id === id);
@@ -2827,14 +2832,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	/**
-	 * Delivery records for every session on this machine, so messages
-	 * waiting for a session show in the rail (and auto-send) without it
-	 * being opened first. Later changes arrive over the event stream.
+	 * Delivery records for every session, so messages waiting for a session
+	 * show in the rail (and auto-send) without it being opened first. Later
+	 * changes arrive over the event stream. Backend hosts (Claude, Copilot)
+	 * are relayed like this machine, so no host filter here.
 	 */
 	async function loadRelayLogs() {
 		if (!sessionsLoaded) await loadSessions();
-		const local = sessions.filter((s) => !isRemoteHost(s.host)).map((s) => s.id);
-		await forEachConcurrent(local, 4, loadRelayLog);
+		await forEachConcurrent(sessions.map((s) => s.id), 4, loadRelayLog);
 	}
 
 	async function setRelayEnabled(id: string, enabled: boolean): Promise<boolean> {
