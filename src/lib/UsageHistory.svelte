@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { analyzeUsage, RATE_LABEL, RATE_TOKENS, type UsagePool } from './usage-analysis';
+	import ResetHistory from './ResetHistory.svelte';
+	import type { ResetFeedEntry } from './reset-feed';
 	import BenchmarkControls from './BenchmarkControls.svelte';
 	import type { CostEstimate } from './usage-fit';
 	import { loadUsageAnalysis } from './usage-client';
 	import { observeWhileVisible } from './polling';
 	import type { UsageAnalyses } from './usage-background';
-	let { host, sessionId, models, modelNames = {}, selectedModel, selectedEffort, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; modelNames?: Record<string, string>; selectedModel?: string; selectedEffort?: string; onclose: () => void } = $props();
+	let { host, sessionId, models, modelNames = {}, selectedModel, selectedEffort, resetEntries = [], showResets = false, onresetrefresh, onclose }: { host: string; sessionId: string; models: Array<{ id: string; displayName: string; efforts: string[] }>; modelNames?: Record<string, string>; selectedModel?: string; selectedEffort?: string; resetEntries?: ResetFeedEntry[]; showResets?: boolean; onresetrefresh?: () => Promise<void>; onclose: () => void } = $props();
 	let dialog = $state<HTMLDialogElement>();
 	let analyses = $state.raw<UsageAnalyses>({ weekly: analyzeUsage([]), fiveHour: analyzeUsage([], { windowDurationMins: 300 }) });
 	let loading = $state(false);
@@ -48,11 +50,12 @@
 		const seconds = Math.max(0, Math.round(((end ?? Date.now()) - start) / 1000));
 		return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 	}
-	async function refresh() {
+	async function refresh(resetReports = false) {
 		if (loading) return;
 		loading = true; error = '';
 		try {
-			analyses = await loadUsageAnalysis(host, modelNames);
+			const [result] = await Promise.all([loadUsageAnalysis(host, modelNames), resetReports && showResets ? onresetrefresh?.() : undefined]);
+			analyses = result;
 		} catch (e) { error = e instanceof Error ? e.message : String(e); }
 		finally { loading = false; }
 	}
@@ -66,9 +69,10 @@
 	<div class="panel">
 		<header>
 			<h2 id="usage-history-title">Task allowance usage</h2>
-			<button type="button" onclick={refresh} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
+			<button type="button" onclick={() => void refresh(true)} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
 			<button type="button" onclick={onclose} aria-label="Close usage history">×</button>
 		</header>
+		{#if showResets}<ResetHistory entries={resetEntries} />{/if}
 		<label>Allowance window <select bind:value={windowDurationMins}><option value={10080}>7-day</option><option value={300}>5-hour</option></select></label>
 		<p>Estimates use token usage from hosts with matching account fingerprints: {analysis.hosts.join(', ')}. {windowLabel} readings come from {host}. Each allowance window is calibrated separately. Usage outside Yacwu can still affect the allowance.</p>
 		{#if error}<p class="error" role="alert">{error}</p>{/if}

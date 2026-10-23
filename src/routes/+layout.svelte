@@ -7853,7 +7853,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{#if activeCopilot}
 			<CopilotCreditHistory account={activeAccountUsage?.copilot ?? null} tasks={activeUsageAnalysis?.tasks ?? []} host={activeHost} sessionId={activeId} onclose={() => usageHistoryOpen = false} onrefresh={async () => { await Promise.all([refreshTaskUsage(activeHost), loadAccountUsage(activeHost, true)]); }} />
 		{:else}
-		<UsageHistory host={activeHost} sessionId={activeId} models={activeModels} modelNames={usageModelNamesByHost[activeHost] ?? {}} selectedModel={activeConfig?.model} selectedEffort={activeConfig?.effort} onclose={() => usageHistoryOpen = false} />
+		<UsageHistory showResets={!isClaudeSession(activeId)} resetEntries={resetFeed} onresetrefresh={loadResetFeed} host={activeHost} sessionId={activeId} models={activeModels} modelNames={usageModelNamesByHost[activeHost] ?? {}} selectedModel={activeConfig?.model} selectedEffort={activeConfig?.effort} onclose={() => usageHistoryOpen = false} />
 		{/if}
 	{/key}
 {/if}

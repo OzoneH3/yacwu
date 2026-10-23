@@ -51,3 +51,26 @@ export function expectedResetAt(entry: ResetFeedEntry): number | null {
 	// The zone's offset at that moment turns the wall-clock time into UTC.
 	return guess - (Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute, shown.second) - guess);
 }
+
+/** Completed public reports, not banked grants/previews or account reset dates. */
+export function resetHistory(entries: ResetFeedEntry[], now: number) {
+	const seen = new Set<number>();
+	const reports = entries.filter((entry) => {
+		const at = Date.parse(entry.at);
+		if (entry.kind !== 'reset' || !Number.isFinite(at) || at > now || seen.has(at)) return false;
+		seen.add(at);
+		return true;
+	}).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+	// Recent cadence only: at most ten completed intervals. Never slide a
+	// missed estimate forward as if an unreported reset had occurred.
+	const recent = reports.slice(0, 11);
+	const gaps = recent.slice(1).map((entry, index) => Date.parse(recent[index].at) - Date.parse(entry.at));
+	const sorted = [...gaps].sort((a, b) => a - b);
+	const medianGapMs = sorted.length >= 2
+		? (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.floor(sorted.length / 2)]) / 2
+		: null;
+	return {
+		reports, gaps, medianGapMs,
+		estimateAt: medianGapMs === null ? null : Date.parse(reports[0].at) + medianGapMs
+	};
+}
