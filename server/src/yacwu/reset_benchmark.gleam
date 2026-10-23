@@ -11,6 +11,7 @@ import gleam/dynamic/decode
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/regexp
 import gleam/result
 import gleam/string
@@ -68,6 +69,15 @@ pub fn pending(
       "\\b(it'?s done|done\\b|landed|propagated|in the bag|is live|went live)",
       entry.text,
     )
+    && case entry.expected_at {
+      Some(due) ->
+        case seconds(due) {
+          Ok(due) -> due > now
+          Error(_) -> False
+        }
+      None -> True
+    }
+    && at <= now
     && at > landed
     && at > week_started
     && now - at < 86_400

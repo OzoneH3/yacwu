@@ -1,3 +1,4 @@
+import gleam/option.{None, Some}
 import gleeunit/should
 import yacwu/reset_benchmark
 import yacwu/reset_feed.{Entry}
@@ -12,9 +13,16 @@ pub fn an_announced_reset_is_pending_until_the_week_restarts_test() {
       "Global reset by EOD PST",
       "u1",
       "2026-10-13T01:03:59Z",
+      None,
     )
   let earlier_landed =
-    Entry("reset", "Put the reset in the bag.", "u0", "2026-10-11T04:01:09Z")
+    Entry(
+      "reset",
+      "Put the reset in the bag.",
+      "u0",
+      "2026-10-11T04:01:09Z",
+      None,
+    )
   // The week began on 11 Oct, before the announcement.
   reset_benchmark.pending([announced, earlier_landed], now, 1_791_697_478)
   |> should.equal(Ok(announced))
@@ -29,12 +37,14 @@ pub fn an_announced_reset_is_pending_until_the_week_restarts_test() {
         "Your side of reset? It's done.",
         "u2",
         "2026-10-13T05:06:06Z",
+        None,
       ),
       Entry(
         "reset_preview",
         "Mashed @poteto on the house.",
         "u3",
         "2026-10-13T05:06:10Z",
+        None,
       ),
     ],
     now,
@@ -82,4 +92,22 @@ pub fn only_completed_stages_count_as_measured_test() {
     <> "{\"event\":\"benchmarkBoundary\",\"threadId\":\"b\",\"model\":\"m\",\"effort\":\"low\"}\n"
     <> "not json\n"
   reset_benchmark.measured(journal) |> should.equal([#("m", "high")])
+}
+
+pub fn missed_scheduled_reset_does_not_authorize_benchmark_spending_test() {
+  let entry =
+    Entry(
+      "reset_preview",
+      "Reset announced: Landing soon",
+      "https://x.com/a",
+      "2026-10-13T01:00:00Z",
+      Some("2026-10-13T05:00:00Z"),
+    )
+  reset_benchmark.pending([entry], now, 0) |> should.equal(Error(Nil))
+  reset_benchmark.pending(
+    [Entry(..entry, expected_at: Some("2026-10-13T07:00:00Z"))],
+    now,
+    0,
+  )
+  |> should.be_ok
 }

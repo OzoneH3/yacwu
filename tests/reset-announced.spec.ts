@@ -1,13 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-// A global Codex reset announced on willreset.com shows next to the Codex
+// A global Codex reset announced on codex-resets.com shows next to the Codex
 // usage, so the rest of this week's allowance can be used first; once the
 // reset has landed, the notice goes away.
 
 const ID = 'reset-session';
 
 test('an announced global reset shows next to Codex usage until it lands', async ({ page }) => {
-	const preview = { kind: 'reset_preview', text: 'Global reset landing by EOD PST time. Enjoy', url: 'https://willreset.com/r/1', at: new Date(Date.now() - 2 * 3600_000).toISOString() };
+	const preview = { kind: 'reset_preview', text: 'Global reset landing by EOD PST time. Enjoy', url: 'https://x.com/thsottiaux/status/1', at: new Date(Date.now() - 2 * 3600_000).toISOString() };
 	let feed = [preview];
 	const thread = { id: ID, name: 'reset', cwd: '/tmp', host: 'local', status: { type: 'idle' }, turns: [] };
 	await page.route('**/api/**', async (route) => {
@@ -28,10 +28,10 @@ test('an announced global reset shows next to Codex usage until it lands', async
 	await expect(page.locator('.usage-limits')).toContainText('7d 48% left');
 	const notice = page.locator('.reset-announced');
 	await expect(notice).toContainText('Reset announced');
-	await expect(notice).toHaveAttribute('href', 'https://willreset.com/r/1');
+	await expect(notice).toHaveAttribute('href', 'https://x.com/thsottiaux/status/1');
 	await expect(notice).toHaveAttribute('data-yacwu-tooltip', /Expected by .+ \(in \d+ (h|min)/);
 
-	feed = [{ kind: 'reset', text: "It's done.", url: 'https://willreset.com/r/2', at: new Date().toISOString() }, preview];
+	feed = [{ kind: 'reset', text: "It's done.", url: 'https://x.com/thsottiaux/status/2', at: new Date().toISOString() }, preview];
 	await page.reload();
 	await expect(page.locator('.usage-limits')).toContainText('7d 48% left');
 	await expect(notice).toHaveCount(0);

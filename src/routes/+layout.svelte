@@ -362,7 +362,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	// Per host: model id -> the model a usage rate is learned for (see usageModelNames).
 	let usageModelNamesByHost = $state<Record<string, Record<string, string>>>({});
 	let accountUsageByHost = $state<Record<string, AccountUsage>>({});
-	// Announced global Codex resets (willreset.com, via /api/reset-feed).
+	// Announced global Codex resets (codex-resets.com, via /api/reset-feed).
 	let resetFeed = $state<ResetFeedEntry[]>([]);
 	let accountUsageFetchedAt = $state<Record<string, number>>({});
 	let accountUsagePending = $state<Record<string, boolean>>({});
@@ -6779,7 +6779,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									</button>
 								{/if}
 								{#if !activeClaude && announcedReset}
-									<a class="usage-window reset-announced" href={announcedReset.url} target="_blank" rel="noopener noreferrer" title={`OpenAI announced a global Codex limit reset ${fmtResetAnnouncement(announcedReset.at)}: “${announcedReset.text}” ${fmtResetDue(announcedReset)} Use what is left of this week's allowance before it lands. (willreset.com)`}>
+									<a class="usage-window reset-announced" href={announcedReset.url} target="_blank" rel="noopener noreferrer" title={`OpenAI announced a global Codex limit reset ${fmtResetAnnouncement(announcedReset.at)}: “${announcedReset.text}” ${fmtResetDue(announcedReset)} Use what is left of this week's allowance before it lands. (codex-resets.com)`}>
 										⚡ Reset announced
 									</a>
 								{/if}

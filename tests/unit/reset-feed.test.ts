@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { announcedGlobalReset, expectedResetAt } from '../../src/lib/reset-feed';
 
-const entry = (kind: string, text: string, at: string) => ({ kind, text, url: `https://willreset.com/r/${at}`, at });
+const entry = (kind: string, text: string, at: string) => ({ kind, text, url: `https://x.com/thsottiaux/status/${at}`, at });
 const now = Date.parse('2026-10-13T03:00:00Z');
 
 test('an announced reset is pending until one lands', () => {
@@ -63,4 +63,11 @@ test('historical estimates use ten recent gaps and do not roll forward when over
 	expect(history.gaps).toHaveLength(10);
 	expect(history.medianGapMs).toBe(86400_000);
 	expect(history.estimateAt).toBe(start + 20 * 86400_000);
+});
+
+
+test('structured schedule uses its explicit expected time, not a guessed timezone', () => {
+	const announced = { ...entry('reset_preview', 'Reset announced: Landing tomorrow before 10am PST', '2026-10-23T04:47:34Z'), expectedAt: '2026-10-23T17:00:00Z' };
+	expect(expectedResetAt(announced)).toBe(Date.parse('2026-10-23T17:00:00Z'));
+	expect(expectedResetAt({ ...announced, expectedAt: 'invalid' })).toBeNull();
 });

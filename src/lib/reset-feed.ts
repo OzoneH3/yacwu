@@ -1,9 +1,10 @@
-/** An entry of the willreset.com feed, as GET /api/reset-feed returns it. */
+/** An entry of the codex-resets.com feed, as GET /api/reset-feed returns it. */
 export interface ResetFeedEntry {
 	kind: string;
 	text: string;
 	url: string;
 	at: string;
+	expectedAt?: string | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -16,9 +17,8 @@ const LANDED = /\b(it'?s done|done\b|landed|propagated|in the bag|is live|went l
  * newest reset preview that talks about a reset, under a day old, made after
  * the current weekly window began (a reset announced before it has already
  * happened; the account's own readings say so) and not after a landed reset.
- * The feed's labels are not reliable on their own: it files chatter, and
- * even "It's done", as previews, and dates its own landed entries at the
- * announcement.
+ * Legacy preview labels can include chatter or completion posts, so the
+ * text checks remain conservative alongside the structured schedule data.
  */
 export function announcedGlobalReset(entries: ResetFeedEntry[], now: number, weekStartedAt: number | null = null): ResetFeedEntry | null {
 	const dated = entries.map((entry) => ({ entry, at: Date.parse(entry.at) })).filter(({ at }) => Number.isFinite(at));
@@ -36,11 +36,16 @@ function partsIn(ms: number, timeZone: string): Record<string, number> {
 }
 
 /**
- * When an announced reset is due: announcements say "by EOD (PST)", the end
+ * When an announced reset is due: prefer the source's explicit schedule.
+ * Older announcements say "by EOD (PST)", the end
  * of that day in Pacific time, where the Codex team is. Null when the post
  * names no time.
  */
 export function expectedResetAt(entry: ResetFeedEntry): number | null {
+	if (entry.expectedAt) {
+		const expected = Date.parse(entry.expectedAt);
+		return Number.isFinite(expected) ? expected : null;
+	}
 	if (!/\b(eod|end of (the )?day)\b/i.test(entry.text)) return null;
 	const posted = Date.parse(entry.at);
 	if (!Number.isFinite(posted)) return null;

@@ -18,7 +18,7 @@
 
 <section aria-labelledby="reset-history-title">
 	<h3 id="reset-history-title">Codex public reset reports</h3>
-	<p class="meta">Twitter/X reports via <a href="https://willreset.com" target="_blank" rel="noopener noreferrer">willreset.com</a>. Dates are report times, not verified resets of your account. The feed may show cached records when its source is unavailable. Banked resets and boosts are excluded.</p>
+	<p class="meta">Twitter/X reports via <a href="https://codex-resets.com" target="_blank" rel="noopener noreferrer">codex-resets.com</a>. Dates are report times, not verified resets of your account. The feed may show cached records when its source is unavailable. Banked resets and boosts are excluded.</p>
 	{#if announcement}
 		<p>Reset announced{due ? ` · expected by ${date(due)}` : ' · no precise time available'}: <a href={source(announcement.url)} target="_blank" rel="noopener noreferrer">{announcement.text}</a></p>
 	{/if}

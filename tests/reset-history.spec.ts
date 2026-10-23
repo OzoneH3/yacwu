@@ -7,9 +7,9 @@ for (const provider of ['codex', 'claude']) {
 		const host = provider === 'claude' ? 'claude' : 'local';
 		const thread = { id: 'reset-history', host, name: 'Reset history', cwd: '/project', status: { type: 'idle' }, turns: [] };
 		let feed = [
-			...['2026-10-20', '2026-10-17', '2026-10-15', '2026-10-11'].map((day) => ({ kind: 'reset', text: `Completed report ${day}`, at: day+'T00:00:00Z', url: `https://willreset.com/r/${day}` })),
-			{ kind: 'banked', text: 'Banked grant', at: '2026-10-21T00:00:00Z', url: 'https://willreset.com/r/banked' },
-			{ kind: 'reset_preview', text: 'Reset by EOD', at: '2026-10-23T10:00:00Z', url: 'https://willreset.com/r/preview' }
+			...['2026-10-20', '2026-10-17', '2026-10-15', '2026-10-11'].map((day) => ({ kind: 'reset', text: `Completed report ${day}`, at: day+'T00:00:00Z', url: `https://x.com/thsottiaux/status/${day}` })),
+			{ kind: 'banked', text: 'Banked grant', at: '2026-10-21T00:00:00Z', url: 'https://x.com/thsottiaux/status/banked' },
+			{ kind: 'reset_preview', text: 'Reset announced: Landing tomorrow', expectedAt: '2026-10-23T17:00:00Z', at: '2026-10-23T10:00:00Z', url: 'https://x.com/thsottiaux/status/preview' }
 		];
 		await page.route('**/api/**', async (route) => {
 			const path = new URL(route.request().url()).pathname;
@@ -35,9 +35,10 @@ for (const provider of ['codex', 'claude']) {
 		await expect(section).toContainText('typical gap already elapsed');
 		await expect(section).toContainText('Reset announced');
 		await expect(section).toContainText('cached records');
+		await expect(section.getByRole('link', { name: 'codex-resets.com', exact: true })).toHaveAttribute('href', 'https://codex-resets.com');
 		await section.locator('summary').click();
 		await expect(section.locator('tbody tr')).toHaveCount(4);
-		await expect(section.getByRole('link', { name: 'Completed report 2026-10-20' })).toHaveAttribute('href', 'https://willreset.com/r/2026-10-20');
+		await expect(section.getByRole('link', { name: 'Completed report 2026-10-20' })).toHaveAttribute('href', 'https://x.com/thsottiaux/status/2026-10-20');
 		await expect(section.locator('tbody')).not.toContainText('Banked grant');
 		feed = [];
 		await dialog.getByRole('button', { name: 'Refresh', exact: true }).click();

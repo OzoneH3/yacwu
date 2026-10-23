@@ -59,7 +59,7 @@ rules locally, and records usage/diagnostic journals on the server.
   sidebar wait clock visible while allowance readings refresh, including after
   reload without opening those sessions
 - ⚡ A global Codex limit reset announced by OpenAI (from the public
-  willreset.com feed) shows next to the Codex usage until it lands, so the
+  codex-resets.com API) shows next to the Codex usage until it lands, so the
   rest of the week's allowance can be used first (`YACWU_RESET_FEED=off`
   turns it off)
 - Codex Task allowance usage includes public reset reports, a history table, and an explicitly labelled estimate based on recent gaps; cached reports and personal account resets remain distinct.
