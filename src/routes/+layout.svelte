@@ -3117,12 +3117,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				// Clear from auto-send tracking since messages have been processed
 				sentAutoSendTo.delete(id);
 
-				// Restore finished states that were cleared
+				// Restore finished states that were cleared by the message send
 				for (const [sessionId, wasFinished] of Object.entries(finishedBefore)) {
 					if (wasFinished && !finishedSessions[sessionId]) {
 						finishedSessions[sessionId] = true;
 					}
 				}
+
+				// Keep checking and restoring for a bit in case backend updates arrive
+				let attempts = 0;
+				const restoreInterval = setInterval(() => {
+					for (const [sessionId, wasFinished] of Object.entries(finishedBefore)) {
+						if (wasFinished && !finishedSessions[sessionId]) {
+							finishedSessions[sessionId] = true;
+						}
+					}
+					if (++attempts >= 5) clearInterval(restoreInterval);
+				}, 50);
 			}
 		} catch {
 			// Silently fail if claim doesn't work
