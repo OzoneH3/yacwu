@@ -656,22 +656,8 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		return Object.values(relayStore.records).filter(r => r.to.thread === activeId && r.state === 'queued');
 	});
 
-	$effect(() => {
-		if (settings.autoSendRelayMessages && relayStore.records) {
-			for (const session of sessions) {
-				// Don't auto-send to active sessions or finished sessions
-				if (session.id === activeId || finishedSessions[session.id]) continue;
-				// Don't send multiple times to the same session
-				if (sentAutoSendTo.has(session.id)) continue;
-
-				const hasPending = Object.values(relayStore.records).some(r => r.to.thread === session.id && r.state === 'queued');
-				if (hasPending) {
-					sentAutoSendTo.add(session.id);
-					void claimRelayMessages(session.id);
-				}
-			}
-		}
-	});
+	// Auto-send disabled due to side effects on other sessions' finished states.
+	// Users can manually process relay messages with the button when ready.
 
 	// Notification sounds. Only live activity makes a sound: a question or
 	// error that appears because history loaded stays silent.
@@ -7527,18 +7513,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<button
 								class="mini"
 								type="button"
-								onclick={() => {
-									if (settings.autoSendRelayMessages) {
-										void claimRelayMessages(activeId!);
-									} else {
-										toggleRelayPopup();
-									}
-								}}
-								title={settings.autoSendRelayMessages ? 'Process queued relay messages' : 'View and manage queued relay messages'}
+								onclick={toggleRelayPopup}
+								title="View and manage queued relay messages"
 							>
 								Process pending messages
 							</button>
-							{#if relayPopupOpen && !settings.autoSendRelayMessages}
+							{#if relayPopupOpen}
 								<div class="relay-popup" role="dialog" aria-label="Pending relay messages">
 									<div class="relay-popup-header">
 										<h3>Pending relay messages ({activePendingRelayMessages.length})</h3>
