@@ -328,6 +328,19 @@ pub fn injection_race_with_early_turn_started_test() {
   sub.members |> should.equal(["msg-000b"])
 }
 
+pub fn claim_start_only_claims_for_a_known_idle_recipient_test() {
+  let core = fresh() |> connected(1)
+  let #(core, _) = completed(core, 1, 1, bob, "t0")
+  let #(core, _) = send(core, 2, "msg-0001", "hello")
+  let #(_, claim, _) = relay_core.claim_start(core, 3, to_bob())
+  should.be_true(option.is_some(claim))
+
+  let core = fresh() |> connected(1)
+  let #(core, _) = send(core, 2, "msg-0002", "hello")
+  let #(_, claim, _) = relay_core.claim_start(core, 3, to_bob())
+  claim |> should.equal(None)
+}
+
 pub fn missing_entry_is_unknown_and_recovers_test() {
   let core = fresh() |> connected(1)
   let #(_, effects) = send(core, 0, "msg-0001", "hello")

@@ -402,6 +402,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const RUNNING_TASKS_KEY = 'yacwu-running-tasks';
 	const INTERRUPTED_SESSIONS_KEY = 'yacwu-interrupted-sessions';
 	const FINISHED_SESSIONS_KEY = 'yacwu-finished-sessions';
+	const FINISHED_SESSION_KEY_PREFIX = 'yacwu-finished-session:';
 	const CLAUDE_ESTIMATE_BIAS_KEY = 'yacwu-claude-estimate-bias';
 	const DISMISSED_ATTENTION_KEY = 'yacwu-dismissed-attention';
 	const RESOLVED_QUESTIONS_KEY = 'yacwu-resolved-questions';
@@ -659,7 +660,9 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	// attempt is not repeated until the waiting set changes.
 	const relayDeliveryInFlight = new Set<string>();
 	const relayDeliveryFailed = new Map<string, string>();
+	let relayDeliveryVersion = $state(0);
 	$effect(() => {
+		void relayDeliveryVersion;
 		if (!settings.autoSendRelayMessages) return;
 		const targets = autoDeliveryTargets(
 			queuedRelayBySession,
@@ -1265,7 +1268,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (!thread || sessionHistoryLoaded[id] || sessionOpening[id]) return;
 			// Finished while nobody was listening (e.g. during a Yacwu restart).
 			if (thread.status?.type === 'idle' || thread.status?.type === 'notLoaded') {
-				if (threads[id]?.status === 'running') syncThreadRuntime(id, thread);
+				if (threads[id]?.status === 'running') {
+					syncThreadRuntime(id, thread);
+					const sessionId = agents[id] ? agentRootId(agents, agents[id]) : id;
+					if (thread.turns?.at(-1)?.status === 'completed') markSessionFinished(sessionId);
+					else clearFinishedSession(sessionId);
+				}
 				return;
 			}
 			const turn = thread.turns?.findLast((turn) => turn.status === 'inProgress');
@@ -1394,11 +1402,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		closeSidebar(false);
 	}
 
-	function clearFinishedSession(id: string) {
+	function clearFinishedSession(id: string, force = false) {
+		if (!force && id === activeId && document.visibilityState !== 'visible') return;
 		if (!finishedSessions[id]) return;
 		const { [id]: _read, ...remaining } = finishedSessions;
 		finishedSessions = remaining;
-		localStorage.setItem(FINISHED_SESSIONS_KEY, JSON.stringify(remaining));
+		try { localStorage.removeItem(FINISHED_SESSION_KEY_PREFIX + encodeURIComponent(id)); }
+		catch { /* Keep the in-page dismissal when storage is unavailable. */ }
 	}
 
 	function markSessionAttentionRead(id: string) {
@@ -1426,14 +1436,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function markSessionFinished(id: string) {
-		if (id === activeId || threads[id]?.error) return;
+		if ((id === activeId && document.visibilityState === 'visible') || threads[id]?.error) return;
 		if (Object.values(agents).some((agent) => agentRootId(agents, agent) === id && threads[agent.id]?.status === 'running')) return;
 		finishedSessions = { ...finishedSessions, [id]: true };
-		localStorage.setItem(FINISHED_SESSIONS_KEY, JSON.stringify(finishedSessions));
+		try { localStorage.setItem(FINISHED_SESSION_KEY_PREFIX + encodeURIComponent(id), 'true'); }
+		catch { /* The in-page mark still applies when storage is unavailable. */ }
 	}
 
 	function removeSession(id: string) {
 		rememberEmptySession(id, null);
+		clearFinishedSession(id, true);
 		sessions = sessions.filter((s) => s.id !== id);
 		sessionOrder = sessionOrder.filter((sessionId) => sessionId !== id);
 		localStorage.setItem(SESSION_ORDER_KEY, JSON.stringify(sessionOrder));
@@ -1501,6 +1513,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		clearStoppedResumeActions(threadId);
 		const agent = agents[threadId];
 		const sessionId = agent ? agentRootId(agents, agent) : threadId;
+		clearFinishedSession(sessionId, true);
 		runningTasks[threadId] = sessionId;
 		delete recoveringSessions[sessionId];
 		if (interruptedSessions[sessionId]) {
@@ -1725,6 +1738,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					syncThreadRuntime(threadId, thread);
 					const latest = thread.turns?.at(-1);
 					for (const item of latest?.items ?? []) upsertItem(threadId, item, false, latest?.id, true);
+					if (resolvedOutcome === 'idle' && latest?.status === 'completed') markSessionFinished(sessionId);
+					else if (resolvedOutcome === 'interrupted') clearFinishedSession(sessionId);
 					if (resolvedOutcome === 'interrupted' && !interruptedSessions[sessionId]) {
 						interruptedSessions[sessionId] = true;
 						addLocalNote(sessionId, `Task interrupted.\nReason: ${interruptionReason(thread, thread.status?.type !== 'notLoaded')}\nUse Continue interrupted task to resume.`, 'err');
@@ -3114,13 +3129,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		try {
 			const res = await fetch(threadApi(id, '/relay/deliver'), { method: 'POST' });
 			if (!res.ok) {
+				if (res.status === 409) {
+					relayDeliveryFailed.set(id, key);
+					await loadRelayLog(id);
+					return;
+				}
 				const data = await res.json().catch(() => ({}));
 				throw new Error(data.error ?? `could not send the waiting session messages (${res.status})`);
 			}
 			relayDeliveryFailed.delete(id);
-			const t = ensureThread(id);
-			t.status = 'running';
-			t.error = null;
 			addLocalNote(id, waiting.length === 1
 				? 'A waiting session message started a new prompt.'
 				: `${waiting.length} waiting session messages started a new prompt.`);
@@ -3130,6 +3147,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			void loadRelayLog(id);
 		} finally {
 			relayDeliveryInFlight.delete(id);
+			relayDeliveryVersion += 1;
 		}
 	}
 
@@ -5730,13 +5748,38 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const unlockSounds = () => { if (settings.sounds) soundPlayer.unlock(); };
 		window.addEventListener('pointerdown', unlockSounds);
 		window.addEventListener('keydown', unlockSounds);
-		// Clear all finished session indicators on any click.
-		document.addEventListener('click', () => {
-			finishedSessions = {};
-			localStorage.setItem(FINISHED_SESSIONS_KEY, JSON.stringify(finishedSessions));
-		});
+		const syncFinishedSessions = (event: StorageEvent) => {
+			if (event.key?.startsWith(FINISHED_SESSION_KEY_PREFIX)) {
+				try {
+					const id = decodeURIComponent(event.key.slice(FINISHED_SESSION_KEY_PREFIX.length));
+					if (event.newValue === 'true') finishedSessions = { ...finishedSessions, [id]: true };
+					else {
+						const { [id]: _removed, ...remaining } = finishedSessions;
+						finishedSessions = remaining;
+					}
+				} catch { /* Ignore a malformed per-session key. */ }
+				return;
+			}
+			if (event.key !== FINISHED_SESSIONS_KEY) return;
+			if (event.newValue === null) return;
+			try {
+				const saved = JSON.parse(event.newValue ?? '{}');
+				if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+					finishedSessions = {
+						...finishedSessions,
+						...Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, boolean] => entry[1] === true))
+					};
+				}
+			} catch { /* Keep the current marks if another tab wrote invalid data. */ }
+		};
+		window.addEventListener('storage', syncFinishedSessions);
 		// Besides SvelteKit's own polling, look for a new build when the tab comes back.
-		const checkOnVisible = () => { if (document.visibilityState === 'visible') checkForNewBuild(); };
+		const checkOnVisible = () => {
+			if (document.visibilityState === 'visible') {
+				checkForNewBuild();
+				if (activeId) clearFinishedSession(activeId);
+			}
+		};
 		document.addEventListener('visibilitychange', checkOnVisible);
 		const transferTitle = (element: Element) => {
 			const title = element.getAttribute('title');
@@ -5798,7 +5841,18 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				finishedSessions = Object.fromEntries(
 					Object.entries(savedFinished).filter((entry): entry is [string, boolean] => entry[1] === true)
 				);
+				for (const [id, finished] of Object.entries(finishedSessions)) {
+					try { localStorage.setItem(FINISHED_SESSION_KEY_PREFIX + encodeURIComponent(id), 'true'); }
+					catch { /* Keep migrated marks in memory if storage is full. */ }
+				}
 			}
+			for (let index = 0; index < localStorage.length; index += 1) {
+				const key = localStorage.key(index);
+				if (!key?.startsWith(FINISHED_SESSION_KEY_PREFIX) || localStorage.getItem(key) !== 'true') continue;
+				try { finishedSessions = { ...finishedSessions, [decodeURIComponent(key.slice(FINISHED_SESSION_KEY_PREFIX.length))]: true }; }
+				catch { /* Ignore malformed per-session keys. */ }
+			}
+			localStorage.removeItem(FINISHED_SESSIONS_KEY);
 		} catch {
 			finishedSessions = {};
 		}
@@ -5948,6 +6002,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			window.removeEventListener('online', checkStreamSoon);
 			window.removeEventListener('pointerdown', unlockSounds);
 			window.removeEventListener('keydown', unlockSounds);
+			window.removeEventListener('storage', syncFinishedSessions);
 			document.removeEventListener('visibilitychange', checkOnVisible);
 			tooltipObserver.disconnect();
 			window.removeEventListener('pointerover', onTooltipPointerOver);

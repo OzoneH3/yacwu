@@ -671,6 +671,7 @@ pub fn claim_start(
       case
         r.queue == []
         || option.is_some(r.reservation)
+        || r.runtime != Idle
         || !enabled(core, to.thread)
         || inflight(core, to.host) >= core.limits.max_inflight
       {
