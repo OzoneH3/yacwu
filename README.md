@@ -39,7 +39,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🗂️ Move a session to another folder from Session details (type it or browse,
   as for new sessions); it applies with your next message (Claude sessions
   bring their conversation along)
-- ✅ Completion badges mark finished background sessions until you open them
+- ✅ Completion badges persist across tabs for finished sessions until you
+  reopen them or start new work
 - 🔔 Soft sounds when a session finishes, asks a question, or hits an error;
   the speaker button at the top right mutes them, and resting on it opens a
   volume slider that previews each change
