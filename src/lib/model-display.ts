@@ -79,7 +79,8 @@ const claudeProfiles: Record<string, ModelDisplayProfile> = {
 const profiles: Array<[RegExp, ModelDisplayProfile]> = [
 	[/gpt 6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional', valueRating: 5 }],
 	[/gpt 5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: 4.5 }],
-	[/gpt 6\.1 sol/, { capability: 93, efficiency: 'Excellent', valueRating: 3 }],
+	[/gpt 6\.1 terra/, { capability: 88, efficiency: 'Excellent', valueRating: 4 }],
+	[/gpt 6\.1 sol/, { capability: 93, efficiency: 'Very good', valueRating: 3 }],
 	[/gpt 5\.6 terra/, { capability: 72, efficiency: 'Very good', valueRating: 3 }],
 	[/gpt 6(?:\.0)? sol/, { capability: 84, efficiency: 'Very good', valueRating: 2.5 }],
 	[/gpt 5\.6 sol/, { capability: 79, efficiency: 'Good', valueRating: 2 }],
@@ -127,7 +128,7 @@ export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices:
 		// Capability estimates are shared; cost dominance uses Copilot's fixed
 		// credit card across every token category and context tier, not allowance ratings.
 		const copilot = modelPickerGroups(choices.filter(isCopilotModel)).flatMap(group => {
-			const hasCurrentGpt = group.choices.some(c => /^copilot\/gpt-6(?:\.\d+)?-(?:luna|sol|astra)$/.test(c.id));
+			const hasCurrentGpt = group.choices.some(c => /^copilot\/gpt-6(?:\.\d+)?-(?:luna|sol|terra|astra)$/.test(c.id));
 			const scored = group.choices.filter(c => !hasCurrentGpt || !legacyGptModelIds.has(c.id.slice(8)))
 				.map((choice, index) => ({ choice, index, profile: modelDisplayProfile({ ...choice, id: choice.id.slice(8) }) }));
 			return scored.filter(a => !a.profile || !scored.some(b => b.choice.id !== a.choice.id && b.profile
@@ -146,7 +147,7 @@ export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices:
 		? choices.filter((choice) => !/^(?:gpt|o[1-9])(?:[-\s.]|$)/i.test(choice.id)
 			&& !/^gpt(?:[-\s.]|$)/i.test(choice.displayName))
 		: choices;
-	const hasCurrentGpt = providerChoices.some(choice => /^gpt-6(?:\.\d+)?-(?:luna|sol|astra)$/.test(choice.id));
+	const hasCurrentGpt = providerChoices.some(choice => /^gpt-6(?:\.\d+)?-(?:luna|sol|terra|astra)$/.test(choice.id));
 	const uniqueChoices = new Map<string, T>();
 	for (const choice of providerChoices) {
 		if (hasCurrentGpt && legacyGptModelIds.has(choice.id)) continue;

@@ -1,6 +1,6 @@
 # Model picker ratings
 
-Reviewed October 8, 2026. The implementation is in
+Reviewed October 27, 2026. The implementation is in
 [`model-display.ts`](../src/lib/model-display.ts).
 
 ## Ordering
@@ -14,8 +14,9 @@ GPT and Claude use the same rules:
 3. Keep unknown models after rated choices, without assigning speculative ratings.
    Claude catalogs exclude GPT choices from the adapter's optional Codex proxy.
 
-The GPT profiles and resulting order are unchanged: GPT-6 Luna, GPT-6.1 Sol,
-then GPT-6 Astra when all currently rated GPT choices are present.
+The current GPT profiles sort as GPT-6 Luna, GPT-6.1 Terra, GPT-6.1 Sol,
+then GPT-6 Astra when all are available. GPT-6.1 Terra also replaces the older
+GPT-6 Sol and GPT-5.6 Terra entries under the dominance rule.
 
 Claude aliases (`default`, `opus`, `sonnet`, `haiku`, and context variants) use
 the version in their catalog display name. Concrete versioned IDs take priority.
@@ -63,6 +64,23 @@ try Fable on tasks where their Opus evaluations fall short, as Anthropic advises
 | Opus 4.5 | 79 | Moderate/low | 1.5 |
 | Fable 5.1 | 100 | Moderate/low | 1.5 |
 | Fable 5 | 96 | Moderate/low | 1.0 |
+
+## GPT estimates
+
+GPT-6.1 Terra is positioned between Luna and Sol: its official announcement
+emphasizes visual reasoning, computer use, and scoped coding, while retaining
+Sol and Astra as the better choices for the hardest software-engineering work.
+Yacwu rates it below Sol in capability, but above Sol in efficiency because
+OpenAI reports half the standard API token price and faster completion on its
+computer-use benchmark. These are task-fit and relative-cost estimates, not
+claims that Terra is universally better than Luna or Sol.
+
+| Model | Capability estimate | Efficiency estimate | Value estimate |
+| --- | ---: | --- | ---: |
+| GPT-6 Luna | 70 | Exceptional | 5.0 |
+| GPT-6.1 Terra | 88 | Excellent | 4.0 |
+| GPT-6.1 Sol | 93 | Very good | 3.0 |
+| GPT-6 Astra | 100 | Moderate/low | 1.0 |
 
 The CLI-only catalog initially retained Haiku 4.5, Sonnet 5, Opus 5.5
 (including its default alias), and Fable 5.1. Discovery now supplements that
@@ -116,3 +134,10 @@ best available rated model and only choose advertised thinking settings.
 These are vendor-reported evaluations under different effort levels and
 harnesses. The estimates should be revisited as models change and local
 task-cost observations accumulate.
+
+- [GPT-6.1 Terra announcement](https://openai.com/index/introducing-gpt-6-1-terra/):
+  focuses on visual reasoning, computer use, and clearer writing; reports a
+  50% lower standard API price than GPT-6.1 Sol, a Terminal-Bench 4.0 result of
+  50.3% at maximum reasoning, and says Sol and Astra remain preferable for the
+  most complex software-engineering tasks. It also reports Terra's faster
+  completion on computer-use tasks and broad availability in Codex.

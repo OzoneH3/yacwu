@@ -6,6 +6,7 @@ const models = [
 	{ id: 'gpt-6-astra', displayName: 'GPT-6 Astra' },
 	{ id: 'gpt-5.6-luna', displayName: 'GPT-5.6 Luna' },
 	{ id: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol' },
+	{ id: 'gpt-6.1-terra', displayName: 'GPT-6.1 Terra' },
 	{ id: 'gpt-6-luna', displayName: 'GPT-6 Luna' },
 	{ id: 'gpt-5.6-terra', displayName: 'GPT-5.6 Terra' },
 	{ id: 'gpt-6-sol', displayName: 'GPT-6 Sol' }
@@ -26,6 +27,7 @@ describe('model display ranking', () => {
 			['gpt-6-astra', 1],
 			['gpt-5.6-luna', 4.5],
 			['gpt-6.1-sol', 3],
+			['gpt-6.1-terra', 4],
 			['gpt-6-luna', 5],
 			['gpt-5.6-terra', 3],
 			['gpt-6-sol', 2.5]
@@ -35,6 +37,7 @@ describe('model display ranking', () => {
 	test('hides known dominated models and sorts by efficiency then capability', () => {
 		expect(filterAndSortModelChoices(models).map((model) => model.id)).toEqual([
 			'gpt-6-luna',
+			'gpt-6.1-terra',
 			'gpt-6.1-sol',
 			'gpt-6-astra'
 		]);
@@ -155,6 +158,8 @@ test('legacy bare GPT names are hidden when a current GPT replacement is offered
  expect(legacy.map(modelDisplayProfile)).toEqual(legacy.map(() => null));
  const copilot = [...legacy, current, future].map(choice => ({ ...choice, id: `copilot/${choice.id}` }));
  expect(filterAndSortModelChoices(copilot).map(choice => choice.id)).toEqual(['copilot/gpt-6-luna', 'copilot/gpt-6.2-custom']);
+ const terra = { id: 'gpt-6.1-terra', displayName: 'GPT-6.1 Terra' };
+ expect(filterAndSortModelChoices([...legacy, terra, { id: 'gpt-6-sol', displayName: 'GPT-6 Sol' }, { id: 'gpt-5.6-terra', displayName: 'GPT-5.6 Terra' }])).toEqual([terra]);
 });
 
 
