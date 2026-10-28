@@ -2037,6 +2037,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				if (tid) sharedRuntime?.invalidate(runtimeUrl(tid));
 				if (tid) scheduleTaskUsageRefresh(tid);
 				if (tid) noteLiveActivity(tid);
+				// The allowance just moved: show the new reading without waiting
+				// for the next periodic sample (throttled per host).
+				if (tid && !agents[tid]) refreshQuotaUsage(sessionHost(tid));
 				// A session (not an agent) finished. A question or error sound
 				// for the same moment wins: the player keeps one per session.
 				if (tid && !agents[tid] && p.turn?.status === 'completed' && settings.sounds) {
@@ -3484,7 +3487,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	async function loadAccountUsage(host: string, force = false) {
 		const key = host || LOCAL_HOST;
 		const lastFetched = accountUsageFetchedAt[key] ?? 0;
-		if (accountUsagePending[key] || (!force && Date.now() - lastFetched < 120_000)) return;
+		// The server (and the Claude wrapper) keep their own two-minute floor on
+		// upstream reads; this only spares repeated identical answers.
+		if (accountUsagePending[key] || (!force && Date.now() - lastFetched < 60_000)) return;
 		accountUsagePending[key] = true;
 		accountUsageFetchedAt[key] = Date.now();
 		try {
@@ -5933,9 +5938,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		} catch { /* Defaults if storage is disabled. */ }
 		const runtimeCheckTimer = setInterval(() => void reconcileInterruptedSessions(), 15000);
 		loadSessions();
+		// Allowance windows move while tasks run: sample them every minute the
+		// tab is visible (each finished turn also asks for a fresh reading).
 		const stopAccountUsagePolling = observeWhileVisible(() => {
-			return forEachConcurrent(JSON.parse(accountUsageHostKey) as string[], 4, host => loadAccountUsage(host, true));
-		}, 5 * 60 * 1000, { immediate: false });
+			return forEachConcurrent(JSON.parse(accountUsageHostKey) as string[], 4, host => loadAccountUsage(host));
+		}, 60_000, { immediate: false });
 		const stopResetFeedPolling = observeWhileVisible(() => loadResetFeed(), 10 * 60 * 1000);
 		/** Every later `yacwu/connected` is a reconnect. */
 		let streamConnectedBefore = false;
