@@ -702,6 +702,44 @@ fn active_turn(
       let turns =
         decode.run(value, decode.at(["data"], decode.list(decode.dynamic)))
         |> result.unwrap([])
+      case in_progress(turns, generation) {
+        #(_, relay_core.FoundActive(_)) as found -> found
+        _ -> current_turn(cx, thread, timeout, generation)
+      }
+    }
+  }
+}
+
+// A metadata-only history page can lack usable running-turn state. Ask for
+// just the newest full turn before backing off; never load the full history.
+fn current_turn(
+  cx: Codex,
+  thread: String,
+  timeout: Int,
+  generation: Int,
+) -> #(Int, relay_core.RecoveryOutcome) {
+  let page =
+    codex.request_tracked(
+      cx,
+      "thread/turns/list",
+      json.object([
+        #("threadId", json.string(thread)),
+        #("limit", json.int(1)),
+        #("sortDirection", json.string("desc")),
+        #("itemsView", json.string("full")),
+      ]),
+      timeout,
+    )
+  case page.result {
+    Error(failure) -> #(0, relay_core.ReadFailed(describe(failure)))
+    Ok(_) if page.generation != generation -> #(
+      0,
+      relay_core.ReadFailed("the connection changed between recovery reads"),
+    )
+    Ok(value) -> {
+      let turns =
+        decode.run(value, decode.at(["data"], decode.list(decode.dynamic)))
+        |> result.unwrap([])
       in_progress(turns, generation)
     }
   }

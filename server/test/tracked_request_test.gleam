@@ -222,6 +222,28 @@ pub fn lifecycle_carries_generations_test() {
     process.receive(life, 1000)
   g |> should.equal(first)
 
+  // A mid-turn reconnect may first see an item. Emit one recovery signal,
+  // then suppress repeated item events for the same thread/turn.
+  script_stub.notify(
+    control,
+    "item/started",
+    json.object([
+      #("threadId", json.string("thr-recovered")),
+      #("turnId", json.string("turn-live")),
+    ]),
+  )
+  let assert Ok(codex.TurnStarted("stub", _, "thr-recovered", "turn-live")) =
+    process.receive(life, 1000)
+  script_stub.notify(
+    control,
+    "item/completed",
+    json.object([
+      #("threadId", json.string("thr-recovered")),
+      #("turnId", json.string("turn-live")),
+    ]),
+  )
+  process.receive(life, 100) |> should.equal(Error(Nil))
+
   process.send(control, script_stub.Kill)
   let assert Ok(codex.Disconnected("stub", gone)) = process.receive(life, 2000)
   gone |> should.equal(first)

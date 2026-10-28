@@ -358,6 +358,14 @@ pub fn recovery_without_usable_turn_does_not_steer_test() {
       #("nextCursor", json.null()),
     ]),
   )
+  let assert Ok(full) = script_stub.expect(b.events, "thread/turns/list", 2000)
+  script_stub.reply(
+    b.control,
+    full.id,
+    json.object([
+      #("data", json.preprocessed_array([turn_json("t1", "completed")])),
+    ]),
+  )
   script_stub.collect(b.events, "turn/steer", 400) |> should.equal([])
   let assert Ok(m) = relay.get_message(r, "msg-0001")
   m.state |> should.equal(relay_core.Queued)
@@ -400,4 +408,57 @@ pub fn owner_death_around_injected_start_test() {
   let assert Ok(Some(_)) = process.receive(claimed, 1000)
   wait_state(r, "msg-0001", relay_core.Uncertain, 1000) |> should.be_true
   None |> should.equal(None)
+}
+
+// A server reconnect missed turn/started. Live item activity must recover
+// steering even while a history read is still inconclusive/in flight.
+pub fn live_item_recovers_steering_after_missed_start_test() {
+  let #(r, _a, b) = setup(2000)
+  send(r, "msg-live", "b", "thr-live")
+  let assert Ok(read) = script_stub.expect(b.events, "thread/read", 2000)
+  thread_read_reply(b, read, "active")
+  let assert Ok(_page) = script_stub.expect(b.events, "thread/turns/list", 2000)
+  script_stub.notify(
+    b.control,
+    "item/started",
+    json.object([
+      #("threadId", json.string("thr-live")),
+      #("turnId", json.string("running-turn")),
+      #(
+        "item",
+        json.object([
+          #("id", json.string("tool-1")),
+          #("type", json.string("commandExecution")),
+        ]),
+      ),
+    ]),
+  )
+  let assert Ok(steer) = script_stub.expect(b.events, "turn/steer", 2000)
+  param(steer, ["expectedTurnId"]) |> should.equal("running-turn")
+}
+
+pub fn recovery_retries_current_turn_with_full_view_test() {
+  let #(r, _a, b) = setup(2000)
+  send(r, "msg-full", "b", "thr-full")
+  let assert Ok(read) = script_stub.expect(b.events, "thread/read", 2000)
+  thread_read_reply(b, read, "active")
+  let assert Ok(page) = script_stub.expect(b.events, "thread/turns/list", 2000)
+  script_stub.reply(
+    b.control,
+    page.id,
+    json.object([
+      #("data", json.preprocessed_array([turn_json("old", "completed")])),
+    ]),
+  )
+  let assert Ok(full) = script_stub.expect(b.events, "thread/turns/list", 2000)
+  param(full, ["itemsView"]) |> should.equal("full")
+  script_stub.reply(
+    b.control,
+    full.id,
+    json.object([
+      #("data", json.preprocessed_array([turn_json("current", "inProgress")])),
+    ]),
+  )
+  let assert Ok(steer) = script_stub.expect(b.events, "turn/steer", 2000)
+  param(steer, ["expectedTurnId"]) |> should.equal("current")
 }

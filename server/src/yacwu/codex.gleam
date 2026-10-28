@@ -524,6 +524,7 @@ type State {
     /// Tracked tickets already written, mapped to their wire ids.
     tickets: Dict(Int, Int),
     lifecycle: List(#(Pid, Subject(Lifecycle))),
+    lifecycle_turns: Dict(String, String),
     /// Questions a backend asked the user (`item/tool/requestUserInput`),
     /// by item id, with the request's wire id to answer under.
     user_input: Dict(String, Dynamic),
@@ -567,6 +568,7 @@ fn initial_state(self: Codex, label: String, transport: Transport) -> State {
     generation: 0,
     tickets: dict.new(),
     lifecycle: [],
+    lifecycle_turns: dict.new(),
     user_input: dict.new(),
     claude_read_only_support: False,
   )
@@ -1747,22 +1749,62 @@ fn process_line(state: State, line: BitArray) -> State {
             "turn/started" | "turn/completed" -> sample_usage(state)
             _ -> state
           }
-          case
+          // Live items restore a turn whose start happened before reconnect.
+          // Remember the announced turn so item traffic does not cause repeated
+          // lifecycle notifications and task-recovery persistence writes.
+          let state = case
             method,
             jsonx.field_string(msg, ["params", "threadId"]),
             jsonx.field_string(msg, ["params", "turn", "id"])
+            |> result.or(jsonx.field_string(msg, ["params", "turnId"]))
           {
-            "turn/started", Ok(thread), Ok(turn) ->
+            "turn/started", Ok(thread), Ok(turn) -> {
               emit_lifecycle(
                 state,
                 TurnStarted(state.label, state.generation, thread, turn),
               )
-            "turn/completed", Ok(thread), Ok(turn) ->
+              State(
+                ..state,
+                lifecycle_turns: dict.insert(
+                  state.lifecycle_turns,
+                  thread,
+                  turn,
+                ),
+              )
+            }
+            "turn/completed", Ok(thread), Ok(turn) -> {
               emit_lifecycle(
                 state,
                 TurnCompleted(state.label, state.generation, thread, turn),
               )
-            _, _, _ -> Nil
+              State(
+                ..state,
+                lifecycle_turns: dict.delete(state.lifecycle_turns, thread),
+              )
+            }
+            "item/started", Ok(thread), Ok(turn)
+            | "item/completed", Ok(thread), Ok(turn)
+              if thread != "" && turn != ""
+            -> {
+              case dict.get(state.lifecycle_turns, thread) == Ok(turn) {
+                True -> state
+                False -> {
+                  emit_lifecycle(
+                    state,
+                    TurnStarted(state.label, state.generation, thread, turn),
+                  )
+                  State(
+                    ..state,
+                    lifecycle_turns: dict.insert(
+                      state.lifecycle_turns,
+                      thread,
+                      turn,
+                    ),
+                  )
+                }
+              }
+            }
+            _, _, _ -> state
           }
           let state =
             State(
@@ -2377,6 +2419,7 @@ fn fail_all(state: State, message: String) -> State {
     tickets: dict.new(),
     user_input: dict.new(),
     generation: 0,
+    lifecycle_turns: dict.new(),
     buffer: <<>>,
     decoder: ws.new_decoder(),
   )
