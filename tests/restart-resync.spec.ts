@@ -51,7 +51,7 @@ test('a reconnected event stream catches the page up on what it missed', async (
 
 	await expect(page.getByText('Written while Yacwu restarted.')).toBeVisible();
 	await expect(page.locator('.item.agent', { hasText: 'Before the restart.' })).toHaveCount(1);
-	await expect(page.getByRole('link', { name: 'Idle Ending session' })).toBeVisible();
+	await expect(page.locator('[data-session-row-id="ending-session"] .run-dot')).toHaveAttribute('aria-label', 'Idle');
 	const busyRow = page.locator('.session-row', { has: page.getByRole('link', { name: 'Running Busy session' }) });
 	await expect(busyRow.locator('.session-progress-percent')).toHaveText('60%');
 });
