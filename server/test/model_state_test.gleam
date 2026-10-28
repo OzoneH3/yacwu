@@ -1,5 +1,8 @@
+import gleam/dynamic/decode
+import gleam/json
 import gleam/option.{None, Some}
 import gleam/string
+import gleeunit/should
 import simplifile
 import yacwu/model_state
 
@@ -62,4 +65,28 @@ pub fn missing_rollout_returns_error_test() {
       "/definitely/missing/yacwu-rollout.jsonl",
     )
     == Error(Nil)
+}
+
+pub fn reads_selected_model_from_alternative_backend_thread_read_test() {
+  let assert Ok(read) =
+    json.parse(
+      "{\"thread\":{\"path\":null},\"model\":\"claude-opus-5-5\",\"reasoningEffort\":\"high\"}",
+      decode.dynamic,
+    )
+  model_state.thread_read_settings(read)
+  |> should.equal(model_state.Persisted(
+    model: Some("claude-opus-5-5"),
+    effort: Some("high"),
+  ))
+}
+
+pub fn backend_settings_fill_only_missing_rollout_values_test() {
+  model_state.merge_persisted_settings(
+    model_state.Persisted(model: Some("claude-opus-5-5"), effort: None),
+    model_state.Persisted(model: Some("default"), effort: Some("high")),
+  )
+  |> should.equal(model_state.Persisted(
+    model: Some("claude-opus-5-5"),
+    effort: Some("high"),
+  ))
 }

@@ -196,6 +196,31 @@ pub type Persisted {
   Persisted(model: Option(String), effort: Option(String))
 }
 
+/// Settings reported directly by a backend's `thread/read` response. Claude
+/// stores these on its thread record but has no Codex rollout file, so this is
+/// the durable fallback when the process-local override cache is gone.
+pub fn thread_read_settings(read: decode.Dynamic) -> Persisted {
+  Persisted(
+    model: jsonx.field_string(read, ["model"]) |> option.from_result,
+    effort: case jsonx.field_string(read, ["reasoningEffort"]) {
+      Ok(effort) -> Some(effort)
+      Error(_) -> jsonx.field_string(read, ["effort"]) |> option.from_result
+    },
+  )
+}
+
+/// Keep durable rollout values where available and fill gaps from backend
+/// thread metadata.
+pub fn merge_persisted_settings(
+  rollout: Persisted,
+  backend: Persisted,
+) -> Persisted {
+  Persisted(
+    model: option.or(rollout.model, backend.model),
+    effort: option.or(rollout.effort, backend.effort),
+  )
+}
+
 /// Read the latest persisted turn context from a rollout file on this
 /// machine. Returns `Error(Nil)` when the file is missing or holds no turn
 /// context.
@@ -279,10 +304,9 @@ pub type ModelState {
   ModelState(settings: Settings, models: List(ModelChoice))
 }
 
-/// Effective model settings for a thread. `profile` carries the session's
-/// selected codex profile settings (if any), which sit between what the
-/// thread itself has persisted and the base config: a profile-created session
-/// must report the profile's model even before its first turn persists it.
+/// Effective model settings for a thread. Rollout values take precedence,
+/// with backend-reported thread settings filling any missing values. `profile`
+/// carries the selected Codex profile settings, before the base config.
 pub fn get_thread_model_state(
   codex: Codex,
   store: Store,
@@ -313,13 +337,16 @@ pub fn get_thread_model_state(
           ]),
         )
       {
-        Ok(read) ->
-          case jsonx.field_string(read, ["thread", "path"]) {
+        Ok(read) -> {
+          let rollout = case jsonx.field_string(read, ["thread", "path"]) {
             Ok(path) ->
               read_rollout(path)
               |> result.unwrap(Persisted(None, None))
             Error(_) -> Persisted(None, None)
           }
+          let backend = thread_read_settings(read)
+          merge_persisted_settings(rollout, backend)
+        }
         Error(_) -> Persisted(None, None)
       }
       let config = configured_settings(codex)
