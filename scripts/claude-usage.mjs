@@ -66,6 +66,7 @@ export function createClaudeUsageReader({
   let retryAt = 0;
   let lastSuccess = 0;
   let rateLimited = false;
+  let rateLimitStreak = 0;
   /** @type {Promise<ReturnType<typeof claudeRateLimits> & {usageError?: {code: string, retryAt: number} | null}> | undefined} */
   let pending;
   /** @type {string | undefined} */
@@ -73,8 +74,10 @@ export function createClaudeUsageReader({
   function currentReading(reserve = 10) {
     const limits = cached.rateLimits;
     const blocked = reserve > 0 && [limits.primary, limits.secondary].some(window => window && window.usedPercent >= 100 - reserve && window.resetsAt !== null);
+    const nearReserve = reserve > 0 && [limits.primary, limits.secondary].some(window => window && window.usedPercent >= 90 - reserve);
+    const freshness = blocked ? 900_000 : nearReserve ? 120_000 : 300_000;
     return [limits.primary, limits.secondary].every(window => window && (window.resetsAt === null || window.resetsAt * 1000 > now()))
-      && lastSuccess > 0 && now() - lastSuccess < (blocked ? 900_000 : 120_000);
+      && lastSuccess > 0 && now() - lastSuccess < freshness;
   }
   function unavailable() {
     return { ...claudeRateLimits(null), usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
@@ -122,8 +125,14 @@ export function createClaudeUsageReader({
           signal: AbortSignal.timeout(8_000)
         });
         if (response.status === 429) {
-          const retry = Number(response.headers.get('retry-after'));
-          retryAt = now() + Math.max(120_000, Number.isFinite(retry) ? retry * 1000 : 0);
+          rateLimitStreak++;
+          const header = response.headers.get('retry-after');
+          const seconds = header === null ? NaN : Number(header);
+          const date = header === null ? NaN : Date.parse(header);
+          const providerDelay = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000
+            : Number.isFinite(date) ? Math.max(0, date - now()) : 0;
+          const backoff = Math.min(1_800_000, 120_000 * 2 ** Math.min(rateLimitStreak - 1, 4));
+          retryAt = now() + Math.max(backoff, providerDelay);
           nextRead = retryAt;
           rateLimited = true;
         }
@@ -139,6 +148,7 @@ export function createClaudeUsageReader({
         if (resets.length) nextRead = Math.min(nextRead, ...resets);
         retryAt = 0;
         rateLimited = false;
+        rateLimitStreak = 0;
       } catch {
         // A previously verified reading below the requested reserve remains
         // sufficient when the endpoint is temporarily unavailable.

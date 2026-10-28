@@ -304,8 +304,9 @@ YACWU_BACKENDS="claude=node ./scripts/claude-backend.mjs ./claude-codex/dist/src
 The Claude wrapper supplies the 5-hour and 7-day subscription allowance using
 Claude Code's local login (`~/.claude/.credentials.json`, or under
 `CLAUDE_CONFIG_DIR`). It also accepts `CLAUDE_CODE_OAUTH_TOKEN`. Account reads
-are cached for two minutes and back off when rate limited; unavailable
-subscription data leaves the allowance windows hidden.
+are cached for five minutes when comfortably above the reserve, two minutes
+near it, and back off progressively when rate limited; unavailable subscription
+data leaves the allowance windows hidden.
 Model discovery merges the CLI's aliases with concrete model IDs returned by
 the signed-in account's Models API. This lets newly available models appear
 even when the Agent SDK's bundled CLI catalog predates their release. If the
@@ -677,9 +678,9 @@ not cancel the turn automatically.
 The waiting/status/stop prompt closes automatically when that worker reports
 new activity or its turn ends.
 
-Account polling is shared per backend: allowance reads are cached for two
-minutes, account identity for fifteen minutes, and concurrent reads share one
-pending request. Browser allowance requests time out after eight seconds and
+Account polling is shared per backend: allowance reads are cached for at least
+two minutes, account identity for fifteen minutes, and concurrent reads share
+one pending request. Browser allowance requests time out after eight seconds and
 retain the last displayed values. A percentage remains visible when its reset
 timestamp is unavailable.
 While an allowance is depleted or below Claude's reserve and its reset time is
@@ -709,14 +710,16 @@ retry delay); unanswered history checks retry after thirty seconds.
 Sessions waiting for Claude's reserve or a depleted Codex allowance show a clock
 with the reset time when available. If both readings are unavailable, new
 tasks remain blocked until the allowance can be verified. Claude usage is
-checked before each new task. Recent valid readings are reused for up to two
-minutes; unknown readings and elapsed reset windows trigger a refresh. If the
+checked before each new task. Recent valid readings are reused for five minutes
+when comfortably above the reserve, or two minutes near it; unknown readings
+and elapsed reset windows trigger a refresh. If the
 usage endpoint is rate limited, its retry delay is respected and displayed
 when starts cannot be verified. When refresh fails, a last verified reading
 below the session reserve remains usable; unknown or reserve-level readings
 still block new work.
 Repeated forced checks after a failed read are throttled to one attempt every
-two minutes; endpoint rate limits take precedence.
+two minutes; repeated rate limits increase the backoff and the endpoint's retry
+delay takes precedence.
 
 Configured Codex and Copilot account limits retain the last verified usage
 reading through refresh errors for up to five minutes from that reading. Missing

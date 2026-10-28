@@ -193,7 +193,7 @@ test('fresh usage survives repeated starts and forced reads respect HTTP 429 bac
 	await read();
 	for (let i = 0; i < 5; i++) expect((await read({ force: true })).rateLimits.primary?.usedPercent).toBe(10);
 	expect(calls).toBe(1);
-	time += 120_001;
+	time += 300_001;
 	const failed = await read({ force: true });
 	expect(failed).toMatchObject({ usageError: { code: 'rate_limited' } });
 	for (let i = 0; i < 5; i++) await read({ force: true });
@@ -254,4 +254,59 @@ test('usage statistics preserve reported cumulative counters and reject invalid 
 	expect(reportedTokenStatistics({ total, last: { totalTokens: 100 } })).toEqual(total);
 	expect(reportedTokenStatistics({ total: { ...total, outputTokens: -1 } })).toBeNull();
 	expect(reportedTokenStatistics({ last: total })).toBeNull();
+});
+
+test('Claude usage reads are shared for five minutes when comfortably above reserve', async () => {
+	let time = Date.parse('2026-10-08T14:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => { calls++; return Response.json({ five_hour: { utilization: 30, resets_at: '2026-10-08T15:00:00Z' }, seven_day: { utilization: 30, resets_at: '2026-10-15T15:00:00Z' } }); }
+	});
+	await read({ force: true });
+	for (let i = 0; i < 4; i++) { time += 60_000; await read({ force: true }); }
+	expect(calls).toBe(1);
+	time += 60_000;
+	await read({ force: true });
+	expect(calls).toBe(2);
+});
+
+test('Claude usage backs off progressively after repeated 429s and honors HTTP-date retry', async () => {
+	let time = Date.parse('2026-10-08T14:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => {
+			calls++;
+			return new Response('', { status: 429, headers: calls === 3 ? { 'retry-after': new Date(time + 900_000).toUTCString() } : {} });
+		}
+	});
+	const first = await read({ force: true });
+	expect(first.usageError?.retryAt).toBe(time + 120_000);
+	time += 120_000;
+	const second = await read({ force: true });
+	expect(second.usageError?.retryAt).toBe(time + 240_000);
+	time += 240_000;
+	const third = await read({ force: true });
+	expect(third.usageError?.retryAt).toBe(time + 900_000);
+	time += 899_000;
+	await read({ force: true });
+	expect(calls).toBe(3);
+});
+
+
+test('a reserve near the last known usage refreshes in two minutes', async () => {
+	let time = Date.parse('2026-10-08T14:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => { calls++; return Response.json({ five_hour: { utilization: 82, resets_at: '2026-10-08T15:00:00Z' }, seven_day: { utilization: 20, resets_at: '2026-10-15T15:00:00Z' } }); }
+	});
+	await read({ force: true, reserve: 10 });
+	time += 120_000;
+	await read({ force: true, reserve: 10 });
+	expect(calls).toBe(2);
 });
