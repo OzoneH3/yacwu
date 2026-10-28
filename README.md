@@ -114,7 +114,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 📨 Session messages: agents in Codex and Claude sessions on this machine can
   message each other; a working recipient gets them at its next input
   boundary (including after a server reconnect), an idle one with its next
-  prompt, a **Send now** button, or automatically with the auto-send setting (see [docs/relay.md](docs/relay.md))
+  prompt, a **Send now** button, or automatically with the auto-send setting;
+  messages blocked by Claude's allowance stay queued (see [docs/relay.md](docs/relay.md))
 - ⚙️ Settings menu (sidebar gear) for browser-wide preferences: theme, Enter
   to send, activity view, output collapsing, session rule defaults, Claude
   progress reminders and time-left correction, Claude allowance lockout %,

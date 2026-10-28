@@ -190,7 +190,7 @@ export function attributeRelayPart(
 export function relayStatusLabel(record: RelayRecord): string {
 	switch (record.state) {
 		case 'queued':
-			return 'Queued in server memory until the recipient starts or continues a turn (lost if the server restarts)';
+			return `Queued until the recipient starts or continues a turn${record.reason ? ` (${record.reason})` : ''}`;
 		case 'sending':
 			return 'Sending';
 		case 'accepted':

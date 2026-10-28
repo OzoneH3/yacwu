@@ -126,7 +126,7 @@ test('a queued message is updated in place to accepted, and another to uncertain
 	const notices = page.locator('.relay-notice');
 	await expect(notices).toHaveCount(1);
 	await expect(notices.first()).toContainText('Message from session relay-alice');
-	await expect(notices.first()).toContainText('Queued in server memory');
+	await expect(notices.first()).toContainText('Queued until the recipient');
 
 	await emitRelay(page, rec({ state: 'sending', submission: 'rs-ep-1', version: 2 }));
 	await emitRelay(page, rec({ state: 'accepted', submission: 'rs-ep-1', turnId: 'turn-8', generation: 5, version: 3 }));

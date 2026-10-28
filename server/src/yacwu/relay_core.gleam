@@ -309,6 +309,57 @@ pub fn classify(provider: Provider, kind: Kind, message: String) -> Class {
   }
 }
 
+/// The Claude quota guard returns these -32000 errors before forwarding a
+/// turn/start to its adapter. A matching message can therefore be requeued.
+fn claude_quota_refusal(
+  provider: Provider,
+  kind: Kind,
+  code: Int,
+  message: String,
+) -> Bool {
+  case provider, kind, code {
+    ClaudeAdapter, Start, -32_000 -> {
+      let allowance =
+        {
+          string.starts_with(message, "Claude 5-hour allowance has ")
+          || string.starts_with(message, "Claude 7-day allowance has ")
+        }
+        && string.contains(
+          message,
+          "% remaining. Tasks are stopped and new starts blocked at ",
+        )
+        && string.ends_with(message, "% remaining.")
+      let unavailable =
+        string.starts_with(
+          message,
+          "Cannot verify Claude 5-hour and 7-day allowance. New tasks are blocked until usage is available to protect the ",
+        )
+        && string.ends_with(message, "% reserve.")
+      let limited =
+        string.starts_with(
+          message,
+          "Claude usage endpoint is temporarily rate limited. Try again after ",
+        )
+        && string.contains(message, ". Tasks remain blocked until the ")
+        && string.ends_with(message, "% reserve can be checked.")
+      allowance || unavailable || limited
+    }
+    _, _, _ -> False
+  }
+}
+
+fn classify_reply(
+  provider: Provider,
+  kind: Kind,
+  code: Int,
+  message: String,
+) -> Class {
+  case claude_quota_refusal(provider, kind, code, message) {
+    True -> Transient
+    False -> classify(provider, kind, message)
+  }
+}
+
 /// Whether a failed recovery read proves the thread does not exist.
 pub fn missing_thread(message: String) -> Bool {
   string.starts_with(message, "thread not found:")
@@ -738,8 +789,8 @@ pub fn finish(
           let core = put_recipient(core, sub.to, backoff(core, r, now))
           settle(core, sub.members, Uncertain, reason, "")
         }
-        BackendError(_, message) ->
-          case classify(sub.provider, sub.kind, message) {
+        BackendError(code, message) ->
+          case classify_reply(sub.provider, sub.kind, code, message) {
             Permanent -> settle(core, sub.members, Rejected, message, "")
             Unlisted -> {
               let core = put_recipient(core, sub.to, backoff(core, r, now))

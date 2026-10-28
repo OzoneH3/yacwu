@@ -171,6 +171,7 @@ describe('status wording', () => {
 		expect(relayStatusLabel(record('a'))).toContain('does not confirm the model has read it');
 		expect(relayStatusLabel(record('a', { ack: 'adapterRecorded' }))).toContain('may not forward it');
 		expect(relayStatusLabel(record('a', { state: 'uncertain' }))).toContain('not retried automatically');
-		expect(relayStatusLabel(record('a', { state: 'queued' }))).toContain('lost if the server restarts');
+		expect(relayStatusLabel(record('a', { state: 'queued', reason: 'Claude allowance is below reserve' }))).toContain('Claude allowance is below reserve');
+		expect(relayStatusLabel(record('a', { state: 'queued' }))).not.toContain('lost if the server restarts');
 	});
 });

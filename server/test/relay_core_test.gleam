@@ -847,3 +847,71 @@ pub fn restart_restores_open_messages_test() {
     )
   let assert Ok(relay_core.Duplicate(Some(_))) = result
 }
+
+pub fn claude_quota_block_keeps_messages_queued_test() {
+  let core = bob_running("t0")
+  let #(core, _) = completed(core, 1, 1, bob, "t0")
+  let #(core, _) = send_as(core, 2, "msg-quota", "hello", ClaudeAdapter)
+  let #(core, claim, _) = relay_core.claim_start(core, 3, to_bob())
+  let assert Some(#(start, _)) = claim
+  let core = relay_core.dispatched(core, start.id)
+  let #(core, _) =
+    relay_core.finish(
+      core,
+      4,
+      start.id,
+      1,
+      BackendError(
+        -32_000,
+        "Claude 5-hour allowance has 7% remaining. Tasks are stopped and new starts blocked at 10% remaining.",
+      ),
+    )
+  state_of(core, "msg-quota") |> should.equal(Queued)
+  let assert Ok(m) = relay_core.message(core, "msg-quota")
+  m.reason
+  |> should.equal(
+    "Claude 5-hour allowance has 7% remaining. Tasks are stopped and new starts blocked at 10% remaining.",
+  )
+}
+
+pub fn claude_quota_error_classification_stays_narrow_test() {
+  let cases = [
+    #(
+      -32_000,
+      "Claude 7-day allowance has 4% remaining. Tasks are stopped and new starts blocked at 5% remaining.",
+      Queued,
+    ),
+    #(
+      -32_000,
+      "Cannot verify Claude 5-hour and 7-day allowance. New tasks are blocked until usage is available to protect the 10% reserve.",
+      Queued,
+    ),
+    #(
+      -32_000,
+      "Claude usage endpoint is temporarily rate limited. Try again after 20:28:13. Tasks remain blocked until the 10% reserve can be checked.",
+      Queued,
+    ),
+    #(
+      -32_603,
+      "Claude 5-hour allowance has 7% remaining. Tasks are stopped and new starts blocked at 10% remaining.",
+      Uncertain,
+    ),
+    #(
+      -32_000,
+      "Claude 5-hour allowance has changed, but acceptance is unknown",
+      Uncertain,
+    ),
+  ]
+  list.each(cases, fn(entry) {
+    let #(code, message, expected) = entry
+    let core = bob_running("t0")
+    let #(core, _) = completed(core, 1, 1, bob, "t0")
+    let #(core, _) = send_as(core, 2, "msg-check", "hello", ClaudeAdapter)
+    let #(core, claim, _) = relay_core.claim_start(core, 3, to_bob())
+    let assert Some(#(start, _)) = claim
+    let core = relay_core.dispatched(core, start.id)
+    let #(core, _) =
+      relay_core.finish(core, 4, start.id, 1, BackendError(code, message))
+    state_of(core, "msg-check") |> should.equal(expected)
+  })
+}
