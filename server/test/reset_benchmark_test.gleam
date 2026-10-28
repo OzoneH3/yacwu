@@ -111,3 +111,12 @@ pub fn missed_scheduled_reset_does_not_authorize_benchmark_spending_test() {
   )
   |> should.be_ok
 }
+
+pub fn automatic_attempts_are_skipped_for_the_current_reset_test() {
+  let journal =
+    "{\"event\":\"benchmarkAutoAttempt\",\"model\":\"gpt-6.1-sol\",\"effort\":\"ultra\",\"resetsAt\":1791871200}\n"
+  reset_benchmark.attempted(journal, 1_791_871_230)
+  |> should.equal([#("gpt-6.1-sol", "ultra")])
+  reset_benchmark.attempted(journal, 1_791_871_261)
+  |> should.equal([])
+}

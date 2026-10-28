@@ -4385,13 +4385,22 @@ fn reset_benchmark_check(ctx: Context) -> Nil {
     let combinations =
       reset_benchmark.plan(
         list.map(catalog.models, fn(model) { #(model.id, model.efforts) }),
-        reset_benchmark.measured(usage.journal(hosts.local)),
+        list.append(
+          reset_benchmark.measured(usage.journal(hosts.local)),
+          reset_benchmark.attempted(usage.journal(hosts.local), resets_at),
+        ),
       )
     use <- bool.guard(combinations == [], Error(Nil))
     // Fails quietly while other work runs or a benchmark is already going;
     // the next check tries again.
     use _ <- result.try(
-      benchmark.start_auto(ctx.registry, hosts.local, cx, combinations)
+      benchmark.start_auto(
+        ctx.registry,
+        hosts.local,
+        cx,
+        combinations,
+        resets_at,
+      )
       |> result.replace_error(Nil),
     )
     Ok(#(announcement, used, combinations))

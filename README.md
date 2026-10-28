@@ -64,10 +64,10 @@ rules locally, and records usage/diagnostic journals on the server.
   rest of the week's allowance can be used first (`YACWU_RESET_FEED=off`
   turns it off)
 - Codex Task allowance usage includes public reset reports, a history table, and an explicitly labelled estimate based on recent gaps; cached reports and personal account resets remain distinct.
-- 🧪 While such a reset is announced and nothing else runs, Yacwu spends the
-  week's leftover Codex allowance benchmarking model and thinking combinations
-  it has not measured yet, most costly first (`YACWU_RESET_BENCHMARK=off`
-  turns it off)
+- 🧪 While such a reset is announced and nothing else runs, Yacwu samples
+  unmeasured Codex model and thinking combinations, most costly first. Samples
+  use short text workloads, advance after an interrupted attempt, and target one
+  allowance point each (`YACWU_RESET_BENCHMARK=off` turns it off)
 - 💓 A running task's Current activity shows a running token count (estimated
   from streamed text until the backend reports one) and its latest sign of
   progress (thinking, writing, a step; its agents count too)

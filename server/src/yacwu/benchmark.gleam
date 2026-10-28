@@ -109,27 +109,31 @@ pub fn start(
         [Stage(model, effort, target)],
         max_turns,
         minutes,
+        None,
       )
   }
 }
 
-/// Benchmark combinations unattended (see reset_benchmark): any thinking
-/// level, two percentage points each, in the given order.
+/// Benchmark combinations unattended (see reset_benchmark): one allowance
+/// point per sample, with the reset timestamp recorded so interrupted samples
+/// are not retried forever during the same reset window.
 pub fn start_auto(
   registry: hosts.Registry,
   host: String,
   cx: Codex,
   combinations: List(#(String, String)),
+  resets_at: Int,
 ) -> Result(Nil, String) {
   start_plan(
     registry,
     host,
     cx,
     list.map(combinations, fn(combination) {
-      Stage(combination.0, combination.1, 2)
+      Stage(combination.0, combination.1, 1)
     }),
-    12,
-    20,
+    8,
+    15,
+    Some(resets_at),
   )
 }
 
@@ -148,7 +152,7 @@ pub fn start_batch(
   minutes: Int,
 ) -> Result(Nil, String) {
   use stages <- result.try(benchmark_plan.batch(combinations, economical))
-  start_plan(registry, host, cx, stages, max_turns, minutes)
+  start_plan(registry, host, cx, stages, max_turns, minutes, None)
 }
 
 fn start_plan(
@@ -158,6 +162,7 @@ fn start_plan(
   stages: List(Stage),
   max_turns: Int,
   minutes: Int,
+  auto_resets_at: Option(Int),
 ) -> Result(Nil, String) {
   case max_turns >= 1 && max_turns <= 100 && minutes >= 3 && minutes <= 60 {
     False -> Error("Choose 1–100 turns and 3–60 minutes per combination")
@@ -220,6 +225,7 @@ fn start_plan(
                       None,
                       [],
                       0,
+                      auto_resets_at,
                     )
                   let final = case result {
                     Ok(details) -> details
@@ -273,6 +279,7 @@ fn run_plan(
   boundary: Option(#(Int, Int)),
   results: List(Json),
   spent: Int,
+  auto_resets_at: Option(Int),
 ) -> Result(Json, String) {
   case stages {
     [] ->
@@ -305,6 +312,7 @@ fn run_plan(
         max_turns,
         oauth.now() + minutes * 60,
         boundary,
+        auto_resets_at,
       ))
       let assert Ok(data) = json.parse(json.to_string(details), decode.dynamic)
       let reached = jsonx.field_bool(data, ["targetReached"]) == Ok(True)
@@ -352,6 +360,7 @@ fn run_plan(
             Some(#(final_used, reset)),
             results,
             spent + used,
+            auto_resets_at,
           )
         }
       }
@@ -416,6 +425,7 @@ fn run(
   max_turns: Int,
   deadline: Int,
   boundary: Option(#(Int, Int)),
+  auto_resets_at: Option(Int),
 ) -> Result(Json, String) {
   update(
     host,
@@ -435,7 +445,7 @@ fn run(
         #("targetReached", json.bool(False)),
         #("settled", json.bool(False)),
         #("targetPercent", json.int(target)),
-        #("workloadVersion", json.int(2)),
+        #("workloadVersion", json.int(3)),
         #(
           "message",
           json.string(
@@ -517,7 +527,7 @@ fn run(
         #("threadId", json.string(thread)),
         #("model", json.string(model)),
         #("effort", json.string(effort)),
-        #("workloadVersion", json.int(2)),
+        #("workloadVersion", json.int(3)),
       ])
       usage.record(host, "benchmarkBoundary", [
         #("threadId", json.string(thread)),
@@ -526,6 +536,16 @@ fn run(
         #("usedPercent", json.int(initial.0)),
         #("resetsAt", json.int(initial.1)),
       ])
+      case auto_resets_at {
+        Some(reset) ->
+          usage.record(host, "benchmarkAutoAttempt", [
+            #("threadId", json.string(thread)),
+            #("model", json.string(model)),
+            #("effort", json.string(effort)),
+            #("resetsAt", json.int(reset)),
+          ])
+        None -> Nil
+      }
       let subject = process.new_subject()
       codex.subscribe(cx, process.self(), subject)
       rounds(
@@ -878,16 +898,16 @@ fn settle(
 
 fn workload(round: Int) -> String {
   let common =
-    "Text-only benchmark, round "
+    "Text-only benchmark round "
     <> int.to_string(round + 1)
-    <> ". Do not use tools or access files. Use declarative statements; do not ask user questions or use question marks. "
+    <> ". No tools, files, or questions. Be concise and give concrete results in at most 300 words. "
   common
   <> case round % 3 {
     0 ->
-      "Produce a self-contained 1800-word technical explanation of a deterministic scheduling system. Use tasks A(duration 3), B(duration 5, depends on A), C(duration 2, depends on A), D(duration 4, depends on B and C), two workers, and alphabetical tie-breaking. Include a worked example, invariants and tradeoffs."
+      "Schedule A(3), B(5 after A), C(2 after A), D(4 after B and C) on two workers; break ties alphabetically. Give the schedule, completion time, and two invariants."
     1 ->
-      "Write a 600-word specification for a bounded FIFO job queue with capacity 8, two workers, at most two retries per job, and idempotent job identifiers. Derive 30 detailed edge cases with expected outcomes, covering cancellation, duplicate submissions, retries and shutdown. Explain the reasoning in text. This specification must stand on its own."
+      "Specify a FIFO queue of capacity 8 with two workers, two retries, and idempotent IDs. List eight edge cases with expected outcomes, including cancellation, duplicates, retries, and shutdown."
     _ ->
-      "Analyze a scheduler with tasks A(duration 3), B(duration 5, depends on A), C(duration 2, depends on A), D(duration 4, depends on B and C). Derive completion times and invariants with one and two workers, alphabetical tie-breaking, and a single failure in each task. Provide worked timelines and pseudocode, then analyze complexity and 20 boundary cases in about 2200 words."
+      "For A(3), B(5 after A), C(2 after A), D(4 after B and C), compare one and two workers with alphabetical tie-breaking. Give completion times and a concise failure-handling rule."
   }
 }

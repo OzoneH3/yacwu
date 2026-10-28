@@ -140,3 +140,26 @@ pub fn measured(journal: String) -> List(#(String, String)) {
   |> list.map(fn(event) { #(event.2, event.3) })
   |> list.unique
 }
+
+/// Automatic combinations already started during this weekly-reset window.
+/// A failed or timed-out sample is still an attempt, so it must not pin the
+/// reset watcher to the same first model forever. Match reset timestamps with
+/// the same one-minute tolerance used for account readings.
+pub fn attempted(journal: String, resets_at: Int) -> List(#(String, String)) {
+  string.split(journal, "\n")
+  |> list.filter_map(fn(line) {
+    json.parse(line, {
+      use event <- decode.field("event", decode.string)
+      use model <- decode.optional_field("model", "", decode.string)
+      use effort <- decode.optional_field("effort", "", decode.string)
+      use reset <- decode.optional_field("resetsAt", 0, decode.int)
+      decode.success(#(event, model, effort, reset))
+    })
+  })
+  |> list.filter(fn(attempt) {
+    attempt.0 == "benchmarkAutoAttempt"
+    && int.max(attempt.3, resets_at) - int.min(attempt.3, resets_at) <= 60
+  })
+  |> list.map(fn(attempt) { #(attempt.1, attempt.2) })
+  |> list.unique
+}
