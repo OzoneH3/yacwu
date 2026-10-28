@@ -35,7 +35,8 @@ rules locally, and records usage/diagnostic journals on the server.
   project folder per session
 - 🧵 Multi-session workspace: create, rename, reorder, clear, archive, restore,
   and delete sessions, and resume interrupted work; **Clear first** in the
-  message box starts that message in a fresh conversation
+  message box starts that message in a fresh conversation, or clears without
+  sending using **Clear now**
 - 🗂️ Move a session to another folder from Session details (type it or browse,
   as for new sessions); it applies with your next message (Claude sessions
   bring their conversation along)

@@ -9,6 +9,9 @@ const FRESH = 'clear-fresh';
 
 async function mock(page: Page, createFails = false) {
 	const calls: string[] = [];
+	const modelUpdates: Record<string, unknown>[] = [];
+	let model = 'test';
+	let effort = 'medium';
 	const sent: Record<string, Record<string, unknown>> = {};
 	const thread = (id: string, items: object[] = []) => ({ id, name: 'Research', cwd: '/home/u/project', host: 'local', status: { type: 'idle' },
 		turns: items.length ? [{ id: `${id}-turn`, status: 'completed', items }] : [] });
@@ -26,7 +29,15 @@ async function mock(page: Page, createFails = false) {
 		}
 		if (path === '/api/threads') return route.fulfill({ json: { data: list, defaultCwd: '/home/u' } });
 		if (path === '/api/threads/loaded') return route.fulfill({ json: { data: list.map((t) => t.id) } });
-		if (path.endsWith('/model')) return route.fulfill({ json: { model: 'test', effort: 'medium', models: [] } });
+		if (path.endsWith('/model')) {
+			if (request.method() === 'POST') {
+				const update = request.postDataJSON();
+				modelUpdates.push(update);
+				model = update.model ?? model;
+				effort = update.effort ?? effort;
+			}
+			return route.fulfill({ json: { model, effort, models: ['test', 'other'].map(id => ({ id, displayName: id, efforts: ['medium', 'high'], defaultEffort: 'medium' })) } });
+		}
 		const message = path.match(/^\/api\/threads\/([^/]+)\/message$/);
 		if (message) {
 			sent[message[1]] = request.postDataJSON();
@@ -38,7 +49,7 @@ async function mock(page: Page, createFails = false) {
 	});
 	await page.goto(`/s/${OLD}`);
 	await expect(page.getByText('Earlier answer')).toBeVisible();
-	return { calls, sent };
+	return { calls, sent, modelUpdates };
 }
 
 test('Clear first sends the message into a fresh conversation and archives the old one', async ({ page }) => {
@@ -66,4 +77,50 @@ test('if clearing fails, nothing is sent and the draft stays', async ({ page }) 
 	expect(Object.keys(sent)).toEqual([]);
 	await expect(page).toHaveURL(new RegExp(`/s/${OLD}`));
 	await expect(page.locator('.composer textarea')).toHaveValue('Keep this draft');
+});
+
+test('Clear first can clear immediately without sending a prompt', async ({ page }) => {
+	const { calls, sent, modelUpdates } = await mock(page);
+	await page.getByLabel('Model', { exact: true }).selectOption('other');
+	await page.getByLabel('Thinking strength').selectOption('high');
+	await page.getByLabel('Clear first').check();
+	await page.getByRole('button', { name: 'Clear now' }).click();
+	await expect(page).toHaveURL(new RegExp(`/s/${FRESH}`));
+	await expect(page.getByLabel('Clear first')).not.toBeChecked();
+	await expect(page.getByText('Earlier answer')).toHaveCount(0);
+	expect(calls).toContain(`/api/threads/${OLD}/archive`);
+	expect(modelUpdates.at(-1)).toEqual({ model: 'other', effort: 'high' });
+	expect(Object.keys(sent)).toEqual([]);
+});
+
+
+test('model and thinking changes are saved before a session receives any message', async ({ page }) => {
+	const { sent, modelUpdates } = await mock(page);
+	await page.getByLabel('Model', { exact: true }).selectOption('other');
+	await page.getByLabel('Thinking strength').selectOption('high');
+	await expect.poll(() => modelUpdates.length).toBe(2);
+	expect(modelUpdates).toEqual([{ model: 'other' }, { effort: 'high' }]);
+	expect(Object.keys(sent)).toEqual([]);
+});
+
+test('Clear now cannot discard a draft', async ({ page }) => {
+	const { sent } = await mock(page);
+	await page.getByLabel('Clear first').check();
+	const button = page.getByRole('button', { name: 'Clear now' });
+	await expect(button).toBeEnabled();
+	await page.locator('.composer textarea').fill('Keep this draft');
+	await expect(button).toBeDisabled();
+	await expect(page.locator('.composer textarea')).toHaveValue('Keep this draft');
+	expect(Object.keys(sent)).toEqual([]);
+});
+
+
+test('Clear now keeps the old session if creating its replacement fails', async ({ page }) => {
+	const { calls, sent } = await mock(page, true);
+	await page.getByLabel('Clear first').check();
+	await page.getByRole('button', { name: 'Clear now' }).click();
+	await expect(page.getByText(/backend unavailable/).filter({ visible: true })).toBeVisible();
+	await expect(page).toHaveURL(new RegExp(`/s/${OLD}`));
+	expect(calls).not.toContain(`/api/threads/${OLD}/archive`);
+	expect(Object.keys(sent)).toEqual([]);
 });

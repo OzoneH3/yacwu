@@ -7756,6 +7756,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 									<input type="checkbox" bind:checked={resetBeforeSend} disabled={!canResetActive || sendingMessage} />
 									Clear first
 								</label>
+								{#if resetBeforeSend}
+									<button class="mini clear-now" type="button"
+										disabled={!canResetActive || sendingMessage || modelPending || effortPending || switchingPromptModel || Boolean(input.trim() || selectedAttachments.length)}
+										title="Clear without sending a message. This creates a new session ID; other sessions must address the new session. Empty the composer first."
+										onclick={() => activeId && void clearSession(activeId)}>Clear now</button>
+								{/if}
 							{/if}
 							<div class="composer-actions-end">
 								{#key activeId}
