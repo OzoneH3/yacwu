@@ -39,12 +39,12 @@
 	const accountChange = (pool: UsagePool) => pool.weeklyLeftBefore - pool.weeklyLeftAfter;
 	function observedRate(pool: UsagePool, tokenCount: number) {
 		return pool.status === 'settled' && pool.groups.length === 1 && tokenCount > 0
-			? accountChange(pool) / tokenCount * RATE_TOKENS : null;
+			? accountChange(pool) * (pool.costScale ?? 1) / tokenCount * RATE_TOKENS : null;
 	}
 	function roundingRange(pool: UsagePool, tokenCount: number) {
 		if (!tokenCount) return '';
 		const change = accountChange(pool);
-		return `Rounded endpoints allow roughly ${percent(Math.max(0, change - 1) / tokenCount * RATE_TOKENS)}–${percent((change + 1) / tokenCount * RATE_TOKENS)} per ${RATE_LABEL} tokens. External usage and reporting delay can add uncertainty.`;
+		return `Rounded endpoints allow roughly ${percent(Math.max(0, change - 1) * (pool.costScale ?? 1) / tokenCount * RATE_TOKENS)}–${percent((change + 1) * (pool.costScale ?? 1) / tokenCount * RATE_TOKENS)} per ${RATE_LABEL} tokens. External usage and reporting delay can add uncertainty.`;
 	}
 	function duration(start: number, end: number | null) {
 		const seconds = Math.max(0, Math.round(((end ?? Date.now()) - start) / 1000));
@@ -78,6 +78,7 @@
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
 		<BenchmarkControls {host} {models} {selectedModel} {selectedEffort} oncomplete={() => void refresh()} />
 		{#if windowDurationMins === 300}<p class="meta">Manual benchmarks target weekly allowance. Their 5-hour readings are analyzed independently here. Earlier recordings contain weekly readings only.</p>{/if}
+		{#if analysis.allowanceAdjusted}<p class="meta allowance-adjustment">Codex doubled allowance: estimates and historical token rates use the new capacity. Samples before 29 Oct 2026, 17:56 Europe/Berlin count at half their old percentage cost; newer samples retain their measured cost. The announcement time is the assumed cutoff; crossing intervals are excluded. Recorded account percentages remain unchanged.</p>{/if}
 		<h3>Model and thinking level</h3>
 		<p class="meta">A clean single-setting window supplies a provisional rate immediately, including rounding uncertainty. It applies only to a similar token mix and upgrades to a fitted estimate with sufficient independent evidence. Mixed windows alone cannot identify a model's individual cost.</p>
 		<p class="meta">{analysis.observations} pooled observations · {analysis.excludedIntervals} incomplete observations excluded, including windows where an agent ran without reporting tokens. Ordinary intervals close after at least 2% used, stable readings, and 60 seconds without token activity. Ranges are indicative uncertainty estimates, not guaranteed bounds.</p>
@@ -114,7 +115,7 @@
 					</summary>
 					<p class="meta">Account {windowLabel.toLowerCase()} left: {pool.weeklyLeftBefore}% → {pool.weeklyLeftAfter}%. Window: {duration(pool.startedAt, pool.endedAt)}.
 						{#if pool.status === 'accumulating'}Waiting for enough usage and stable readings; this window is not used for calibration yet.
-						{:else if pool.status === 'excluded'}Incomplete or contaminated recording; excluded from calibration.
+						{:else if pool.status === 'excluded'}Incomplete, contaminated, or crossing an allowance change; excluded from calibration.
 						{:else if pool.groups.length > 1}The account change belongs to the whole window; separate model costs require independent mixtures.
 						{/if}
 					</p>

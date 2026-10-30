@@ -1,3 +1,4 @@
+import { allowanceCostScale, hasDoubledAllowance } from './allowance-change';
 import { learnTokenCosts, WEIGHT_TOKENS, type CostEstimate, type UsageObservation } from './usage-fit';
 
 /** Only usage metadata is stored: never prompts, answers or tool output. */
@@ -89,6 +90,8 @@ export interface UsagePoolContributor {
 
 /** One account observation; its quota change must only be counted once. */
 export interface UsagePool {
+	/** Convert historical percentage costs to current allowance; null crosses the change. */
+	costScale?: number | null;
 	startedAt: number;
 	endedAt: number;
 	weeklyLeftBefore: number;
@@ -280,7 +283,8 @@ export function buildUsagePool(interval: UsageInterval, end: UsageEvent, status:
   return { model, effort, tokens: { ...tokens }, contributors, ...poolConcurrency(contributors, baseline.at, end.at) };
  });
  return { startedAt: baseline.at, endedAt: end.at, weeklyLeftBefore: 100 - baseline.usedPercent!,
-  weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups };
+  weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups,
+  costScale: allowanceCostScale(baseline.at, end.at, baseline.planType, baseline.limitId) };
 }
 
 function createUsageReducer(options: UsageOptions) {
@@ -477,15 +481,21 @@ function finishUsage(state: ReturnType<ReturnType<typeof createUsageReducer>['sn
 		reflectedAt: task.endedAt === null ? Infinity : quotas.find((quota) => quota.at >= task.endedAt! + settleMs)?.at ?? Infinity }));
 	const clean = observations.filter((sample) => {
 		const hidden = silent.some((task) => task.startedAt < sample.endedAt && task.reflectedAt > sample.startedAt);
-		if (hidden) {
+		if (hidden || sample.pool?.costScale === null) {
 			excludedIntervals++;
 			if (sample.pool) sample.pool.status = 'excluded';
 		}
-		return !hidden;
+		return !hidden && sample.pool?.costScale !== null;
 	});
 	observations.length = 0;
 	observations.push(...clean);
-	const learned = learnTokenCosts(observations);
+	// Normalize observations before fitting, including their endpoint rounding.
+ // New observations already use the new capacity; never scale them again.
+ for (const pool of pools) if (pool.costScale === null) pool.status = 'excluded';
+ const learned = learnTokenCosts(observations.map(sample => {
+  const scale = sample.pool?.costScale ?? 1;
+  return { ...sample, percent: sample.percent * scale, rounding: scale };
+ }));
 	const groups = [...new Set(tasks.map((task) => groupKey(task.model, task.effort)))];
 	const rates: UsageRate[] = groups.map((key) => {
 		const [model, effort] = JSON.parse(key);
@@ -530,7 +540,7 @@ function finishUsage(state: ReturnType<ReturnType<typeof createUsageReducer>['sn
 			task.estimatedWeeklyPercent = task.estimate?.value ?? null;
 		}
 	}
-	return { windowDurationMins, tasks: tasks.reverse(), pools: pools.reverse(), rates, observations: observations.length, excludedIntervals, calibrated: learned.calibrated, hosts: [...new Set(events.map((event) => event.host))] };
+	return { allowanceAdjusted: hasDoubledAllowance(quotas.at(-1)?.planType, quotas.at(-1)?.limitId), windowDurationMins, tasks: tasks.reverse(), pools: pools.reverse(), rates, observations: observations.length, excludedIntervals, calibrated: learned.calibrated, hosts: [...new Set(events.map((event) => event.host))] };
 }
 
 

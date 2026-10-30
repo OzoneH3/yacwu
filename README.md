@@ -86,6 +86,7 @@ rules locally, and records usage/diagnostic journals on the server.
 - Background checks share runtime reads across tabs and build checks across
   connections; usage refreshes coalesce and idle calibration polling backs off
   and pauses in hidden tabs
+- Codex cost estimates normalize older eligible Pro/Business Premium samples for the reported 29 October allowance doubling; raw readings stay unchanged and intervals crossing the announcement cutoff are excluded.
 - 💸 Learned allowance cost per model and thinking level, projected task cost
   while work runs, and a task usage history with manual benchmarks
 - 💬 Interactive answers: questions and action requests dock below the

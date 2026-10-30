@@ -1,6 +1,6 @@
 import type { TokenTotals } from './usage-analysis';
 
-export interface UsageObservation { percent: number; tokens: Record<string, TokenTotals> }
+export interface UsageObservation { percent: number; rounding?: number; tokens: Record<string, TokenTotals> }
 export interface CostEstimate { value: number; low: number; high: number; samples: number; weighted: boolean; provisional?: boolean }
 type Category = 'total' | 'uncached' | 'cached' | 'output';
 interface Feature { group: string; category: Category }
@@ -51,7 +51,7 @@ function train(observations: UsageObservation[], features: Feature[]) {
 				let numerator = 1e-6 * prior[c], denominator = 1e-6;
 				for (let r = 0; r < x.length; r++) {
 					const centre = observations[r].percent;
-					const target = censored ? Math.max(Math.max(0, centre - 1), Math.min(centre + 1, prediction[r])) : centre;
+					const target = censored ? Math.max(Math.max(0, centre - (observations[r].rounding ?? 1)), Math.min(centre + (observations[r].rounding ?? 1), prediction[r])) : centre;
 					numerator += x[r][c] * (target - prediction[r] + x[r][c] * beta[c]);
 					denominator += x[r][c] ** 2;
 				}
@@ -66,7 +66,8 @@ function train(observations: UsageObservation[], features: Feature[]) {
 	}
 	const residual = observations.reduce((sum, sample, r) => sum + (sample.percent - prediction[r]) ** 2, 0);
 	// Two rounded endpoints contribute uncertainty even for a perfect fitted centre.
-	const variance = Math.max(1 / 6, residual / Math.max(1, observations.length - features.length));
+	const roundingVariance = observations.reduce((sum, sample) => sum + (sample.rounding ?? 1) ** 2 / 6, 0) / observations.length;
+	const variance = Math.max(roundingVariance, residual / Math.max(1, observations.length - features.length));
 	return { features, beta, covariance, variance };
 }
 
@@ -120,16 +121,16 @@ export function learnTokenCosts(observations: UsageObservation[]) {
 			if (!single.length || tokens.totalTokens <= 0) return null;
 			const totals = single.reduce((sum, sample) => {
 				const t = sample.tokens[group];
-				return { tokens: sum.tokens + t.totalTokens, cached: sum.cached + t.cachedInputTokens, output: sum.output + t.outputTokens, percent: sum.percent + sample.percent };
-			}, { tokens: 0, cached: 0, output: 0, percent: 0 });
+				return { tokens: sum.tokens + t.totalTokens, cached: sum.cached + t.cachedInputTokens, output: sum.output + t.outputTokens, percent: sum.percent + sample.percent, rounding: sum.rounding + (sample.rounding ?? 1) };
+			}, { tokens: 0, cached: 0, output: 0, percent: 0, rounding: 0 });
 			// Early total-token rates only extrapolate to broadly similar mixes.
 			// Sparse evidence cannot price an uncached/output-heavy task from a
 			// cached-input-heavy observation.
 			if (Math.abs(tokens.cachedInputTokens / tokens.totalTokens - totals.cached / totals.tokens) > 0.15
 				|| Math.abs(tokens.outputTokens / tokens.totalTokens - totals.output / totals.tokens) > 0.15) return null;
 			const scale = tokens.totalTokens / totals.tokens;
-			return { value: totals.percent * scale, low: Math.max(0, totals.percent - single.length) * scale,
-				high: (totals.percent + single.length) * scale, samples: single.length, weighted: false, provisional: true };
+			return { value: totals.percent * scale, low: Math.max(0, totals.percent - totals.rounding) * scale,
+				high: (totals.percent + totals.rounding) * scale, samples: single.length, weighted: false, provisional: true };
 		}
 		const vector = fit.features.map((f) => f.group === group ? amount(tokens, f.category) / WEIGHT_TOKENS : 0);
 		const value = vector.reduce((sum, feature, i) => sum + feature * fit.beta[i], 0);

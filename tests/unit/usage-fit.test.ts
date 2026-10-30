@@ -95,3 +95,11 @@ test('token weights are withheld when similar mixes cannot separate them', () =>
 	expect(learned.weights('model')).toEqual({ uncached: null, cached: null, output: null });
 	expect(learned.estimate('model', totals(2_500, 97_000, 500))?.value).toBeGreaterThan(0);
 });
+
+test('capacity normalization halves fitted weights and confidence ranges together', () => {
+ const original = [sample(100_000, 0, 0), sample(0, 500_000, 0), sample(0, 0, 100_000), sample(100_000, 100_000, 100_000), sample(200_000, 100_000, 0), sample(0, 200_000, 100_000)];
+ const before = learnTokenCosts(original), after = learnTokenCosts(original.map(s => ({ ...s, percent: s.percent / 2, rounding: .5 })));
+ const input = totals(100_000, 100_000, 100_000);
+ for (const key of ['value', 'low', 'high'] as const) expect(after.estimate('model', input)![key]).toBeCloseTo(before.estimate('model', input)![key] / 2, 3);
+ for (const key of ['uncached', 'cached', 'output'] as const) expect(after.weights('model')[key]).toBeCloseTo(before.weights('model')[key]! / 2, 3);
+});
