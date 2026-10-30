@@ -5645,7 +5645,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (target && target !== instantTooltipTarget) showInstantTooltip(target);
 	}
 
-	function onTooltipPointerOut(event: PointerEvent) {
+	function onTooltipOut(event: PointerEvent | FocusEvent) {
 		const from = tooltipTargetFrom(event.target);
 		const to = tooltipTargetFrom(event.relatedTarget);
 		if (from === instantTooltipTarget && to !== from) hideInstantTooltip(from);
@@ -5655,11 +5655,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		showInstantTooltip(tooltipTargetFrom(event.target));
 	}
 
-	function onTooltipFocusOut(event: FocusEvent) {
-		const from = tooltipTargetFrom(event.target);
-		const to = tooltipTargetFrom(event.relatedTarget);
-		if (from === instantTooltipTarget && to !== from) hideInstantTooltip(from);
-	}
 
 	function dismissTooltipOnViewportChange() {
 		hideInstantTooltip();
@@ -5812,9 +5807,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			subtree: true
 		});
 		window.addEventListener('pointerover', onTooltipPointerOver);
-		window.addEventListener('pointerout', onTooltipPointerOut);
+		window.addEventListener('pointerout', onTooltipOut);
 		window.addEventListener('focusin', onTooltipFocusIn);
-		window.addEventListener('focusout', onTooltipFocusOut);
+		window.addEventListener('focusout', onTooltipOut);
 		window.addEventListener('scroll', dismissTooltipOnViewportChange, true);
 		window.addEventListener('resize', dismissTooltipOnViewportChange);
 		try {
@@ -5846,7 +5841,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				finishedSessions = Object.fromEntries(
 					Object.entries(savedFinished).filter((entry): entry is [string, boolean] => entry[1] === true)
 				);
-				for (const [id, finished] of Object.entries(finishedSessions)) {
+				for (const id of Object.keys(finishedSessions)) {
 					try { localStorage.setItem(FINISHED_SESSION_KEY_PREFIX + encodeURIComponent(id), 'true'); }
 					catch { /* Keep migrated marks in memory if storage is full. */ }
 				}
@@ -6013,9 +6008,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			document.removeEventListener('visibilitychange', checkOnVisible);
 			tooltipObserver.disconnect();
 			window.removeEventListener('pointerover', onTooltipPointerOver);
-			window.removeEventListener('pointerout', onTooltipPointerOut);
+			window.removeEventListener('pointerout', onTooltipOut);
 			window.removeEventListener('focusin', onTooltipFocusIn);
-			window.removeEventListener('focusout', onTooltipFocusOut);
+			window.removeEventListener('focusout', onTooltipOut);
 			window.removeEventListener('scroll', dismissTooltipOnViewportChange, true);
 			window.removeEventListener('resize', dismissTooltipOnViewportChange);
 			stopAccountUsagePolling();

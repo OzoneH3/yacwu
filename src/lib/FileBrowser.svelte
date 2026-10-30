@@ -9,6 +9,7 @@
 	import { onDestroy, tick, untrack } from 'svelte';
 	import { loadMonaco, monacoTheme, type Monaco } from '$lib/monaco';
 	import { workspacePathUrl } from '$lib/workspace-links';
+	import { indexFileLineStats, type FileLineStats } from '$lib/file-change-stats';
 
 	interface FileEntry {
 		name: string;
@@ -16,7 +17,6 @@
 		size: number;
 		symlink: boolean;
 	}
-	interface FileChangeStats { additions: number | null; deletions: number | null }
 
 	type DirState =
 		| { status: 'loading' }
@@ -59,7 +59,7 @@
 	let serverRoot = $state<string | null>(null);
 	const root = $derived(rootOverride ?? serverRoot ?? cwd);
 	let dirs = $state<Record<string, DirState>>({});
-	let changeStats = $state<Record<string, FileChangeStats>>({});
+	let changeStats = $state<Record<string, FileLineStats>>({});
 	let expanded = $state<Record<string, boolean>>({});
 	let selectedPath = $state<string | null>(null);
 	let selectedDirectory = $state<string | null>(null);
@@ -138,10 +138,7 @@
 			const res = await fetch(`/api/threads/${threadId}/git/changes?scope=all`);
 			const data = await res.json();
 			if (!res.ok || !Array.isArray(data.files)) return;
-			changeStats = Object.fromEntries(data.files.map((item: any) => [String(item.path), {
-				additions: typeof item.additions === 'number' ? item.additions : null,
-				deletions: typeof item.deletions === 'number' ? item.deletions : null
-			}]));
+			changeStats = indexFileLineStats(data.files, root);
 		} catch {
 			// The file browser remains usable when Git metadata is unavailable.
 		}

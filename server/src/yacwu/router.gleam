@@ -2826,24 +2826,35 @@ fn stage_image(host: String, cx: Codex, part: Part) -> Result(String, String) {
           bit_array.base16_encode(crypto.strong_random_bytes(16)),
         )
         <> image_extension(part.filename, content_type)
-      use dir <- result.try(case hosts.is_local(host) {
-        True -> Ok(envoy.get("TMPDIR") |> result.unwrap("/tmp"))
-        False ->
-          case codex.info(cx).home {
-            "" -> Error("remote home directory unknown; reconnect and retry")
-            home -> {
-              let dir = home <> "/.cache/yacwu/uploads"
-              workspace.create_directory(ws_for(host, cx), dir)
-              |> result.replace(dir)
-            }
-          }
-      })
-      let path = filepath.join(dir, name)
-      case workspace.write_file(ws_for(host, cx), path, part.data) {
-        Ok(_) -> Ok(path)
-        Error(_) -> Error("failed to store " <> display)
-      }
+      store_upload(host, cx, name, display, part.data)
     }
+  }
+}
+
+/// One storage path for validated image and document uploads.
+fn store_upload(
+  host: String,
+  cx: Codex,
+  name: String,
+  display: String,
+  data: BitArray,
+) -> Result(String, String) {
+  use dir <- result.try(case hosts.is_local(host) {
+    True -> Ok(envoy.get("TMPDIR") |> result.unwrap("/tmp"))
+    False ->
+      case codex.info(cx).home {
+        "" -> Error("remote home directory unknown; reconnect and retry")
+        home -> {
+          let dir = home <> "/.cache/yacwu/uploads"
+          workspace.create_directory(ws_for(host, cx), dir)
+          |> result.replace(dir)
+        }
+      }
+  })
+  let path = filepath.join(dir, name)
+  case workspace.write_file(ws_for(host, cx), path, data) {
+    Ok(_) -> Ok(path)
+    Error(_) -> Error("failed to store " <> display)
   }
 }
 
@@ -2888,23 +2899,7 @@ fn stage_prompt_file(
         )
         <> "."
         <> extension
-      use dir <- result.try(case hosts.is_local(host) {
-        True -> Ok(envoy.get("TMPDIR") |> result.unwrap("/tmp"))
-        False ->
-          case codex.info(cx).home {
-            "" -> Error("remote home directory unknown; reconnect and retry")
-            home -> {
-              let dir = home <> "/.cache/yacwu/uploads"
-              workspace.create_directory(ws_for(host, cx), dir)
-              |> result.replace(dir)
-            }
-          }
-      })
-      let path = filepath.join(dir, name)
-      case workspace.write_file(ws_for(host, cx), path, part.data) {
-        Ok(_) -> Ok(path)
-        Error(_) -> Error("failed to store " <> filename)
-      }
+      store_upload(host, cx, name, filename, part.data)
     }
   }
 }

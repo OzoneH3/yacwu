@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { backendProviders, claudeBackendHost, providerLabel, sessionTarget } from '../../src/lib/session-target';
+import { backendProviders, providerHost, providerLabel, sessionTarget } from '../../src/lib/session-target';
 import type { HostInfo } from '../../src/lib/protocol';
 
 const machines: HostInfo[] = [
@@ -10,8 +10,8 @@ const anthropic: HostInfo = { name: 'anthropic', kind: 'backend', provider: 'cla
 const gh: HostInfo = { name: 'gh', kind: 'backend', provider: 'copilot', state: 'disconnected' };
 
 test('Provider appears only for a configured Claude backend, including custom backend names', () => {
-	expect(claudeBackendHost(machines)).toBeNull();
-	expect(claudeBackendHost([...machines, anthropic])).toBe('anthropic');
+	expect(providerHost(machines, 'claude')).toBeNull();
+	expect(providerHost([...machines, anthropic], 'claude')).toBe('anthropic');
 });
 
 test('every configured backend agent is offered as a provider', () => {

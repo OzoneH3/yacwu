@@ -5,10 +5,6 @@ export function providerHost(hosts: HostInfo[], provider: string): string | null
 	return hosts.find((host) => host.kind === 'backend' && host.provider === provider)?.name ?? null;
 }
 
-export function claudeBackendHost(hosts: HostInfo[]): string | null {
-	return providerHost(hosts, 'claude');
-}
-
 /** Agents with a backend of their own; other backends count as Codex. */
 export const BACKEND_AGENTS = ['claude', 'copilot'];
 

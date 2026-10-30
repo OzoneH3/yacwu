@@ -256,6 +256,33 @@ function prepareUsage(rawEvents: UsageEvent[], options: UsageOptions) {
 	return resolveSpawnEvidence(accountEvents(windowEvents, host));
 }
 
+interface UsageInterval {
+ baseline: UsageEvent | null;
+ intervalTokens: Record<string, TokenTotals>;
+ intervalTasks: Map<string, UsagePoolContributor>;
+ benchmarkInterval: string | null;
+}
+
+/** Shared by settled observations and the unfinished interval preview. */
+export function buildUsagePool(interval: UsageInterval, end: UsageEvent, status: UsagePool['status']): UsagePool | null {
+ const { baseline, intervalTokens, intervalTasks, benchmarkInterval } = interval;
+ if (!baseline || !intervalTasks.size || !Number.isFinite(end.usedPercent)) return null;
+ // Index once: each contributor belongs to exactly one model/effort group.
+ const byGroup = new Map<string, UsagePoolContributor[]>();
+ for (const contributor of intervalTasks.values()) {
+  const key = groupKey(contributor.task.model, contributor.task.effort);
+  const group = byGroup.get(key);
+  if (group) group.push(contributor); else byGroup.set(key, [contributor]);
+ }
+ const groups = Object.entries(intervalTokens).map(([key, tokens]) => {
+  const [model, effort] = JSON.parse(key);
+  const contributors = byGroup.get(key) ?? [];
+  return { model, effort, tokens: { ...tokens }, contributors, ...poolConcurrency(contributors, baseline.at, end.at) };
+ });
+ return { startedAt: baseline.at, endedAt: end.at, weeklyLeftBefore: 100 - baseline.usedPercent!,
+  weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups };
+}
+
 function createUsageReducer(options: UsageOptions) {
 	const host = options.host ?? 'local';
 	const modelName = options.modelName ?? ((model: string) => model);
@@ -281,17 +308,11 @@ function createUsageReducer(options: UsageOptions) {
 	let excludedIntervals = 0;
 	let benchmarkInterval: string | null = null;
 	function recordPool(end: UsageEvent, status: UsagePool['status']): UsagePool | null {
-		if (!baseline || !intervalTasks.size || !Number.isFinite(end.usedPercent)) return null;
-		const groups = Object.entries(intervalTokens).map(([key, tokens]) => {
-			const [model, effort] = JSON.parse(key);
-			const contributors = [...intervalTasks.values()].filter(({ task }) => groupKey(task.model, task.effort) === key);
-			return { model, effort, tokens: { ...tokens }, contributors, ...poolConcurrency(contributors, baseline!.at, end.at) };
-		});
-		const pool: UsagePool = { startedAt: baseline.at, endedAt: end.at, weeklyLeftBefore: 100 - baseline.usedPercent!,
-			weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups };
-		pools.push(pool);
-		return pool;
-	}
+  const pool = buildUsagePool({ baseline, intervalTokens, intervalTasks, benchmarkInterval }, end, status);
+  if (pool) pools.push(pool);
+  return pool;
+ }
+
  return {
   append(events: UsageEvent[]) {
 	// Stored file order disambiguates notifications in the same millisecond.
@@ -441,22 +462,11 @@ function createUsageReducer(options: UsageOptions) {
 function finishUsage(state: ReturnType<ReturnType<typeof createUsageReducer>['snapshot']>, events: UsageEvent[], options: UsageOptions) {
 	const settleMs = options.settleMs ?? 60_000;
 	const windowDurationMins = options.windowDurationMins ?? 10080;
- let { tasks, quotas, observations, pools, calibrationScope, baseline, intervalTokens, intervalTasks, lastTokenAt, intervalIncomplete, excludedIntervals, benchmarkInterval } = state;
-	function recordPool(end: UsageEvent, status: UsagePool['status']): UsagePool | null {
-		if (!baseline || !intervalTasks.size || !Number.isFinite(end.usedPercent)) return null;
-		const groups = Object.entries(intervalTokens).map(([key, tokens]) => {
-			const [model, effort] = JSON.parse(key);
-			const contributors = [...intervalTasks.values()].filter(({ task }) => groupKey(task.model, task.effort) === key);
-			return { model, effort, tokens: { ...tokens }, contributors, ...poolConcurrency(contributors, baseline!.at, end.at) };
-		});
-		const pool: UsagePool = { startedAt: baseline.at, endedAt: end.at, weeklyLeftBefore: 100 - baseline.usedPercent!,
-			weeklyLeftAfter: 100 - end.usedPercent!, status, benchmark: benchmarkInterval !== null, groups };
-		pools.push(pool);
-		return pool;
-	}
+ let { tasks, quotas, observations, pools, calibrationScope, baseline, lastTokenAt, intervalIncomplete, excludedIntervals } = state;
 	const latestQuota = quotas.at(-1);
 	if (baseline && latestQuota && latestQuota.at >= baseline.at && latestQuota.accountKey === baseline.accountKey && sameResetWindow(latestQuota.resetsAt, baseline.resetsAt)) {
-		recordPool({ ...latestQuota, at: Math.max(latestQuota.at, lastTokenAt) }, intervalIncomplete ? 'excluded' : 'accumulating');
+		const pool = buildUsagePool(state, { ...latestQuota, at: Math.max(latestQuota.at, lastTokenAt) }, intervalIncomplete ? 'excluded' : 'accumulating');
+  if (pool) pools.push(pool);
 	}
 	// A turn whose thread never reports tokens (e.g. a Claude subagent) still
 	// draws on the allowance; any window it overlaps would charge that usage to

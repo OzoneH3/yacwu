@@ -30,7 +30,6 @@ test('a running turn shows its latest update and tokens used', async ({ page }) 
 	await expect(page.locator('.brand .dot.on')).toBeVisible();
 	await expect(page.locator('.composer')).toBeVisible();
 	const emit = (msg: unknown) => page.evaluate((m) => (window as any).__emit(m), msg);
-	const details = page.getByRole('button', { name: /^Session details/ });
 	const usage = (totalTokens: number) => ({ method: 'thread/tokenUsage/updated', params: { threadId: ID, turnId: 't1', tokenUsage: {
 		total: { totalTokens, inputTokens: totalTokens, cachedInputTokens: 0, outputTokens: 0 },
 		last: { totalTokens, inputTokens: totalTokens, cachedInputTokens: 0, outputTokens: 0 }, modelContextWindow: 200000 } } });

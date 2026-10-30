@@ -171,13 +171,6 @@ export function agentRootId(registry: AgentRegistry, agent: AgentInfo): string {
 	return root;
 }
 
-/** All agents descending from `sessionId`, in registration (spawn) order. */
-export function agentsForSession(registry: AgentRegistry, sessionId: string): AgentInfo[] {
-	return Object.values(registry).filter(
-		(agent) => agent.id !== sessionId && agentRootId(registry, agent) === sessionId
-	);
-}
-
 /** Prefer the collaboration path so the tab matches names used by the coordinator. */
 export function agentLabel(agent: AgentInfo): string {
 	const tail = agent.path?.split('/').filter(Boolean).pop();

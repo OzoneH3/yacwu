@@ -4,7 +4,6 @@ import {
 	agentLabel,
 	agentRootId,
 	isAgentRunning,
-	agentsForSession,
 	indexAgentsBySession,
 	isSubAgentThread,
 	mergeAgentThreadMeta,
@@ -170,15 +169,15 @@ test('nested agents chain to the root session and list in spawn order', () => {
 	// AGENT_A spawns AGENT_B (depth 2): the item lives in AGENT_A's transcript.
 	trackAgentItem(registry, AGENT_A, spawn([AGENT_B], 'completed', AGENT_A));
 	expect(agentRootId(registry, registry[AGENT_B])).toBe(SESSION);
-	expect(agentsForSession(registry, SESSION).map((a) => a.id)).toEqual([AGENT_A, AGENT_B]);
-	expect(agentsForSession(registry, 'other')).toEqual([]);
+	expect((indexAgentsBySession(registry).get(SESSION) ?? []).map((a) => a.id)).toEqual([AGENT_A, AGENT_B]);
+	expect((indexAgentsBySession(registry).get('other') ?? [])).toEqual([]);
 });
 
 test('the session root is not listed as its own agent tab', () => {
 	const registry: AgentRegistry = {};
 	trackAgentItem(registry, SESSION, spawn([AGENT_A]));
 	// The first worker remains listed even before root-thread metadata arrives.
-	expect(agentsForSession(registry, SESSION).map((agent) => agent.id)).toEqual([AGENT_A]);
+	expect((indexAgentsBySession(registry).get(SESSION) ?? []).map((agent) => agent.id)).toEqual([AGENT_A]);
 	registry[SESSION] = {
 		id: SESSION,
 		parentId: SESSION,
@@ -189,7 +188,7 @@ test('the session root is not listed as its own agent tab', () => {
 		closed: false,
 		workOrderId: null
 	};
-	expect(agentsForSession(registry, SESSION).map((agent) => agent.id)).toEqual([AGENT_A]);
+	expect((indexAgentsBySession(registry).get(SESSION) ?? []).map((agent) => agent.id)).toEqual([AGENT_A]);
 });
 
 test('thread metadata merges nickname, role, and closed state', () => {

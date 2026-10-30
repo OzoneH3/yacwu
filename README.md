@@ -864,6 +864,10 @@ reliably. Benchmark samples and final summaries are saved with usage telemetry.
 These runs measure allowance use, not model answer quality, and continuing the
 same session includes growing context and cache reuse in the measurements.
 
+## Code maintenance
+
+- Shared helpers keep usage accounting, upload storage, file-change counts and relay recovery consistent; type checks reject unused locals and parameters. See the [code consolidation audit](docs/code-audit.md) for scope and remaining structural work.
+
 ## License
 
 MIT

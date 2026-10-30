@@ -680,43 +680,22 @@ fn active_turn(
   // codex returns newest first and honours `limit`; the Claude adapter
   // ignores both and returns every turn. Either way, look for the turn
   // whose own status is in progress rather than trusting position.
-  let page =
-    codex.request_tracked(
-      cx,
-      "thread/turns/list",
-      json.object([
-        #("threadId", json.string(thread)),
-        #("limit", json.int(20)),
-        #("sortDirection", json.string("desc")),
-        #("itemsView", json.string("notLoaded")),
-      ]),
-      timeout,
-    )
-  case page.result {
-    Error(failure) -> #(0, relay_core.ReadFailed(describe(failure)))
-    Ok(_) if page.generation != generation -> #(
-      0,
-      relay_core.ReadFailed("the connection changed between recovery reads"),
-    )
-    Ok(value) -> {
-      let turns =
-        decode.run(value, decode.at(["data"], decode.list(decode.dynamic)))
-        |> result.unwrap([])
-      case in_progress(turns, generation) {
-        #(_, relay_core.FoundActive(_)) as found -> found
-        _ -> current_turn(cx, thread, timeout, generation)
-      }
-    }
+  case read_active_turn(cx, thread, timeout, generation, 20, "notLoaded") {
+    #(_, relay_core.Inconclusive(_)) ->
+      // Some backends omit running state from metadata-only pages.
+      read_active_turn(cx, thread, timeout, generation, 1, "full")
+    outcome -> outcome
   }
 }
 
-// A metadata-only history page can lack usable running-turn state. Ask for
-// just the newest full turn before backing off; never load the full history.
-fn current_turn(
+/// Share request/error/generation handling across both recovery views.
+fn read_active_turn(
   cx: Codex,
   thread: String,
   timeout: Int,
   generation: Int,
+  limit: Int,
+  items_view: String,
 ) -> #(Int, relay_core.RecoveryOutcome) {
   let page =
     codex.request_tracked(
@@ -724,9 +703,9 @@ fn current_turn(
       "thread/turns/list",
       json.object([
         #("threadId", json.string(thread)),
-        #("limit", json.int(1)),
+        #("limit", json.int(limit)),
         #("sortDirection", json.string("desc")),
-        #("itemsView", json.string("full")),
+        #("itemsView", json.string(items_view)),
       ]),
       timeout,
     )
