@@ -6,9 +6,11 @@
 //// rollout file, the configured defaults from `config/read`, and finally the
 //// catalog's default model.
 
+import filepath
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Name, type Subject}
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -39,7 +41,11 @@ pub type ModelChoice {
 
 pub opaque type StoreMsg {
   Get(thread_id: String, reply: Subject(Result(Settings, Nil)))
-  Put(thread_id: String, settings: Settings)
+  Put(
+    thread_id: String,
+    settings: Settings,
+    reply: Subject(Result(Nil, String)),
+  )
 }
 
 pub type Store =
@@ -48,27 +54,130 @@ pub type Store =
 pub fn supervised(
   name: Store,
 ) -> supervision.ChildSpecification(Subject(StoreMsg)) {
-  supervision.worker(fn() {
-    let initial: Dict(String, Settings) = dict.new()
-    actor.new(initial)
-    |> actor.named(name)
-    |> actor.on_message(fn(state, msg) {
-      case msg {
-        Get(thread_id, reply) -> {
-          process.send(reply, dict.get(state, thread_id))
-          actor.continue(state)
-        }
-        Put(thread_id, settings) ->
-          actor.continue(dict.insert(state, thread_id, settings))
+  supervision.worker(fn() { start(name, None) })
+}
+
+pub fn supervised_persistent(
+  name: Store,
+  path: String,
+) -> supervision.ChildSpecification(Subject(StoreMsg)) {
+  supervision.worker(fn() { start(name, Some(path)) })
+}
+
+pub fn start(
+  name: Store,
+  path: Option(String),
+) -> actor.StartResult(Subject(StoreMsg)) {
+  use initial <- result.try(
+    load_overrides(path) |> result.map_error(actor.InitFailed),
+  )
+  actor.new(initial)
+  |> actor.named(name)
+  |> actor.on_message(fn(state, msg) {
+    case msg {
+      Get(thread_id, reply) -> {
+        process.send(reply, dict.get(state, thread_id))
+        actor.continue(state)
       }
-    })
-    |> actor.start
+      Put(thread_id, settings, reply) -> {
+        let next = dict.insert(state, thread_id, settings)
+        case save_overrides(path, next) {
+          Ok(_) -> {
+            process.send(reply, Ok(Nil))
+            actor.continue(next)
+          }
+          Error(message) -> {
+            process.send(reply, Error(message))
+            actor.continue(state)
+          }
+        }
+      }
+    }
   })
+  |> actor.start
+}
+
+fn settings_decoder() -> decode.Decoder(Settings) {
+  use model <- decode.field("model", decode.string)
+  use effort <- decode.field("effort", decode.string)
+  decode.success(Settings(model, effort))
+}
+
+fn load_overrides(
+  path: Option(String),
+) -> Result(Dict(String, Settings), String) {
+  case path {
+    None -> Ok(dict.new())
+    Some(path) ->
+      case simplifile.read(path) {
+        Error(simplifile.Enoent) -> Ok(dict.new())
+        Error(_) -> Error("Cannot read saved model settings: " <> path)
+        Ok(text) ->
+          json.parse(text, decode.dict(decode.string, settings_decoder()))
+          |> result.replace_error("Invalid saved model settings: " <> path)
+      }
+  }
+}
+
+@external(erlang, "erlang", "unique_integer")
+fn unique() -> Int
+
+fn save_overrides(
+  path: Option(String),
+  state: Dict(String, Settings),
+) -> Result(Nil, String) {
+  case path {
+    None -> Ok(Nil)
+    Some(path) -> {
+      let temp = path <> "." <> int.to_string(unique())
+      let encoded =
+        json.dict(state, fn(key) { key }, fn(settings) {
+          json.object([
+            #("model", json.string(settings.model)),
+            #("effort", json.string(settings.effort)),
+          ])
+        })
+        |> json.to_string
+      let saved =
+        simplifile.create_directory_all(filepath.directory_name(path))
+        |> result.try(fn(_) { simplifile.write(temp, encoded) })
+        |> result.try(fn(_) { simplifile.rename(temp, path) })
+        |> result.replace_error("Could not save model settings")
+      let _ = simplifile.delete(temp)
+      saved
+    }
+  }
+}
+
+pub fn set_override(
+  store: Store,
+  thread_id: String,
+  settings: Settings,
+) -> Result(Nil, String) {
+  process.call_forever(process.named_subject(store), Put(thread_id, settings, _))
 }
 
 /// Override included on turns after the user explicitly runs /model.
 pub fn get_override(store: Store, thread_id: String) -> Result(Settings, Nil) {
   process.call_forever(process.named_subject(store), Get(thread_id, _))
+}
+
+/// Steering never changes a running turn. New starts share the picker's
+/// fallback resolver, while explicit choices avoid backend discovery calls.
+pub fn turn_settings(
+  store: Store,
+  thread_id: String,
+  steering: Bool,
+  resolve: fn() -> Result(Settings, String),
+) -> Result(Settings, String) {
+  case steering {
+    True -> Ok(Settings("", ""))
+    False ->
+      case get_override(store, thread_id) {
+        Ok(settings) -> Ok(settings)
+        Error(_) -> resolve()
+      }
+  }
 }
 
 // -- Model catalog ------------------------------------------------------------
@@ -417,7 +526,7 @@ pub fn set_thread_model_state(
       })
       let effort = option.unwrap(requested_effort, current.settings.effort)
       let settings = Settings(model: model, effort: effort)
-      process.send(process.named_subject(store), Put(thread_id, settings))
+      use _ <- result.try(set_override(store, thread_id, settings))
       Ok(ModelState(settings, []))
     }
     _ -> {
@@ -450,7 +559,7 @@ pub fn set_thread_model_state(
         },
       )
       let settings = Settings(model: model, effort: effort)
-      process.send(process.named_subject(store), Put(thread_id, settings))
+      use _ <- result.try(set_override(store, thread_id, settings))
       Ok(ModelState(settings, current.models))
     }
   }

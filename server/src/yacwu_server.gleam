@@ -4,6 +4,7 @@
 
 import argv
 import envoy
+import filepath
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -142,7 +143,13 @@ authentication (e.g. bound to localhost only).",
       ),
       relay_settings.persistence(relay_settings.path()),
     ))
-    |> supervisor.add(model_state.supervised(store_name))
+    |> supervisor.add(model_state.supervised_persistent(
+      store_name,
+      filepath.join(
+        filepath.directory_name(relay_settings.path()),
+        "model-settings.json",
+      ),
+    ))
     |> supervisor.add(profiles.supervised(profile_store_name))
     |> supervisor.add(project_rules.supervised(
       project_rules_name,

@@ -80,7 +80,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🔒 File access for Codex and Claude: choose a default in Settings, override at
   creation or in Session details, and keep read-only access through resumes and forks
 - 🧠 Per-session model and reasoning effort that persist across server reloads,
-  with "Suggest settings" and capability/efficiency indicators in the picker
+  applied to new turns including session messages, with "Suggest settings"
+  and capability/efficiency indicators in the picker
   (see [rating methodology](docs/model-ratings.md))
   — restart running work on changed settings while preserving queued todos
 - Background checks share runtime reads across tabs and build checks across

@@ -3108,59 +3108,66 @@ fn start_turn_with(
     Some(cwd) -> list.append(params, [#("cwd", json.string(cwd))])
     None -> params
   }
-  // An explicit /model override wins; otherwise the session's selected
-  // profile supplies model/effort. (turn/start has no `config` param, so
-  // only these two profile keys can apply at turn level — the full
-  // profile config is layered on thread start/resume.)
-  let params = case model_state.get_override(ctx.store, thread_id) {
-    // Catalog-less backends can leave either field empty (see
-    // model_state); only pass along what was actually chosen.
+  // Resolve a new turn exactly as the picker does. Never leave an old
+  // backend model implicit while displaying a different configured default.
+  let settings =
+    model_state.turn_settings(
+      ctx.store,
+      thread_id,
+      option.is_some(turn_id),
+      fn() {
+        model_state.get_thread_model_state(
+          cx,
+          ctx.store,
+          thread_id,
+          profile: profile_model_settings(ctx, host, cx, thread_id),
+          read_rollout: rollout_reader(host, cx),
+        )
+        |> result.map(fn(state) { state.settings })
+      },
+    )
+  case settings {
+    Error(message) -> {
+      case claim {
+        Some(claim) ->
+          relay.finish(
+            ctx.relay,
+            claim.submission,
+            codex.TrackedReply(0, Error(codex.NotSent(message))),
+          )
+        None -> Nil
+      }
+      json_response(500, error_body(message))
+    }
     Ok(settings) -> {
       let params = case settings.model {
         "" -> params
         model -> list.append(params, [#("model", json.string(model))])
       }
-      case settings.effort {
+      let params = case settings.effort {
         "" -> params
         effort -> list.append(params, [#("effort", json.string(effort))])
       }
-    }
-    Error(_) ->
-      case
-        profiles.get_selection(ctx.profile_store, thread_id)
-        |> result.try(fn(name) { profiles.find(host_profiles(host, cx), name) })
-      {
-        Error(_) -> params
-        Ok(profile) -> {
-          let params = case profile.model {
-            Some(model) -> list.append(params, [#("model", json.string(model))])
-            None -> params
-          }
-          case jsonx.field_string(profile.config, ["model_reasoning_effort"]) {
-            Ok(effort) ->
-              list.append(params, [#("effort", json.string(effort))])
-            Error(_) -> params
-          }
+      // turn/steer only accepts threadId, input, and expectedTurnId.
+      let params = case turn_id {
+        Some(_) ->
+          list.filter(params, fn(entry) {
+            case entry {
+              #(key, _) -> key != "model" && key != "effort"
+            }
+          })
+        None -> params
+      }
+      case claim {
+        None -> rpc(cx, method, json.object(params))
+        Some(claim) -> {
+          relay.dispatching(ctx.relay, claim.submission)
+          let reply =
+            codex.request_tracked(cx, method, json.object(params), 60_000)
+          relay.finish(ctx.relay, claim.submission, reply)
+          tracked_start_response(reply)
         }
       }
-  }
-  // turn/steer only accepts threadId, input, and expectedTurnId.
-  let params = case turn_id {
-    Some(_) ->
-      list.filter(params, fn(entry) {
-        case entry {
-          #(key, _) -> key != "model" && key != "effort"
-        }
-      })
-    None -> params
-  }
-  case claim {
-    None -> rpc(cx, method, json.object(params))
-    Some(claim) -> {
-      relay.dispatching(ctx.relay, claim.submission)
-      let reply = codex.request_tracked(cx, method, json.object(params), 60_000)
-      relay.finish(ctx.relay, claim.submission, reply)
-      tracked_start_response(reply)
     }
   }
 }
