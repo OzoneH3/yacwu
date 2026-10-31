@@ -105,3 +105,45 @@ test('Copy full result takes every response since the last prompt, with their fi
 	await page.reload();
 	await expect(page.getByRole('button', { name: '✓ Copy full result' })).toBeVisible();
 });
+
+test('both copies run back to the user\'s own prompt, past messages relayed from other sessions', async ({ page, context }) => {
+	await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+	const relayed = '[Yacwu relay: 1 message from another session.]\n[Yacwu relay message rm-0001aa from session thr-peer on local]\nPlease also check the build.\n[/Yacwu relay message rm-0001aa]\n';
+	const thread = { id: ID, name: 'Relay copy', cwd: '/home/u/growpilot', host: 'local', status: { type: 'idle' }, turns: [
+		{ id: 't1', status: 'completed', items: [
+			{ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'Fix the zoom bug' }] },
+			{ type: 'fileChange', id: 'f1', status: 'completed', changes: [{ path: '/home/u/growpilot/web/zoom.js', kind: { type: 'update' } }] },
+			{ type: 'agentMessage', id: 'a1', text: 'Zoom bug fixed.' }
+		] },
+		// A peer's message started a turn of its own; the user typed nothing.
+		{ id: 't2', status: 'completed', items: [
+			{ type: 'userMessage', id: 'r1', content: [{ type: 'text', text: relayed }] },
+			{ type: 'agentMessage', id: 'a2', text: 'Build checked, all green.' }
+		] }
+	] };
+	await page.route('**/api/**', async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+		if (path === '/api/threads') return route.fulfill({ json: { data: [thread], defaultCwd: '/home/u' } });
+		if (path === '/api/threads/loaded') return route.fulfill({ json: { data: [ID] } });
+		if (path.endsWith('/model')) return route.fulfill({ json: { model: 'gpt-test', effort: 'high', models: [] } });
+		if (path.endsWith('/git/changes')) return route.fulfill({ json: { available: false } });
+		if (path.endsWith('/path-kinds')) return route.fulfill({ json: { kinds: {} } });
+		if (path.startsWith('/api/threads/')) return route.fulfill({ json: { thread } });
+		return route.fulfill({ json: {} });
+	});
+	await page.goto(`/s/${ID}`);
+	await page.getByRole('button', { name: 'Copy full result' }).click();
+	await expect(page.getByRole('button', { name: 'Full result copied' })).toBeVisible();
+	let copied = await page.evaluate(() => navigator.clipboard.readText());
+	expect(copied).toContain('## Request\n\nFix the zoom bug\n\n## Result\n\nZoom bug fixed.\n\n---\n\nBuild checked, all green.');
+	expect(copied).toContain('## Files changed in this task\n\n- web/zoom.js');
+	expect(copied).not.toContain('Please also check the build');
+
+	await page.getByRole('button', { name: 'Copy for coordinator' }).last().click();
+	await expect(page.getByRole('button', { name: 'Handoff copied' })).toBeVisible();
+	copied = await page.evaluate(() => navigator.clipboard.readText());
+	expect(copied).toContain('## Request\n\nFix the zoom bug\n\n## Result\n\nBuild checked, all green.');
+	expect(copied).toContain('## Files changed in this task\n\n- web/zoom.js');
+	expect(copied).not.toContain('Please also check the build');
+});

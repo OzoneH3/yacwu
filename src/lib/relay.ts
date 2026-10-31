@@ -157,6 +157,22 @@ export interface AttributedFrame extends RelayFrame {
  * from the sender the frame names, with identical text, all from one
  * submission. Otherwise null, and the part is shown as written.
  */
+/**
+ * A transcript user message made only of relay blocks: the relay delivered
+ * it (a steer, or a prompt of its own), the user did not type it. A prompt
+ * of the user's with waiting messages appended still counts as theirs.
+ */
+export function isRelayOnlyMessage(item: { type?: string; content?: unknown } | null | undefined): boolean {
+	if (item?.type !== 'userMessage' || !Array.isArray(item.content)) return false;
+	const parts = item.content.filter((part: any) => !(part?.type === 'text' && typeof part.text === 'string' && !part.text.trim()));
+	return parts.length > 0 && parts.every((part: any) => part?.type === 'text' && typeof part.text === 'string' && parseRelayBlock(part.text) !== null);
+}
+
+/** A prompt the user sent, as opposed to messages the relay delivered. */
+export function isUserPrompt(item: { type?: string; content?: unknown } | null | undefined): boolean {
+	return item?.type === 'userMessage' && !isRelayOnlyMessage(item);
+}
+
 export function attributeRelayPart(
 	text: string,
 	context: { threadId: string; turnId: string | null | undefined },

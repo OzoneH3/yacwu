@@ -23,6 +23,7 @@
 		applyRelaySnapshot,
 		attributeRelayPart,
 		autoDeliveryTargets,
+		isUserPrompt,
 		emptyRelayStore,
 		queuedByRecipient,
 		queuedKey,
@@ -3262,7 +3263,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	function retryLastPrompt() {
 		if (!activeId || viewedAgentId || sendingMessage) return;
-		const lastUserMessage = [...itemsOf(viewed)].reverse().find((item) => item.type === 'userMessage') as any;
+		const lastUserMessage = [...itemsOf(viewed)].reverse().find(isUserPrompt) as any;
 		const text = (lastUserMessage?.content ?? [])
 			.map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
 			.join('')
@@ -5403,10 +5404,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		try {
 			const items = itemsOf(threads[viewedId ?? id] ?? null) as any[];
 			const index = items.indexOf(item);
-			const turnItems = items.filter((entry) => item._turnId && entry._turnId === item._turnId);
-			const requestItem = turnItems.find((entry) => entry.type === 'userMessage')
-				?? items.slice(0, Math.max(0, index)).findLast((entry) => entry.type === 'userMessage');
-			await navigator.clipboard.writeText(await buildHandoff(id, requestItem ?? null, [item], turnItems));
+			// The request is the user's last prompt before this response, also
+			// when relayed messages started or steered turns since then; the
+			// changed files run from that prompt to the end of this turn.
+			const requestIndex = items.slice(0, Math.max(0, index)).findLastIndex(isUserPrompt);
+			const turnEnd = item._turnId ? items.findLastIndex((entry) => entry._turnId === item._turnId) : index;
+			const scope = items.slice(requestIndex + 1, Math.max(index, turnEnd) + 1);
+			await navigator.clipboard.writeText(await buildHandoff(id, requestIndex >= 0 ? items[requestIndex] : null, [item], scope));
 			handoffCopyStatus[key] = 'copied';
 		} catch (error) {
 			handoffCopyStatus[key] = 'failed';
@@ -5423,7 +5427,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	/** Identifies what a full-result copy contained: the task's prompt and how many responses it had. */
 	function fullResultStamp(items: any[]): string | null {
-		const promptIndex = items.findLastIndex((entry) => entry.type === 'userMessage');
+		const promptIndex = items.findLastIndex(isUserPrompt);
 		const responses = items.slice(promptIndex + 1).filter((entry) => entry.type === 'agentMessage' && stripTaskProgressMarkers(String(entry.text ?? '')).trim()).length;
 		if (!responses) return null;
 		const prompt = promptIndex >= 0 ? String(items[promptIndex].id ?? promptIndex) : 'none';
@@ -5432,12 +5436,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	const fullResultPassedOn = $derived(!!activeId && fullResultStamps[activeId] === fullResultStamp(itemsOf(threads[viewedId ?? activeId] ?? null) as any[]) && fullResultStamps[activeId] !== undefined);
 
-	/** Everything since the last prompt — all responses and their linked files — as one handoff. */
+	/**
+	 * Everything since the user's last prompt — all responses and their
+	 * linked files — as one handoff. Relayed messages from other sessions
+	 * are not a prompt: responses to them belong to the same result.
+	 */
 	async function copyFullResult() {
 		const id = activeId;
 		if (!id || fullResultCopy === 'copying') return;
 		const items = itemsOf(threads[viewedId ?? id] ?? null) as any[];
-		const promptIndex = items.findLastIndex((entry) => entry.type === 'userMessage');
+		const promptIndex = items.findLastIndex(isUserPrompt);
 		const scope = items.slice(promptIndex + 1);
 		const responses = scope.filter((entry) => entry.type === 'agentMessage' && stripTaskProgressMarkers(String(entry.text ?? '')).trim());
 		if (!responses.length) {

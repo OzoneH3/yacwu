@@ -4,6 +4,8 @@ import {
 	applyRelaySnapshot,
 	attributeRelayPart,
 	autoDeliveryTargets,
+	isRelayOnlyMessage,
+	isUserPrompt,
 	emptyRelayStore,
 	parseRelayBlock,
 	queuedByRecipient,
@@ -163,6 +165,22 @@ describe('waiting messages and auto-send', () => {
 		expect(autoDeliveryTargets(waiting, all, new Set(), failed)).toEqual(['thr-carol']);
 		const grown = { ...waiting, 'thr-bob': [queued('b1'), queued('b2')] };
 		expect(autoDeliveryTargets(grown, all, new Set(), failed)).toEqual(['thr-bob', 'thr-carol']);
+	});
+});
+
+describe('relayed messages are not user prompts', () => {
+	const block = '[Yacwu relay: 1 message.]\n[Yacwu relay message msg-0001 from session thr-a on local]\nhi\n[/Yacwu relay message msg-0001]\n';
+	const message = (...content: unknown[]) => ({ type: 'userMessage', content });
+	test('only messages made entirely of relay blocks count as relayed', () => {
+		expect(isRelayOnlyMessage(message({ type: 'text', text: block }))).toBe(true);
+		expect(isRelayOnlyMessage(message({ type: 'text', text: block }, { type: 'text', text: '  ' }))).toBe(true);
+		// The user's prompt with waiting messages appended is still theirs.
+		expect(isUserPrompt(message({ type: 'text', text: 'Do it' }, { type: 'text', text: block }))).toBe(true);
+		expect(isUserPrompt(message({ type: 'text', text: block }, { type: 'image', url: 'x.png' }))).toBe(true);
+		// Text that merely mentions a relay block, empty messages and other items.
+		expect(isUserPrompt(message({ type: 'text', text: 'see:\n' + block }))).toBe(true);
+		expect(isRelayOnlyMessage(message())).toBe(false);
+		expect(isUserPrompt({ type: 'agentMessage', content: [] })).toBe(false);
 	});
 });
 
