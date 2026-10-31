@@ -4,6 +4,45 @@ interface ScrollViewport {
 	clientHeight: number;
 }
 
+/** A rendered transcript row's vertical extent, relative to the viewport's top edge. */
+export interface AnchorRow {
+	key: string;
+	top: number;
+	bottom: number;
+}
+
+/**
+ * Where the reader is: the rows on screen (topmost first) and how far each
+ * starts below the viewport's top. Several are kept so the place survives
+ * the topmost row disappearing (folded into a group, replaced).
+ */
+export type TranscriptAnchor = { key: string; offset: number }[];
+
+/** The transcript does its own scroll anchoring (`overflow-anchor: none`, for the virtual spacers). */
+export function pickTranscriptAnchor(rows: AnchorRow[], viewportHeight: number, limit = 8): TranscriptAnchor | null {
+	const visible = rows
+		.filter((row) => row.bottom > 0 && row.top < viewportHeight)
+		.sort((a, b) => a.top - b.top)
+		.slice(0, limit)
+		.map((row) => ({ key: row.key, offset: row.top }));
+	return visible.length ? visible : null;
+}
+
+/**
+ * How far to scroll so the reader's row is back where it was: the first
+ * anchor row still rendered decides; 0 when none is (nothing to hold on to)
+ * or it has not moved.
+ */
+export function anchorCorrection(anchor: TranscriptAnchor, currentTop: (key: string) => number | null): number {
+	for (const { key, offset } of anchor) {
+		const top = currentTop(key);
+		if (top === null) continue;
+		const delta = top - offset;
+		return Math.abs(delta) > 0.5 ? delta : 0;
+	}
+	return 0;
+}
+
 /** Virtual rows must be rendered/measured before the final bottom is known. */
 export async function settleTranscriptBottom(viewport: ScrollViewport, options: {
 	flush: () => Promise<unknown>;

@@ -32,7 +32,7 @@
 		type RelayRecord
 	} from '$lib/relay';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
-	import { settleTranscriptBottom } from '$lib/transcript-scroll';
+	import { anchorCorrection, pickTranscriptAnchor, settleTranscriptBottom, type TranscriptAnchor } from '$lib/transcript-scroll';
 	import { runtimeOutcome, interruptionReason } from '$lib/runtime-reconciliation';
 	import { page, updated } from '$app/state';
 	import { goto } from '$app/navigation';
@@ -2229,6 +2229,43 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function followingBottom(): boolean {
 		return activeBottomJump?.generation === bottomJumpGeneration && activeBottomJump.targetId === viewedId;
 	}
+	// Scroll anchoring for the virtual transcript (its CSS turns the
+	// browser's off for the spacers). While the reader is scrolled up, rows
+	// changing height above what they read — the latest activity folding
+	// into "Background work" when the next one arrives, output collapsing,
+	// rows measured as they render — would otherwise move the text away.
+	let transcriptAnchor: TranscriptAnchor | null = null;
+	function recordTranscriptAnchor() {
+		const el = transcriptEl;
+		if (!el || followingBottom() || isTranscriptAtBottom()) {
+			transcriptAnchor = null;
+			return;
+		}
+		const viewportTop = el.getBoundingClientRect().top;
+		const rows = Array.from(el.querySelectorAll<HTMLElement>('.virtual-row[data-row-key]'), (row) => {
+			const rect = row.getBoundingClientRect();
+			return { key: row.dataset.rowKey ?? '', top: rect.top - viewportTop, bottom: rect.bottom - viewportTop };
+		});
+		transcriptAnchor = pickTranscriptAnchor(rows, el.clientHeight);
+	}
+	function restoreTranscriptAnchor() {
+		const el = transcriptEl;
+		const anchor = transcriptAnchor;
+		if (!el || !anchor || followingBottom()) return;
+		const viewportTop = el.getBoundingClientRect().top;
+		const delta = anchorCorrection(anchor, (key) => {
+			const row = el.querySelector<HTMLElement>(`.virtual-row[data-row-key="${CSS.escape(key)}"]`);
+			return row ? row.getBoundingClientRect().top - viewportTop : null;
+		});
+		if (delta) el.scrollTop += delta;
+	}
+	// After every transcript render: rows added, removed, regrouped or
+	// re-windowed (row resizes restore from their own observer).
+	$effect(() => {
+		void virtualTranscript;
+		untrack(restoreTranscriptAnchor);
+	});
+
 	async function scrollToBottom() {
 		if (followingBottom()) return;
 		const generation = ++bottomJumpGeneration;
@@ -2307,6 +2344,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function onTranscriptScroll() {
+		// Before the window re-renders for the new position: that render is
+		// then held to what is on screen now.
+		recordTranscriptAnchor();
 		updateTranscriptViewport();
 		if (isTranscriptAtBottom()) unseenActivity = false;
 	}
@@ -2319,6 +2359,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			offset += measuredRowHeight(displayedItems[i]);
 		}
 		transcriptEl.scrollTop = offset;
+		// A jump is a new place; its scroll event records the new anchor.
+		transcriptAnchor = null;
 		updateTranscriptViewport();
 	}
 
@@ -2331,6 +2373,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				rowHeights.set(key, next);
 				transcriptHeightVersion += 1;
 			}
+			// Resize observers run after layout, before paint: no visible jump.
+			restoreTranscriptAnchor();
 		};
 		measure();
 		const observer = new ResizeObserver(measure);
@@ -3058,7 +3102,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	// transcript once. Only the selection is a reactive dependency.
 	$effect(() => {
 		const id = viewedId;
-		untrack(() => { if (id) void scrollToBottom(); });
+		untrack(() => {
+			transcriptAnchor = null;
+			if (id) void scrollToBottom();
+		});
 	});
 
 	$effect(() => {
@@ -7144,7 +7191,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{/if}
 					<div class="transcript-spacer" style={`height: ${virtualTranscript.before}px`}></div>
 					{#each virtualTranscript.items as item (item.id)}
-						<div class="virtual-row" use:measureTranscriptRow={transcriptRowKey(item)}>
+						<div class="virtual-row" data-row-key={transcriptRowKey(item)} use:measureTranscriptRow={transcriptRowKey(item)}>
 							{#if item.type === 'userMessage'}
 								<div class="item user">
 									<div class="body media-body">
