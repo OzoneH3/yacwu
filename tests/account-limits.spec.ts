@@ -92,3 +92,28 @@ for (const providers of [[], ['claude'], ['copilot'], ['claude', 'copilot']]) {
   expect(limits).toEqual({ codexReservePercent: 14, copilotCreditLimit: 3000 });
  });
 }
+
+test('Claude reserve saves globally and survives browser settings being cleared', async ({ page, request }) => {
+ await request.post('/api/account/claude-reserve', { data: { reserve: 10 } });
+ await page.route('**/api/**', async route => {
+  const path = new URL(route.request().url()).pathname;
+  if (path === '/api/account/claude-reserve' || path === '/api/account/limits') return route.continue();
+  if (path === '/api/hosts') return route.fulfill({ json: { hosts: [{ name: 'local', provider: 'codex', kind: 'local' }, { name: 'claude', provider: 'claude', kind: 'backend' }] } });
+  if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+  if (path === '/api/threads') return route.fulfill({ json: { data: [] } });
+  return route.fulfill({ json: {} });
+ });
+ await page.goto('/');
+ await page.getByRole('button', { name: 'Settings', exact: true }).click();
+ const reserve = page.getByLabel('Claude reserve (% remaining)', { exact: true });
+ await expect(reserve).toBeEnabled();
+ await reserve.fill('8'); await reserve.blur();
+ await expect(page.getByText('Claude reserve saved on the server.', { exact: true })).toBeVisible();
+ expect(await (await request.get('/api/account/claude-reserve')).json()).toEqual({ reserve: 8 });
+ await page.evaluate(() => localStorage.clear());
+ await page.reload();
+ await page.getByRole('button', { name: 'Settings', exact: true }).click();
+ await expect(reserve).toHaveValue('8');
+ expect((await request.post('/api/account/claude-reserve', { data: { reserve: 51 } })).status()).toBe(400);
+ expect(await (await request.get('/api/account/claude-reserve')).json()).toEqual({ reserve: 8 });
+});

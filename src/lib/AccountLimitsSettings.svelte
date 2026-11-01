@@ -5,6 +5,31 @@
  let codex = $state(0), copilot = $state(0);
  let loading = $state(true), saving = $state(false), loaded = $state(false);
  let status = $state('');
+ let reserveStatus = $state(''), reserveLoading = $state(true), reserveSaving = $state(false);
+ $effect(() => { if (claudeEnabled) void loadReserve(); });
+ async function loadReserve() {
+  reserveLoading = true;
+  try {
+   const res = await fetch('/api/account/claude-reserve');
+   if (!res.ok) throw new Error();
+   const data = await res.json();
+   if (data.reserve === null) await saveReserve(claudeReserve);
+   else if (Number.isInteger(data.reserve) && data.reserve >= 0 && data.reserve <= 50) onclaudechange(data.reserve);
+   else throw new Error();
+  } catch { reserveStatus = 'Could not load the shared Claude reserve. Reopen Settings to retry.'; }
+  finally { reserveLoading = false; }
+ }
+ async function saveReserve(value: number) {
+  reserveSaving = true; reserveStatus = '';
+  try {
+   const res = await fetch('/api/account/claude-reserve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ reserve: value }) });
+   if (!res.ok) throw new Error();
+   const data = await res.json();
+   onclaudechange(data.reserve);
+   reserveStatus = 'Claude reserve saved on the server.';
+  } catch { reserveStatus = 'Could not save the Claude reserve. Reopen Settings to check.'; }
+  finally { reserveSaving = false; }
+ }
  onMount(() => { void load(); });
  async function load() {
   try {
@@ -30,8 +55,9 @@
  <h3 id="settings-account-limits">Account usage limits</h3>
  <p>Reaching a limit stops running tasks and blocks new prompts and queued messages. 0 disables that provider’s limit.</p>
  {#if claudeEnabled}
-  <label>Claude reserve (% remaining)<input type="number" min={settingRanges.claudeAllowanceReserve.min} max={settingRanges.claudeAllowanceReserve.max} value={claudeReserve} onchange={event => onclaudechange(clampSetting('claudeAllowanceReserve', event.currentTarget.value))} /></label>
-  <p>Applies to the 5-hour and 7-day allowance. Saved immediately in this browser; takes effect with the next prompt to each session.</p>
+  <label>Claude reserve (% remaining)<input type="number" min={settingRanges.claudeAllowanceReserve.min} max={settingRanges.claudeAllowanceReserve.max} value={claudeReserve} disabled={reserveLoading || reserveSaving} onchange={event => void saveReserve(clampSetting('claudeAllowanceReserve', event.currentTarget.value))} /></label>
+  <p>Applies to the 5-hour and 7-day allowance. Saved immediately on this server for all sessions and browsers. Running tasks and waiting resumes use it at the next allowance check.</p>
+  {#if reserveStatus}<p role="status">{reserveStatus}</p>{/if}
  {/if}
  <p>{copilotEnabled ? 'Codex and Copilot limits are' : 'The Codex limit is'} saved on this server for all browsers and sessions.</p>
  <form onsubmit={save}>

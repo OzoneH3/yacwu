@@ -33,13 +33,29 @@ export function takeAllowanceReserve(request) {
 }
 
 /** Stop/block Claude turns when either allowance has the reserve or less remaining
- * (10% by default; per session from the browser's setting; 0 turns it off).
+ * (10% by default; shared server setting, with legacy prompt fallback; 0 disables it).
  * @param {(options?: {force?: boolean, reserve?: number}) => Promise<any>} readUsage
  * @param {(message: RpcMessage) => void} send
  * @param {(message: RpcMessage) => void} reply
- * @param {{now?: () => number, waiting?: any[], saveWaiting?: (waiting: any[]) => void}} options
+ * @param {{now?: () => number, waiting?: any[], saveWaiting?: (waiting: any[]) => void, readReserve?: () => number | null}} options
  */
-export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now, waiting = [], saveWaiting = () => {} } = {}) {
+export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now, waiting = [], saveWaiting = () => {}, readReserve = () => null } = {}) {
+  /** @type {number | null} */
+  let sharedReserve = null;
+  function refreshReserve() {
+    try {
+      const next = readReserve();
+      if (next !== null && (!Number.isInteger(next) || next < 0 || next > 50)) return false;
+      if (next !== sharedReserve) {
+        sharedReserve = next;
+        for (const entry of resumes.values()) {
+          entry.reserve = reserveFor(entry.threadId);
+          entry.checkAt = 0;
+        }
+      }
+      return true;
+    } catch { return false; }
+  }
   const active = new Map();
   const interrupted = new Map();
   const pending = new Map();
@@ -85,7 +101,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
   }
   /** @param {string | undefined} threadId */
   function reserveFor(threadId) {
-    return threadId ? reserves.get(threadId) ?? DEFAULT_RESERVE : DEFAULT_RESERVE;
+    return sharedReserve ?? (threadId ? reserves.get(threadId) ?? DEFAULT_RESERVE : DEFAULT_RESERVE);
   }
   /** @param {any} usage @param {number} reserve */
   function reason(usage, reserve) {
@@ -114,6 +130,10 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
     async allow(request, requestedReserve = null) {
       if (['turn/interrupt', 'thread/archive', 'thread/delete'].includes(request?.method ?? '') && resumes.delete(request?.params?.threadId)) persist();
       if (!['turn/start', 'review/start', 'thread/compact/start'].includes(request?.method ?? '')) return true;
+      if (!refreshReserve()) {
+        if (request?.id != null) reply({ id: request.id, error: { code: -32000, message: 'Cannot read the Claude allowance reserve setting. New tasks are blocked until settings can be verified.' } });
+        return false;
+      }
       const threadId = request?.params?.threadId;
       if (typeof threadId === 'string' && request?.method === 'turn/start') progressPreferences.set(threadId, request.params?.input?.some(/** @param {any} part */ part => typeof part.text === 'string' && part.text.includes('<!-- YACWU_TASK_PROGRESS -->')) ?? false);
       if (typeof threadId === 'string' && requestedReserve !== null) reserves.set(threadId, requestedReserve);
@@ -210,6 +230,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
       return false;
     },
     async poll() {
+      if (!refreshReserve()) return;
       for (const [id, request] of resumeRequests) {
         if (request.kind !== 'read' || now() - request.sentAt < 30_000) continue;
         resumeRequests.delete(id);
@@ -233,6 +254,7 @@ export function createClaudeQuotaGuard(readUsage, send, reply, { now = Date.now,
         for (const entry of ready) {
           if (!resumes.has(entry.threadId) || closed) continue;
           const known = [usage?.rateLimits?.primary, usage?.rateLimits?.secondary].every(window => typeof window?.usedPercent === 'number' && Number.isFinite(window.usedPercent));
+          entry.reserve = reserveFor(entry.threadId);
           if (!known || reason(usage, entry.reserve)) { entry.checkAt = checkAfter(usage, entry.reserve); continue; }
           entry.checking = true;
           const id = `yacwu-quota-resume-${++serial}`;

@@ -5986,6 +5986,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			settings = readSettings(localStorage.getItem(GLOBAL_SETTINGS_KEY));
 			showAllActivity = settings.showAllActivity;
 		} catch { /* Defaults if storage is disabled. */ }
+    void fetch('/api/account/claude-reserve').then(res => res.ok ? res.json() : null).then(data => {
+      if (Number.isInteger(data?.reserve) && data.reserve >= 0 && data.reserve <= 50) {
+        saveSettings({ ...settings, claudeAllowanceReserve: data.reserve });
+      }
+    }).catch(() => {});
+
 		const runtimeCheckTimer = setInterval(() => void reconcileInterruptedSessions(), 15000);
 		loadSessions();
 		// Allowance windows move while tasks run: sample them every minute the

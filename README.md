@@ -79,6 +79,7 @@ rules locally, and records usage/diagnostic journals on the server.
   with read-only agent transcripts
 - 🔒 File access for Codex and Claude: choose a default in Settings, override at
   creation or in Session details, and keep read-only access through resumes and forks
+- Claude allowance reserve is shared across sessions and browsers; changes apply to running-task checks and waiting resumes.
 - 🧠 Per-session model and reasoning effort that persist across server reloads,
   applied to new turns including session messages, with "Suggest settings"
   and capability/efficiency indicators in the picker
@@ -695,7 +696,7 @@ minutes. Reminders are sent at most once every five minutes and are hidden from
 the transcript, including after reload.
 
 Claude work is stopped and new tasks are blocked when either the five-hour or
-seven-day allowance reaches 90% used. Automatic stops appear in the transcript
+seven-day allowance reaches the configured reserve (10% remaining by default). Automatic stops appear in the transcript
 with the allowance reason and a Resume action, and queued todos stay paused.
 
 - Cancel automatic continuation beside a stopped Claude task’s Resume button to keep
@@ -718,7 +719,7 @@ when comfortably above the reserve, or two minutes near it; unknown readings
 and elapsed reset windows trigger a refresh. If the
 usage endpoint is rate limited, its retry delay is respected and displayed
 when starts cannot be verified. When refresh fails, a last verified reading
-below the session reserve remains usable; unknown or reserve-level readings
+safely above the configured remaining reserve remains usable; unknown or reserve-level readings
 still block new work.
 Repeated forced checks after a failed read are throttled to one attempt every
 two minutes; repeated rate limits increase the backoff and the endpoint's retry

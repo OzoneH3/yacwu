@@ -115,3 +115,39 @@ test('running turns are stopped at their own session reserve', async () => {
 	const stopped = h.sent.filter((m: any) => m.method === 'turn/interrupt').map((m: any) => m.params.turnId);
 	expect(stopped).toEqual(['turn-strict']);
 });
+
+test('shared reserve overrides old prompt values and updates active tasks without another prompt', async () => {
+ let reserve = 8;
+ const sent: any[] = [];
+ const guard = createClaudeQuotaGuard(async () => limits(20, 90), m => sent.push(m), () => {}, { readReserve: () => reserve });
+ expect(await guard.allow({ id: 1, method: 'turn/start', params: { threadId: 't' } }, 10)).toBe(true);
+ guard.observe({ method: 'turn/started', params: { threadId: 't', turn: { id: 'running' } } });
+ await new Promise(resolve => setTimeout(resolve, 0));
+ expect(sent).toHaveLength(0);
+ reserve = 10;
+ await guard.poll();
+ expect(sent.filter(m => m.method === 'turn/interrupt')).toHaveLength(1);
+ guard.close();
+});
+
+test('restored wait entries use current shared reserve instead of old snapshot', async () => {
+ const sent: any[] = [];
+ const guard = createClaudeQuotaGuard(async () => limits(20, 90), m => sent.push(m), () => {}, {
+  readReserve: () => 8,
+  waiting: [{ threadId: 't', turnId: 'old', reserve: 10, checkAt: 0 }]
+ });
+ await guard.poll();
+ expect(sent[0]?.method).toBe('thread/read');
+ guard.close();
+});
+
+test('unreadable shared settings block new starts without blocking stop', async () => {
+ const replies: any[] = [];
+ const guard = createClaudeQuotaGuard(async () => limits(0, 0), () => {}, m => replies.push(m), {
+  readReserve: () => { throw new Error('bad settings'); }
+ });
+ expect(await guard.allow({ id: 1, method: 'turn/start' })).toBe(false);
+ expect(replies[0].error.message).toContain('reserve setting');
+ expect(await guard.allow({ id: 2, method: 'turn/interrupt' })).toBe(true);
+ guard.close();
+});

@@ -69,10 +69,14 @@ pub fn load(path: String) -> Limits {
 fn unique() -> Int
 
 pub fn save(path: String, limits: Limits) -> Result(Nil, String) {
+  save_json(path, encode(limits))
+}
+
+pub fn save_json(path: String, data: Json) -> Result(Nil, String) {
   let temp = path <> "." <> int.to_string(unique())
   let _ = simplifile.create_directory_all(filepath.directory_name(path))
   let result =
-    simplifile.write(temp, json.to_string(encode(limits)))
+    simplifile.write(temp, json.to_string(data))
     |> result.try(fn(_) { simplifile.rename(temp, path) })
     |> result.replace_error("Could not save account usage limits")
   let _ = simplifile.delete(temp)

@@ -30,6 +30,7 @@ import yacwu/account_limits
 import yacwu/auth
 import yacwu/backends
 import yacwu/benchmark
+import yacwu/claude_reserve
 import yacwu/codex.{type Codex}
 import yacwu/defaults
 import yacwu/diagnostics
@@ -441,6 +442,25 @@ fn dispatch(
       remote_access_operation(ctx, req, "setup")
     ["api", "hosts", "access", "revoke"], Post ->
       remote_access_operation(ctx, req, "revoke")
+    ["api", "account", "claude-reserve"], Get ->
+      case claude_reserve.load(claude_reserve.path()) {
+        Ok(reserve) -> json_response(200, claude_reserve.encode(reserve))
+        Error(message) -> json_response(500, error_body(message))
+      }
+    ["api", "account", "claude-reserve"], Post ->
+      case claude_reserve.parse(read_json_body(req)) {
+        Error(message) -> json_response(400, error_body(message))
+        Ok(reserve) ->
+          case
+            account_limits.save_json(
+              claude_reserve.path(),
+              claude_reserve.encode(Some(reserve)),
+            )
+          {
+            Ok(_) -> json_response(200, claude_reserve.encode(Some(reserve)))
+            Error(message) -> json_response(500, error_body(message))
+          }
+      }
     ["api", "account", "limits"], Get ->
       json_response(
         200,
