@@ -310,3 +310,65 @@ test('a reserve near the last known usage refreshes in two minutes', async () =>
 	await read({ force: true, reserve: 10 });
 	expect(calls).toBe(2);
 });
+
+test('a passed reset is probed once during a long rate-limit backoff, and readings carry their time', async () => {
+	let time = Date.parse('2026-11-02T15:00:00Z');
+	let calls = 0;
+	let limited = false;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token', subscriptionType: 'max' }),
+		fetchUsage: async () => {
+			calls++;
+			if (limited) return new Response('', { status: 429, headers: { 'retry-after': '7200' } });
+			return Response.json(calls === 1
+				? { five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 91, resets_at: '2026-11-02T16:00:00Z' } }
+				: { five_hour: { utilization: 30, resets_at: '2026-11-02T23:20:00Z' }, seven_day: { utilization: 2, resets_at: '2026-11-09T16:00:00Z' } });
+		}
+	});
+	const first = await read();
+	expect(first.rateLimits.secondary?.usedPercent).toBe(91);
+	expect(first.rateLimits.readAt).toBe(time);
+	// The endpoint then rate-limits for two hours, before the weekly reset.
+	limited = true;
+	time += 20 * 60_000;
+	const throttled = await read();
+	expect(throttled.usageError?.code).toBe('rate_limited');
+	expect(calls).toBe(2);
+	time += 10 * 60_000;
+	await read();
+	expect(calls).toBe(2);
+	// The reset at 16:00 passes: one probe despite the backoff, and it works.
+	limited = false;
+	time = Date.parse('2026-11-02T16:01:00Z');
+	const after = await read();
+	expect(calls).toBe(3);
+	expect(after.rateLimits.secondary?.usedPercent).toBe(2);
+	expect(after.usageError ?? null).toBeNull();
+	expect(after.rateLimits.readAt).toBe(time);
+});
+
+test('the reset probe happens once: a still rate-limited probe waits for the backoff', async () => {
+	let time = Date.parse('2026-11-02T15:00:00Z');
+	let calls = 0;
+	const read = createClaudeUsageReader({
+		now: () => time,
+		credentials: async () => ({ accessToken: 'test-token' }),
+		fetchUsage: async () => {
+			calls++;
+			return calls === 1
+				? Response.json({ seven_day: { utilization: 91, resets_at: '2026-11-02T16:00:00Z' } })
+				: new Response('', { status: 429, headers: { 'retry-after': '7200' } });
+		}
+	});
+	await read();
+	time += 5 * 60_000;
+	await read();
+	expect(calls).toBe(2);
+	time = Date.parse('2026-11-02T16:00:30Z');
+	await read();
+	expect(calls).toBe(3);
+	time += 60_000;
+	expect((await read()).usageError?.code).toBe('rate_limited');
+	expect(calls).toBe(3);
+});

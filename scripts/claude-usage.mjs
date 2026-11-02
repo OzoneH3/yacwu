@@ -47,7 +47,9 @@ export function claudeRateLimits(usage, planType = null) {
     limitId: 'claude-code', limitName: 'Claude Code',
     primary: window(usage?.five_hour, 300),
     secondary: window(usage?.seven_day, 10_080),
-    credits: null, planType, rateLimitReachedType: null
+    credits: null, planType, rateLimitReachedType: null,
+    /** @type {number | null} Epoch ms of the account read this came from (set by the reader). */
+    readAt: null
   };
   return { rateLimits, rateLimitsByLimitId: { 'claude-code': rateLimits } };
 }
@@ -67,6 +69,7 @@ export function createClaudeUsageReader({
   let lastSuccess = 0;
   let rateLimited = false;
   let rateLimitStreak = 0;
+  let lastAttempt = 0;
   /** @type {Promise<ReturnType<typeof claudeRateLimits> & {usageError?: {code: string, retryAt: number} | null}> | undefined} */
   let pending;
   /** @type {string | undefined} */
@@ -104,12 +107,20 @@ export function createClaudeUsageReader({
     }
     // A page reload/start must not turn a fresh reading into another HTTP call.
     if (currentReading(reserve)) return cached;
-    // Honor throttling even when callers need a fresh safety check.
-    if (now() < retryAt) return force ? forcedFallback(reserve) : { ...cached, usageError: { code: 'rate_limited', retryAt } };
-    // Reuse a stale reading only when both windows were verified below the
-    // requested reserve; unknown or reserve-level values remain unavailable.
-    if (now() < nextRead) return force ? forcedFallback(reserve) : cached;
+    // A known reset is when the reading changes most: once one has passed
+    // since the last attempt, probe even while backing off (one request per
+    // reset), so a rate-limited backend does not show the old window for hours.
+    const resetPassed = [cached.rateLimits.primary, cached.rateLimits.secondary]
+      .some(window => typeof window?.resetsAt === 'number' && window.resetsAt * 1000 <= now() && window.resetsAt * 1000 > lastAttempt);
+    if (!resetPassed) {
+      // Honor throttling even when callers need a fresh safety check.
+      if (now() < retryAt) return force ? forcedFallback(reserve) : { ...cached, usageError: { code: 'rate_limited', retryAt } };
+      // Reuse a stale reading only when both windows were verified below the
+      // requested reserve; unknown or reserve-level values remain unavailable.
+      if (now() < nextRead) return force ? forcedFallback(reserve) : cached;
+    }
     pending = (async () => {
+      lastAttempt = now();
       nextRead = now() + 120_000;
       try {
         const auth = await credentials().catch(() => null);
@@ -139,6 +150,7 @@ export function createClaudeUsageReader({
         if (!response.ok) return force ? forcedFallback(reserve) : { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
         cached = claudeRateLimits(await response.json(), auth?.subscriptionType ?? null);
         lastSuccess = now();
+        cached.rateLimits.readAt = lastSuccess;
         const resets = [cached.rateLimits.primary, cached.rateLimits.secondary]
           .map(window => window?.resetsAt ?? NaN)
           .filter((at) => Number.isFinite(at) && at * 1000 > now())

@@ -86,6 +86,7 @@
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { createPathKindQueue, pathKindKey, type PathKind } from '$lib/path-kinds';
 	import { createSoundPlayer, signalSounds, type SoundKind } from '$lib/sounds';
+	import { readingNote, windowHasReset, windowLabel as allowanceWindowLabel, type UsageReadingError } from '$lib/account-window';
 	import { coordinatorHandoff, type HandoffFile } from '$lib/coordinator-handoff';
 	import { unconfirmedEchoes } from '$lib/user-echoes';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
@@ -189,7 +190,10 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	interface AccountUsage {
 		copilot?: CopilotAccountUsage | null;
 		fiveHour: RateLimitWindow | null;
-	sevenDay: RateLimitWindow | null;
+		sevenDay: RateLimitWindow | null;
+		/** Why the reading may be stale, and when it was taken (Claude backend only). */
+		usageError?: UsageReadingError | null;
+		readAt?: number | null;
 	}
 
 	interface ProfileChoice {
@@ -3469,9 +3473,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return `${mins}m`;
 	}
 
-	function remainingPercent(window: RateLimitWindow): string {
-		const remaining = Math.max(0, Math.min(100, 100 - window.usedPercent));
-		return Number.isInteger(remaining) ? String(remaining) : remaining.toFixed(1);
+	/** Tooltip for one allowance window, saying so when the reading is out of date. */
+	function allowanceWindowTitle(name: string, window: RateLimitWindow, usage: AccountUsage, extra = ''): string {
+		const now = activityClock;
+		const when = windowHasReset(window, now / 1000)
+			? `reset ${fmtReset(window.resetsAt)}; waiting for a new reading`
+			: `resets in ${fmtReset(window.resetsAt)}`;
+		const note = readingNote(usage.usageError, usage.readAt, now);
+		return `${name} · ${when}${extra}${note ? ` · ${note}` : ''}`;
 	}
 
 	function quotaWaitLabel(id: string): string | null { return indicators(id).quotaLabel; }
@@ -3554,8 +3563,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			accountUsageByHost[key] = {
 				copilot: copilotAccountUsage(data.rateLimits?.copilotUsage),
 				fiveHour: windows.find((window) => window.windowDurationMins === 300) ?? null,
-				sevenDay: windows.find((window) => window.windowDurationMins === 10_080) ?? null
+				sevenDay: windows.find((window) => window.windowDurationMins === 10_080) ?? null,
+				usageError: data.usageError && typeof data.usageError.code === 'string' ? data.usageError : null,
+				readAt: typeof data.rateLimits?.readAt === 'number' ? data.rateLimits.readAt : null
 			};
+			// The shared clock only ticks while a session works; a passed reset
+			// must show on an idle page too.
+			activityClock = Date.now();
 			accountUsageFetchedAt[key] = Date.now();
 		} catch {
 			// Keep the last known values if a refresh briefly fails.
@@ -6893,15 +6907,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true}>Task credits</button>
 						{/if}
 						{#if activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
-							<div class="usage-limits" aria-label={`${activeClaude ? 'Claude' : 'Codex'} usage remaining`}>
+							<div class="usage-limits" class:stale-reading={Boolean(activeAccountUsage.usageError)} aria-label={`${activeClaude ? 'Claude' : 'Codex'} usage remaining`}>
 								{#if activeAccountUsage.fiveHour}
-									<span class="usage-window" title={`5-hour limit · resets in ${fmtReset(activeAccountUsage.fiveHour.resetsAt)}`}>
-										<strong>5h</strong> {remainingPercent(activeAccountUsage.fiveHour)}% left
+									<span class="usage-window" title={allowanceWindowTitle('5-hour limit', activeAccountUsage.fiveHour, activeAccountUsage)}>
+										<strong>5h</strong> {allowanceWindowLabel(activeAccountUsage.fiveHour, activityClock / 1000)}
 									</span>
 								{/if}
 								{#if activeAccountUsage.sevenDay}
-									<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true} title={`7-day limit · resets in ${fmtReset(activeAccountUsage.sevenDay.resetsAt)} · open task usage history`}>
-										<strong>7d</strong> {remainingPercent(activeAccountUsage.sevenDay)}% left
+									<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true} title={allowanceWindowTitle('7-day limit', activeAccountUsage.sevenDay, activeAccountUsage, ' · open task usage history')}>
+										<strong>7d</strong> {allowanceWindowLabel(activeAccountUsage.sevenDay, activityClock / 1000)}
 									</button>
 								{/if}
 								{#if !activeClaude && announcedReset}
@@ -9198,6 +9212,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		border-radius: inherit;
 		background: var(--color-accent);
 		transition: width 180ms ease;
+	}
+
+	.usage-limits.stale-reading .usage-window {
+		text-decoration: underline dotted;
+		text-underline-offset: 2px;
 	}
 
 	.usage-limits {
