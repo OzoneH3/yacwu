@@ -1152,6 +1152,9 @@ fn account(cx: Codex) -> Response(ResponseData) {
     json.object([
       #("account", pick(account, "account")),
       #("rateLimits", pick(rate, "rateLimits")),
+      // Yacwu's Claude backend reports why a reading may be stale (e.g.
+      // the usage endpoint is rate limiting it); Codex sends none.
+      #("usageError", pick(rate, "usageError")),
     ]),
   )
 }
