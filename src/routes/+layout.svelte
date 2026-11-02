@@ -4922,6 +4922,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		if (accepted.length > 0 && !event.clipboardData?.getData('text/plain')) event.preventDefault();
 	}
 
+	function openSelectedAttachment(attachment: SelectedAttachment) {
+		if (!attachment.previewUrl) {
+			const type = attachment.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain;charset=utf-8';
+			attachment.previewUrl = URL.createObjectURL(new Blob([attachment.file], { type }));
+		}
+		window.open(attachment.previewUrl, '_blank', 'noopener,noreferrer');
+	}
+
 	function removeSelectedAttachment(id: string) {
 		const removed = selectedAttachments.find((item) => item.id === id);
 		if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
@@ -7648,23 +7656,33 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if selectedAttachments.length > 0}
 						<div class="attachments" aria-label="Attached files">
 							{#each selectedAttachments as attachment (attachment.id)}
-								<button
-									class="attachment"
-									type="button"
-									onclick={() => removeSelectedAttachment(attachment.id)}
-									aria-label={`Remove ${attachment.name}`}
-									title={`Remove ${attachment.name}`}
-								>
-									{#if attachment.previewUrl}
-										<img class="attachment-preview" src={attachment.previewUrl} alt="" />
-									{:else}
-										<span class="attachment-file-icon" aria-hidden="true">{attachment.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'FILE'}</span>
-									{/if}
-									<span>{attachment.name}</span>
-									<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-										<path d="M4 4l8 8M12 4l-8 8" />
-									</svg>
-								</button>
+								<div class="attachment">
+									<button
+										class="attachment-open"
+										type="button"
+										onclick={() => openSelectedAttachment(attachment)}
+										aria-label={`Open ${attachment.name}`}
+										title={`Open ${attachment.name}`}
+									>
+										{#if attachment.kind === 'image' && attachment.previewUrl}
+											<img class="attachment-preview" src={attachment.previewUrl} alt="" />
+										{:else}
+											<span class="attachment-file-icon" aria-hidden="true">{attachment.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'FILE'}</span>
+										{/if}
+										<span>{attachment.name}</span>
+									</button>
+									<button
+										class="attachment-remove"
+										type="button"
+										onclick={() => removeSelectedAttachment(attachment.id)}
+										aria-label={`Remove ${attachment.name}`}
+										title={`Remove ${attachment.name}`}
+									>
+										<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+											<path d="M4 4l8 8M12 4l-8 8" />
+										</svg>
+									</button>
+								</div>
 							{/each}
 						</div>
 					{/if}
@@ -11539,7 +11557,31 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: nowrap;
 	}
 
-	.attachment > span:not(.attachment-file-icon) {
+	.attachment-open, .attachment-remove {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border: 0;
+		padding: 0;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.attachment-open {
+		gap: var(--space-xs);
+		min-width: 0;
+		text-align: left;
+	}
+
+	.attachment-remove {
+		flex: none;
+		width: 1.75rem;
+		min-height: var(--control-height);
+	}
+
+	.attachment-open > span:not(.attachment-file-icon) {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
