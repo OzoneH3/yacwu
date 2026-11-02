@@ -2889,11 +2889,11 @@ const prompt_file_extensions = [
   "gitignore", "env",
 ]
 
-fn prompt_file_extension(filename: String) -> String {
+pub fn prompt_file_extension(filename: String) -> String {
   case string.lowercase(filename) {
     "dockerfile" -> "dockerfile"
     "makefile" -> "makefile"
-    _ -> extension_of(filename)
+    _ -> extension_of(filename) |> string.drop_start(1)
   }
 }
 
