@@ -45,7 +45,7 @@ test('reload restores Claude allowance countdowns without opening Claude histori
 });
 
 test('Claude sign-in state appears on all affected sessions and clears together after recovery', async ({ page }) => {
- let signedOut = true, accountReads = 0;
+ let signedOut = true, accountReads = 0, backendState = 'connected';
  const histories: string[] = [];
  const sessions = [
   { id: 'codex', host: 'local', name: 'Codex' },
@@ -58,7 +58,7 @@ test('Claude sign-in state appears on all affected sessions and clears together 
   const url = new URL(route.request().url()), path = url.pathname;
   let data: any = {};
   if (path === '/api/events') return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
-  if (path === '/api/hosts') data = { hosts: [{ name: 'local', provider: 'codex', kind: 'local' }, { name: 'custom-claude', provider: 'claude', kind: 'backend' }] };
+  if (path === '/api/hosts') data = { hosts: [{ name: 'local', provider: 'codex', kind: 'local' }, { name: 'custom-claude', provider: 'claude', kind: 'backend', state: backendState }] };
   else if (path === '/api/threads') data = { data: sessions };
   else if (path === '/api/threads/loaded') data = { data: [] };
   else if (path === '/api/account') {
@@ -77,15 +77,31 @@ test('Claude sign-in state appears on all affected sessions and clears together 
   await route.fulfill({ json: data });
  });
  await page.goto('/s/codex');
- for (const id of ['one', 'two', 'side']) await expect(page.locator(`a.session[data-id="${id}"]`).getByLabel('Claude sign-in required', { exact: true })).toBeVisible();
+ for (const id of ['one', 'two', 'side']) {
+  const dot = page.locator(`a.session[data-id="${id}"] .run-dot`);
+  await expect(dot).toHaveClass(/auth-required/);
+  await expect(dot).toHaveAttribute('aria-label', 'Claude sign-in required');
+  await expect.poll(() => dot.evaluate(el => el.getAttribute('data-yacwu-tooltip') || el.getAttribute('title'))).toMatch(/claude auth login/);
+ }
+ await expect(page.locator('.claude-account-badge')).toHaveCount(0);
  await expect(page.locator('a.session[data-id="codex"] .claude-account-badge')).toHaveCount(0);
  expect(histories.filter(id => id !== 'codex')).toEqual([]);
  expect(accountReads).toBe(1);
  await page.locator('a.session[data-id="one"]').click();
- await expect(page.locator('.claude-account-notice')).toHaveText('Claude sign-in required');
+ await expect.poll(() => page.locator('.session-info-trigger').evaluate(el => el.getAttribute('data-yacwu-tooltip') || el.getAttribute('title'))).toMatch(/Claude authentication is missing or expired/);
  signedOut = false;
  await page.clock.fastForward(5 * 60 * 1000 + 1);
- await expect(page.locator('.claude-account-badge')).toHaveCount(0);
- await expect(page.locator('.claude-account-notice')).toHaveCount(0);
+ await expect(page.locator('.run-dot.auth-required')).toHaveCount(0);
+ await expect(page.locator('a.session[data-id="one"] .run-dot')).toHaveAttribute('aria-label', 'Idle');
  await expect(page.getByRole('button', { name: /7d 70% left/ })).toBeVisible();
+ backendState = 'disconnected';
+ await page.reload();
+ for (const id of ['one', 'two', 'side']) {
+  const dot = page.locator(`a.session[data-id="${id}"] .run-dot`);
+  await expect(dot).toHaveClass(/offline/);
+  await expect(dot).toHaveAttribute('aria-label', 'Offline');
+  await expect.poll(() => dot.evaluate(el => el.getAttribute('data-yacwu-tooltip') || el.getAttribute('title'))).toMatch(/Backend custom-claude is offline/);
+ }
+ await expect(page.locator('a.session[data-id="codex"] .run-dot')).not.toHaveClass(/offline|auth-required/);
+
 });

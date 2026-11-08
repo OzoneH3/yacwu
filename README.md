@@ -79,7 +79,7 @@ rules locally, and records usage/diagnostic journals on the server.
   with read-only agent transcripts
 - 🔒 File access for Codex and Claude: choose a default in Settings, override at
   creation or in Session details, and keep read-only access through resumes and forks
-- Claude sign-in and unavailable-allowance notices appear across sessions sharing the affected backend.
+- Session status dots show sign-in errors in red and offline backends in gray, with explanatory tooltips.
 - Claude allowance reserve is shared across sessions and browsers; changes apply to running-task checks and waiting resumes.
 - 🧠 Per-session model and reasoning effort that persist across server reloads,
   applied to new turns including session messages, with "Suggest settings"

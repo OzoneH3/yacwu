@@ -536,6 +536,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const activeHost = $derived(activeId ? sessionHost(activeId) : LOCAL_HOST);
 	const activeRemote = $derived(isRemoteHost(activeHost));
 	const activeAccountUsage = $derived(accountUsageByHost[activeHost] ?? null);
+	const activeAvailability = $derived(sessionAvailability(activeId));
 	// The current Codex week's start: a reset announced before it has landed.
 	const codexWeekStartedAt = $derived(typeof activeAccountUsage?.sevenDay?.resetsAt === 'number'
 		? (activeAccountUsage.sevenDay.resetsAt - 7 * 24 * 60 * 60) * 1000
@@ -3488,6 +3489,19 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const usage = accountUsageByHost[sessionHost(id)];
 		if (!usage) return null;
 		return claudeAccountNotice(usage.usageError, Boolean(usage.fiveHour && usage.sevenDay));
+	}
+
+	function sessionAvailability(id: string | null) {
+		if (!id) return null;
+		const host = sessionHost(id);
+		const state = hostStates[host] ?? hostChoices.find(entry => entry.name === host)?.state;
+		if (state === 'disconnected' || state === 'error') return {
+			kind: 'offline', label: 'Offline', title: `Backend ${host} is offline. Reconnect it to use this session.`
+		};
+		// A running turn may still have usable cached authentication.
+		if (threads[id]?.status === 'running') return null;
+		const notice = claudeNotice(id);
+		return notice?.authenticationRequired ? { kind: 'auth-required', label: notice.label, title: notice.title } : null;
 	}
 
 	function quotaWaitLabel(id: string): string | null { return indicators(id).quotaLabel; }
@@ -6543,7 +6557,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{/if}
 			<nav class="sessions" data-loaded={sessionsLoaded}>
 				{#each topSessions as s (s.id)}
-					{@const sClaudeNotice = claudeNotice(s.id)}
+					{@const sAvailability = sessionAvailability(s.id)}
 					{@const sessionProgress = taskProgressForSession(s.id)}
 					{@const sessionIsRunning = threads[s.id]?.status === 'running'}
 					{@const showSessionProgress = sessionIsRunning && (sessionProgress?.percent ?? 0) < 100}
@@ -6595,14 +6609,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					>
 						<span
 							class="run-dot"
-							class:quota-waiting={Boolean(quotaWaitLabel(s.id))}
+							class:offline={sAvailability?.kind === 'offline'}
+							class:auth-required={sAvailability?.kind === 'auth-required'}
+							class:quota-waiting={!sAvailability && Boolean(quotaWaitLabel(s.id))}
 							class:running={threads[s.id]?.status === 'running'}
 							class:error={Boolean(threads[s.id]?.error)}
 							class:interrupted={interruptedSessions[s.id]}
 							role="img"
-							aria-label={quotaWaitLabel(s.id) || (interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle')}
-							title={quotaWaitLabel(s.id) || (interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle')}
-						>{quotaWaitLabel(s.id) ? '◷' : ''}</span>
+							aria-label={sAvailability?.label || (quotaWaitLabel(s.id) || (interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'))}
+							title={sAvailability?.title || (quotaWaitLabel(s.id) || (interruptedSessions[s.id] ? 'Interrupted by restart' : recoveringSessions[s.id] ? 'Checking task status' : threads[s.id]?.error ? 'Error' : threads[s.id]?.status === 'running' ? 'Running' : 'Idle'))}
+						>{!sAvailability && quotaWaitLabel(s.id) ? '◷' : ''}</span>
 		<span class="label">
 							{#if sessionAttentionById[s.id] && !(finishedSessions[s.id] && sessionAttentionById[s.id] === 'alert')}
 								<span
@@ -6628,15 +6644,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{#if isRemoteHost(s.host)}
 							<span class="host-badge" title={`Runs on ${s.host}`}>{s.host}</span>
 						{/if}
-						{#if sClaudeNotice}
-							<span class="claude-account-badge" class:auth-required={sClaudeNotice?.authenticationRequired} title={sClaudeNotice?.title} aria-label={sClaudeNotice?.label}>{sClaudeNotice?.authenticationRequired ? 'Sign in' : 'Usage ?'}</span>
-						{/if}
 						{#if fastSessions[s.id]}{@render fastMark()}{/if}
 						{#if fileAccessBySession[s.id]?.mode === 'read-only'}<span class="readonly-badge" title="Read-only session">🔒</span>{/if}
 					</a>
 				</div>
 				{#each sideChatsOf(s.id) as side (side.id)}
-					{@const sideClaudeNotice = claudeNotice(side.id)}
+					{@const sideAvailability = sessionAvailability(side.id)}
 					<div class="session-row side-row">
 						<a
 							class="session side"
@@ -6647,11 +6660,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						>
 							<span
 								class="run-dot"
+								class:offline={sideAvailability?.kind === 'offline'}
+								class:auth-required={sideAvailability?.kind === 'auth-required'}
 								class:running={threads[side.id]?.status === 'running'}
 								class:error={Boolean(threads[side.id]?.error)}
 								role="img"
-								aria-label={threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle'}
-								title={threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle'}
+								aria-label={sideAvailability?.label || (threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle')}
+								title={sideAvailability?.title || (threads[side.id]?.error ? 'Error' : threads[side.id]?.status === 'running' ? 'Running' : 'Idle')}
 							></span>
 							<span class="label">
 								{#if sessionAttentionById[side.id] && !(finishedSessions[side.id] && sessionAttentionById[side.id] === 'alert')}
@@ -6666,9 +6681,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{#if finishedSessions[side.id] && side.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
 								⎇ {shortLabel(side)}
 							</span>
-							{#if sideClaudeNotice}
-							<span class="claude-account-badge" class:auth-required={sideClaudeNotice?.authenticationRequired} title={sideClaudeNotice?.title} aria-label={sideClaudeNotice?.label}>{sideClaudeNotice?.authenticationRequired ? 'Sign in' : 'Usage ?'}</span>
-						{/if}
 						{#if fastSessions[side.id]}{@render fastMark()}{/if}
 						</a>
 					</div>
@@ -6857,8 +6869,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						class="session-info-trigger"
 						type="button"
 						onclick={openSessionInfo}
-						aria-label={`Session details, ${quotaWaitLabel(activeId) || (interruptedSessions[activeId] ? 'interrupted' : active?.error ? 'error' : active?.status === 'running' ? 'running' : 'idle')}`}
-						title={`Session details · ${quotaWaitLabel(activeId) || (interruptedSessions[activeId] ? 'Interrupted by restart' : active?.error ? 'Error' : active?.status === 'running' ? 'Running' : 'Idle')}`}
+						aria-label={`Session details, ${activeAvailability?.label || quotaWaitLabel(activeId) || (interruptedSessions[activeId] ? 'interrupted' : active?.error ? 'error' : active?.status === 'running' ? 'running' : 'idle')}`}
+						title={`Session details · ${activeAvailability?.title || quotaWaitLabel(activeId) || (interruptedSessions[activeId] ? 'Interrupted by restart' : active?.error ? 'Error' : active?.status === 'running' ? 'Running' : 'Idle')}`}
 					>
 						<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 							<circle cx="12" cy="12" r="9" />
@@ -6867,12 +6879,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</svg>
 						<span
 							class="session-state-dot"
-							class:quota-waiting={Boolean(quotaWaitLabel(activeId))}
+							class:offline={activeAvailability?.kind === 'offline'}
+							class:auth-required={activeAvailability?.kind === 'auth-required'}
+							class:quota-waiting={!activeAvailability && Boolean(quotaWaitLabel(activeId))}
 							class:running={active?.status === 'running'}
 							class:error={Boolean(active?.error)}
 							class:interrupted={interruptedSessions[activeId]}
 							aria-hidden="true"
-						>{quotaWaitLabel(activeId) ? '◷' : ''}</span>
+						>{!activeAvailability && quotaWaitLabel(activeId) ? '◷' : ''}</span>
 					</button>
 					{#if active?.status === 'running'}
 						<button class="stop" type="button" onclick={interrupt} disabled={stoppingSessions[activeId]} aria-label="Stop current turn" title="Stop current turn">
@@ -6888,7 +6902,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				</div>
 			</header>
 			{#if sessionContextLine || activeClaude || isClaudeSession(activeId) || activeCopilot || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
-				{@const selectedClaudeNotice = claudeNotice(activeId)}
 				<div class="original-prompt" aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
 					{#if active?.status === 'running' && !viewedAgentId}
 						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
@@ -6918,9 +6931,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if activeTodoQueue?.tasks.length}<span class="todo-position">[{activeTodoPosition}/{activeTodoTotal}]</span>{/if}
 					<p>{sessionContextLine}</p>
 						<div class="session-bar-right">
-						{#if selectedClaudeNotice}
-							<span class="usage-window claude-account-notice" role="status" title={selectedClaudeNotice?.title}>{selectedClaudeNotice?.label}</span>
-						{/if}
 						{#if activeCopilot}
 							<span class="usage-window" title={copilotAccountTitle(activeAccountUsage?.copilot)}>{copilotAccountLabel(activeAccountUsage?.copilot)}</span>
 							<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true}>Task credits</button>
@@ -8305,15 +8315,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		white-space: nowrap;
 	}
 
-	.claude-account-badge {
-		flex: none;
-		font-size: var(--text-xs);
-		color: var(--color-muted);
-	}
-	.claude-account-badge.auth-required, .claude-account-notice {
-		color: var(--color-error);
-	}
-
 	.dot,
 	.run-dot {
 		flex: none;
@@ -9560,6 +9561,16 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 	.session-state-dot.interrupted {
 		background: var(--color-warning);
+		animation: none;
+	}
+
+	.session .run-dot.auth-required, .session-info-trigger .session-state-dot.auth-required {
+		background: var(--color-error);
+		animation: none;
+	}
+
+	.session .run-dot.offline, .session-info-trigger .session-state-dot.offline {
+		background: var(--color-muted);
 		animation: none;
 	}
 
