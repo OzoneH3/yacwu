@@ -55,3 +55,18 @@ export function readingNote(error: UsageReadingError | null | undefined, readAt:
 		: 'The usage reading could not be refreshed, so these figures may be out of date.';
 	return `${reason}${age}${retry}`;
 }
+
+/** Shared account warning; do not infer logout from a missing percentage alone. */
+export function claudeAccountNotice(error: UsageReadingError | null | undefined, complete: boolean): { label: string; title: string; authenticationRequired: boolean } | null {
+  if (error?.code === 'authentication_required') return {
+    label: 'Claude sign-in required',
+    title: 'Claude authentication is missing or expired. Run claude auth login on the machine running this Claude backend, then refresh. This applies to all sessions using that backend.',
+    authenticationRequired: true
+  };
+  if (!complete) return {
+    label: 'Claude allowance unavailable',
+    title: 'Claude has not supplied both allowance readings. ' + (readingNote(error, null, Date.now()) ?? 'A later account refresh will retry.'),
+    authenticationRequired: false
+  };
+  return null;
+}

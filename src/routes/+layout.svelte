@@ -86,7 +86,7 @@
 	import { readWorkspaceLink } from '$lib/workspace-links';
 	import { createPathKindQueue, pathKindKey, type PathKind } from '$lib/path-kinds';
 	import { createSoundPlayer, signalSounds, type SoundKind } from '$lib/sounds';
-	import { readingNote, windowHasReset, windowLabel as allowanceWindowLabel, type UsageReadingError } from '$lib/account-window';
+	import { claudeAccountNotice, readingNote, windowHasReset, windowLabel as allowanceWindowLabel, type UsageReadingError } from '$lib/account-window';
 	import { coordinatorHandoff, type HandoffFile } from '$lib/coordinator-handoff';
 	import { unconfirmedEchoes } from '$lib/user-echoes';
 	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
@@ -3483,6 +3483,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		return `${name} · ${when}${extra}${note ? ` · ${note}` : ''}`;
 	}
 
+	function claudeNotice(id: string | null) {
+		if (!id || !isClaudeSession(id)) return null;
+		const usage = accountUsageByHost[sessionHost(id)];
+		if (!usage) return null;
+		return claudeAccountNotice(usage.usageError, Boolean(usage.fiveHour && usage.sevenDay));
+	}
+
 	function quotaWaitLabel(id: string): string | null { return indicators(id).quotaLabel; }
 
 	function computeQuotaWaitLabel(id: string, quotaStop: any): string | null {
@@ -6536,6 +6543,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		{/if}
 			<nav class="sessions" data-loaded={sessionsLoaded}>
 				{#each topSessions as s (s.id)}
+					{@const sClaudeNotice = claudeNotice(s.id)}
 					{@const sessionProgress = taskProgressForSession(s.id)}
 					{@const sessionIsRunning = threads[s.id]?.status === 'running'}
 					{@const showSessionProgress = sessionIsRunning && (sessionProgress?.percent ?? 0) < 100}
@@ -6620,11 +6628,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						{#if isRemoteHost(s.host)}
 							<span class="host-badge" title={`Runs on ${s.host}`}>{s.host}</span>
 						{/if}
+						{#if sClaudeNotice}
+							<span class="claude-account-badge" class:auth-required={sClaudeNotice?.authenticationRequired} title={sClaudeNotice?.title} aria-label={sClaudeNotice?.label}>{sClaudeNotice?.authenticationRequired ? 'Sign in' : 'Usage ?'}</span>
+						{/if}
 						{#if fastSessions[s.id]}{@render fastMark()}{/if}
 						{#if fileAccessBySession[s.id]?.mode === 'read-only'}<span class="readonly-badge" title="Read-only session">🔒</span>{/if}
 					</a>
 				</div>
 				{#each sideChatsOf(s.id) as side (side.id)}
+					{@const sideClaudeNotice = claudeNotice(side.id)}
 					<div class="session-row side-row">
 						<a
 							class="session side"
@@ -6654,7 +6666,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								{#if finishedSessions[side.id] && side.id !== activeId}<span class="session-finished-indicator" role="img" aria-label="Finished task" title="Task finished · open session to dismiss"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.2 2.8 2.8 6.2-6.2" /></svg></span>{/if}
 								⎇ {shortLabel(side)}
 							</span>
-							{#if fastSessions[side.id]}{@render fastMark()}{/if}
+							{#if sideClaudeNotice}
+							<span class="claude-account-badge" class:auth-required={sideClaudeNotice?.authenticationRequired} title={sideClaudeNotice?.title} aria-label={sideClaudeNotice?.label}>{sideClaudeNotice?.authenticationRequired ? 'Sign in' : 'Usage ?'}</span>
+						{/if}
+						{#if fastSessions[side.id]}{@render fastMark()}{/if}
 						</a>
 					</div>
 				{/each}
@@ -6872,7 +6887,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{/if}
 				</div>
 			</header>
-			{#if sessionContextLine || activeClaude || activeCopilot || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
+			{#if sessionContextLine || activeClaude || isClaudeSession(activeId) || activeCopilot || activeAccountUsage?.fiveHour || activeAccountUsage?.sevenDay}
+				{@const selectedClaudeNotice = claudeNotice(activeId)}
 				<div class="original-prompt" aria-label={sessionContextLine ? `Session: ${sessionContextLine}` : 'Session and Codex usage'}>
 					{#if active?.status === 'running' && !viewedAgentId}
 						<div class="session-progress" role="status" aria-live="polite" aria-label={activeTaskProgress ? `Estimated ${activeTaskProgress.percent}% complete, ${formatEstimatedRemaining(activeTaskProgress.remainingMinutes)}` : 'Estimating task progress'}>
@@ -6902,6 +6918,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{#if activeTodoQueue?.tasks.length}<span class="todo-position">[{activeTodoPosition}/{activeTodoTotal}]</span>{/if}
 					<p>{sessionContextLine}</p>
 						<div class="session-bar-right">
+						{#if selectedClaudeNotice}
+							<span class="usage-window claude-account-notice" role="status" title={selectedClaudeNotice?.title}>{selectedClaudeNotice?.label}</span>
+						{/if}
 						{#if activeCopilot}
 							<span class="usage-window" title={copilotAccountTitle(activeAccountUsage?.copilot)}>{copilotAccountLabel(activeAccountUsage?.copilot)}</span>
 							<button type="button" class="usage-window usage-details" onclick={() => usageHistoryOpen = true}>Task credits</button>
@@ -8284,6 +8303,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		font-size: var(--text-xs);
 		font-weight: 500;
 		white-space: nowrap;
+	}
+
+	.claude-account-badge {
+		flex: none;
+		font-size: var(--text-xs);
+		color: var(--color-muted);
+	}
+	.claude-account-badge.auth-required, .claude-account-notice {
+		color: var(--color-error);
 	}
 
 	.dot,

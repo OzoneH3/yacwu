@@ -372,3 +372,31 @@ test('the reset probe happens once: a still rate-limited probe waits for the bac
 	expect((await read()).usageError?.code).toBe('rate_limited');
 	expect(calls).toBe(3);
 });
+
+test('missing Claude credentials report shared sign-in state to normal and forced callers', async () => {
+ const read = createClaudeUsageReader({ credentials: async () => ({ accessToken: '' }), fetchUsage: async () => { throw new Error('must not fetch'); } });
+ const readings = await Promise.all([read(), read({ force: true })]);
+ for (const reading of readings) {
+  expect(reading.rateLimits.primary).toBeNull();
+  expect(reading.usageError?.code).toBe('authentication_required');
+ }
+ expect((await read()).usageError?.code).toBe('authentication_required');
+});
+
+test('a rejected Claude token clears old percentages and recovers after sign-in', async () => {
+ let time = 1000, response = 0;
+ const read = createClaudeUsageReader({
+  credentials: async () => ({ accessToken: 'test-token' }), now: () => time,
+  fetchUsage: async () => ++response === 2 ? new Response('', { status: 401 }) : Response.json({
+   five_hour: { utilization: 20, resets_at: null }, seven_day: { utilization: 30, resets_at: null }
+  })
+ });
+ expect((await read()).rateLimits.secondary?.usedPercent).toBe(30);
+ time += 300001;
+ const rejected = await read({ force: true });
+ expect(rejected.usageError?.code).toBe('authentication_required');
+ expect(rejected.rateLimits.secondary).toBeNull();
+ time += 120001;
+ expect((await read()).rateLimits.secondary?.usedPercent).toBe(30);
+ expect((await read()).usageError).toBeUndefined();
+});

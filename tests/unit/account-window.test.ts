@@ -20,3 +20,13 @@ test('a stale reading says why, how old it is and when the next try is', () => {
 	expect(note).toContain('Next try around');
 	expect(readingNote({ code: 'unavailable' }, null, now)).toBe('The usage reading could not be refreshed, so these figures may be out of date.');
 });
+
+test('missing allowance alone is not treated as missing authentication', async () => {
+ const { claudeAccountNotice } = await import('../../src/lib/account-window');
+ expect(claudeAccountNotice(null, true)).toBeNull();
+ expect(claudeAccountNotice(null, false)?.authenticationRequired).toBe(false);
+ expect(claudeAccountNotice({ code: 'rate_limited' }, false)?.authenticationRequired).toBe(false);
+ const notice = claudeAccountNotice({ code: 'authentication_required' }, true);
+ expect(notice?.authenticationRequired).toBe(true);
+ expect(notice?.title).toContain('claude auth login');
+});

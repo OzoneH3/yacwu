@@ -68,6 +68,7 @@ export function createClaudeUsageReader({
   let retryAt = 0;
   let lastSuccess = 0;
   let rateLimited = false;
+  let authenticationRequired = false;
   let rateLimitStreak = 0;
   let lastAttempt = 0;
   /** @type {Promise<ReturnType<typeof claudeRateLimits> & {usageError?: {code: string, retryAt: number} | null}> | undefined} */
@@ -83,7 +84,7 @@ export function createClaudeUsageReader({
       && lastSuccess > 0 && now() - lastSuccess < freshness;
   }
   function unavailable() {
-    return { ...claudeRateLimits(null), usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
+    return { ...claudeRateLimits(null), usageError: authenticationRequired ? { code: 'authentication_required', retryAt: 0 } : rateLimited ? { code: 'rate_limited', retryAt } : null };
   }
   /** @param {number} reserve */
   function lastKnownSafe(reserve) {
@@ -95,6 +96,7 @@ export function createClaudeUsageReader({
   }
   /** @param {number} reserve */
   function forcedFallback(reserve) {
+    if (authenticationRequired) return unavailable();
     return lastKnownSafe(reserve)
       ? { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null }
       : unavailable();
@@ -117,7 +119,7 @@ export function createClaudeUsageReader({
       if (now() < retryAt) return force ? forcedFallback(reserve) : { ...cached, usageError: { code: 'rate_limited', retryAt } };
       // Reuse a stale reading only when both windows were verified below the
       // requested reserve; unknown or reserve-level values remain unavailable.
-      if (now() < nextRead) return force ? forcedFallback(reserve) : cached;
+      if (now() < nextRead) return force ? forcedFallback(reserve) : authenticationRequired ? unavailable() : cached;
     }
     pending = (async () => {
       lastAttempt = now();
@@ -130,11 +132,24 @@ export function createClaudeUsageReader({
           lastSuccess = 0;
           accountToken = token;
         }
-        if (!token) return force ? claudeRateLimits(null) : cached;
+        if (!token) {
+          authenticationRequired = true;
+          cached = claudeRateLimits(null);
+          lastSuccess = 0;
+          return unavailable();
+        }
         const response = await fetchUsage('https://api.anthropic.com/api/oauth/usage', {
           headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' },
           signal: AbortSignal.timeout(8_000)
         });
+        if (response.status === 401) {
+          authenticationRequired = true;
+          rateLimited = false;
+          retryAt = 0;
+          cached = claudeRateLimits(null);
+          lastSuccess = 0;
+          return unavailable();
+        }
         if (response.status === 429) {
           rateLimitStreak++;
           const header = response.headers.get('retry-after');
@@ -148,6 +163,7 @@ export function createClaudeUsageReader({
           rateLimited = true;
         }
         if (!response.ok) return force ? forcedFallback(reserve) : { ...cached, usageError: rateLimited ? { code: 'rate_limited', retryAt } : null };
+        authenticationRequired = false;
         cached = claudeRateLimits(await response.json(), auth?.subscriptionType ?? null);
         lastSuccess = now();
         cached.rateLimits.readAt = lastSuccess;
