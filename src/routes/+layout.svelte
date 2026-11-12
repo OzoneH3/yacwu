@@ -3986,7 +3986,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						addLocalNote(sideId, err.error ?? 'failed to send message', 'err');
 					}
 				}
-				goto(`/s/${sideId}${hostQuery(data.host ?? sessionHost(id))}`);
+				await goto(`/s/${sideId}${hostQuery(data.host ?? sessionHost(id))}`);
+				await tick();
+				composerTextareaEl?.focus({ preventScroll: true });
 				break;
 			}
 
@@ -7171,6 +7173,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					{:else}
 						<span class="meta">parent unavailable</span>
 					{/if}
+					<button class="mini ghost" type="button" title="Close side conversation" disabled={Boolean(clearingSessionId)} onclick={() => void deleteSession(activeId)}>
+						Close
+					</button>
 				</div>
 			{/if}
 

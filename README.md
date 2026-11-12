@@ -192,7 +192,7 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/shell <command>` | run a user-initiated shell command in the thread |
 | `/rollback [turns]` | roll back the last N turns (default 1) |
 | `/fork` | branch this thread into a new, permanent session that carries the history and continues the work |
-| `/btw [question]` | ask on the side: a throwaway fork, nested under its parent and deleted when closed, told to treat the history as reference and not to change anything (an instruction, not enforced) |
+| `/btw [question]` | ask on the side: a throwaway fork with the message box focused and a Close button beside its parent link, nested under its parent and deleted when closed, told to treat the history as reference and not to change anything (an instruction, not enforced) |
 | `/archive` | archive this session |
 | `/help` | list the commands |
 
