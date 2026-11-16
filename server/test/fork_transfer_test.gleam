@@ -1,10 +1,13 @@
+import filepath
 import gleam/dynamic/decode
 import gleam/json
 import gleam/result
 import gleam/string
 import gleeunit/should
+import simplifile
 import yacwu/fork_transfer
 import yacwu/jsonx
+import yacwu/oauth
 
 fn data(raw: String) {
   let assert Ok(value) = json.parse(raw, decode.dynamic)
@@ -95,4 +98,59 @@ pub fn oversized_transcript_is_rejected_before_creation_test() {
     fork_transfer.max_bytes + 1,
   )
   |> should.be_error
+}
+
+pub fn large_history_is_preserved_as_a_file_reference_test() {
+  let transcript = string.repeat("x", 600_000)
+  let save = fn(content) {
+    content |> should.equal(transcript)
+    Ok("/private/fork history.json")
+  }
+  let assert Ok(context) =
+    fork_transfer.reference("parent", transcript, "RULES", save)
+  string.contains(context, "/private/fork history.json") |> should.be_true
+  string.contains(context, "untrusted reference") |> should.be_true
+  string.contains(context, "RULES") |> should.be_true
+  { string.byte_size(context) < 4096 } |> should.be_true
+}
+
+pub fn archive_failure_is_not_silently_truncated_test() {
+  fork_transfer.reference("parent", string.repeat("x", 600_000), "", fn(_) {
+    Error("disk full")
+  })
+  |> should.equal(Error("disk full"))
+}
+
+pub fn history_larger_than_old_inline_limit_is_read_test() {
+  let request = fn(_, _) {
+    Ok(data("{\"data\":[{\"text\":\"" <> string.repeat("x", 600_000) <> "\"}]}"))
+  }
+  fork_transfer.read_turns(request, "parent", "", [], 0) |> should.be_ok
+}
+
+pub fn small_reference_stays_inline_test() {
+  let assert Ok(context) =
+    fork_transfer.reference("parent", "[{fixture}]", "RULES", fn(_) {
+      panic as "small fork must not write a file"
+    })
+  string.contains(context, "[{fixture}]") |> should.be_true
+}
+
+pub fn snapshot_is_complete_private_and_uses_unique_paths_test() {
+  let assert Ok(cwd) = simplifile.current_directory()
+  let dir = filepath.join(cwd, ".workspace/fork-test-" <> oauth.random_state())
+  let content = string.repeat("history é\n", 60_000)
+  let assert Ok(path) = fork_transfer.save_snapshot(dir, content)
+  let assert Ok(other) = fork_transfer.save_snapshot(dir, "second")
+  { path != other } |> should.be_true
+  simplifile.read(path) |> should.equal(Ok(content))
+  let assert Ok(info) = simplifile.file_info(path)
+  simplifile.file_info_permissions_octal(info) |> should.equal(0o600)
+  let assert Ok(info) = simplifile.file_info(dir)
+  simplifile.file_info_permissions_octal(info) |> should.equal(0o700)
+  fork_transfer.save_snapshot(path, "cannot write inside a file")
+  |> should.be_error
+  let assert Ok(_) = simplifile.delete(path)
+  let assert Ok(_) = simplifile.delete(other)
+  let assert Ok(_) = simplifile.delete(dir)
 }

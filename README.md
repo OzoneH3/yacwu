@@ -927,8 +927,12 @@ provider. Switching providers creates an idle session in the same local folder
 with the source transcript as labelled reference context and the destination's
 default model. It preserves file access and rejects unsupported read-only targets.
 Backend tool state and approvals are not migrated, and files are not copied.
-Transfers larger than 512 KiB and transfers from remote machines are rejected
-rather than truncated.
+Small transfers (up to 512 KiB including instructions) are embedded directly.
+Larger transcripts are saved intact in private `.workspace/fork-transcripts/` JSON
+files under the Yacwu installation and referenced by absolute path, so the
+destination can search or read relevant parts on demand. Keep those files while
+the fork needs its source history. Transfers over 64 MiB, more than 100 history
+pages, and transfers from remote machines are rejected rather than truncated.
 
 Slash commands with finite arguments show a searchable dropdown: enabled `/fork`
 providers, `/mode` choices, `/todo` and `/goal` subcommands, and the session's
