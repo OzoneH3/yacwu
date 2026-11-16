@@ -27,6 +27,6 @@ test('OpenCode adapter exposes models, runs a turn, persists history and forks o
   const read=await request('thread/read',{threadId:thread.id,includeTurns:true});assert.equal(read.thread.turns.length,1);
   assert.ok(JSON.stringify(read).includes('OpenCode response'));
   const fork=await request('thread/fork',{threadId:thread.id});assert.notEqual(fork.thread.id,thread.id);
-  const quota=await request('account/rateLimits/read');assert.equal(quota.rateLimits,null);
+  const quota=await request('account/rateLimits/read');assert.equal(quota.rateLimits.limitId,'opencode');assert.equal(quota.rateLimits.primary,null);assert.equal(quota.rateLimits.secondary,null);
  }finally{child.stdin.end();await new Promise(resolve=>{child.once('exit',resolve);setTimeout(()=>{child.kill();resolve();},3000).unref();});}
 });

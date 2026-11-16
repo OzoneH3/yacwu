@@ -914,10 +914,12 @@ when the OpenCode backend starts. `/compact` runs Magic Context's `/ctx-wrapup`,
 and `/ctx-status` shows Magic Context's own usage, compression and memory status
 in the thread; other `/ctx-*` commands can be sent directly as messages.
 
-The historian consumes provider allowance. OpenCode does not expose account
-allowance percentages through ACP, so Yacwu's native Codex/Claude reserve guards
-do not cover this backend or its historian; provider-side limits still apply.
-Read-only access is unavailable for OpenCode in this integration. Messages sent
+The historian consumes provider allowance. OpenCode's Go allowance reports
+rolling (5-hour) and weekly (7-day) usage through the Go gateway, authenticated
+with the `opencode-go` key OpenCode stores in its database, and Yacwu reads it
+into the same allowance windows as its other backends; an OpenAI/Codex login has
+no such allowance to report, so those windows stay hidden. Read-only access is
+unavailable for OpenCode in this integration. Messages sent
 during a running prompt are queued until that prompt finishes. Forks retain
 OpenCode history; model and effort choices apply on the next prompt.
 

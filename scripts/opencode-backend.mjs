@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { AcpRuntime, sessionModels, sessionEfforts } from './copilot-acp-runtime.mjs';
 import { modelListResult } from './copilot-backend.mjs';
 import { fetchStatusDetail } from './magic-context-status.mjs';
+import { openCodeRateLimits } from './opencode-usage.mjs';
 
 export const OPENCODE_VERSION = '2.3.0';
 export const MAGIC_CONTEXT_VERSION = '0.49.56';
@@ -146,6 +147,16 @@ export class OpenCodeRuntime extends AcpRuntime {
 }
 
 /**
+ * OpenCode's Go allowance (5-hour rolling, 7-day weekly) is served by the Go
+ * gateway, authenticated with the `opencode-go` key OpenCode stores in its
+ * database; map it to the app-server rate-limits shape so Yacwu's usage
+ * analysis covers OpenCode like the other backends.
+ */
+export async function openCodeUsageLimits(dataHome) {
+  return openCodeRateLimits(dataHome);
+}
+
+/**
  * Magic Context reports `/ctx-status` as a TUI action Yacwu cannot render, so
  * read the same status through the plugin's loopback RPC for this session.
  */
@@ -224,7 +235,7 @@ async function main() {
     if (method === 'yacwu/opencode/ctx-status') {
       return openCodeThreadStatus(store, params?.threadId, {storageDir: env.MAGIC_CONTEXT_STORAGE_DIR});
     }
-    if (method === 'account/rateLimits/read') return {rateLimits:null,rateLimitsByLimitId:{}};
+    if (method === 'account/rateLimits/read') return openCodeUsageLimits(env.XDG_DATA_HOME);
     if (method === 'thread/compact/start') {
       if (!entries.length) await discover();
       return dispatch.call(this,peer,'turn/start',{threadId:params.threadId,input:[{type:'text',text:'/ctx-wrapup'}]});
