@@ -161,10 +161,16 @@ export function prepareEnvironment(root = runtimeRoot) {
   return {env, command:[process.env.YACWU_OPENCODE_CLI || join(tools,'@opencode/cli/bin/opencode.exe'), 'acp']};
 }
 
+/** Login must share the managed credentials directory, not the machine-wide service port. */
+export function openCodeAuthCommand(binary) {
+  return [binary, 'auth', 'login', '--standalone'];
+}
+
 async function main() {
   const {env, command} = prepareEnvironment();
   if (process.argv[2] === 'auth') {
-    const child=spawn(command[0], ['auth','login'], {env, stdio:'inherit'});
+    const [binary, ...args] = openCodeAuthCommand(command[0]);
+    const child=spawn(binary, args, {env, stdio:'inherit'});
     child.once('exit',code=>process.exit(code ?? 1));
     child.once('error',error=>{console.error(error.message);process.exit(1);});
     return;

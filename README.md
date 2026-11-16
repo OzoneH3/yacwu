@@ -887,6 +887,9 @@ node scripts/install-opencode.mjs
 node scripts/opencode-backend.mjs auth
 ```
 
+The login helper uses a private server so it can coexist with an existing
+OpenCode managed service without competing for its port.
+
 Choose OpenAI/Codex in OpenCode's login flow to use your supported subscription.
 This login is separate from Yacwu's existing Codex login. Select **OpenCode** in
 Yacwu's new-session Provider menu, then choose a model and its offered effort.
