@@ -11,6 +11,19 @@ fn with_env(value: String, run: fn() -> a) -> a {
   result
 }
 
+/// Point backend discovery at a root with no managed integrations, restoring
+/// the caller's root afterwards.
+fn with_backend_root(value: String, run: fn() -> a) -> a {
+  let previous = envoy.get("YACWU_BACKEND_ROOT")
+  envoy.set("YACWU_BACKEND_ROOT", value)
+  let result = run()
+  case previous {
+    Ok(root) -> envoy.set("YACWU_BACKEND_ROOT", root)
+    Error(_) -> envoy.unset("YACWU_BACKEND_ROOT")
+  }
+  result
+}
+
 // -- Parsing ------------------------------------------------------------------
 
 pub fn parse_single_entry_test() {
@@ -98,6 +111,9 @@ pub fn relative_adapter_paths_keep_protocol_arguments_unchanged_test() {
 
 pub fn discover_reads_the_environment_test() {
   use <- with_env("claude=claude-codex app-server;mini=codex-mini app-server")
+  // A virtual root keeps a developer's own managed OpenCode marker out of
+  // this expectation; managed discovery has its own test below.
+  use <- with_backend_root(".workspace/backend-discovery-test")
   assert list.map(backends.discover(), fn(backend) { backend.name })
     == ["claude", "mini"]
   assert backends.command("claude") == Ok(["claude-codex", "app-server"])
