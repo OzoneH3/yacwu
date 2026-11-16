@@ -200,11 +200,12 @@ export function explain(/** @type {unknown} */ error) {
   return message;
 }
 
-export class CopilotAcpRuntime {
+export class AcpRuntime {
   /** @param {{command?: string[], env?: NodeJS.ProcessEnv}} [options] */
   constructor(options = {}) {
     this.command = options.command ?? copilotCommand(options.env);
     this.env = options.env ?? process.env;
+    this.clientCapabilities = { fs: { readTextFile: false, writeTextFile: false }, terminal: false };
     /** @type {AcpConnection | null} */
     this.connection = null;
     /** @type {Promise<AcpConnection> | null} */
@@ -229,6 +230,9 @@ export class CopilotAcpRuntime {
     this.bySession = new Map();
   }
 
+  /** Provider-specific error presentation. @param {unknown} error */
+  explain(error) { return explain(error); }
+
   /** @returns {Promise<AcpConnection>} */
   async ready() {
     if (this.connection && !this.connection.closed) return this.connection;
@@ -245,7 +249,7 @@ export class CopilotAcpRuntime {
       try {
         await connection.request('initialize', {
           protocolVersion: 1,
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+          clientCapabilities: this.clientCapabilities,
           clientInfo: { name: 'yacwu', version: '1' }
         });
       } catch (error) {
@@ -335,14 +339,14 @@ export class CopilotAcpRuntime {
     try {
       connection = await this.ready();
     } catch (error) {
-      throw new Error(explain(error));
+      throw new Error(this.explain(error));
     }
     let sessionId;
     try {
       sessionId = await this.session(connection, context, handlers);
       await this.configure(connection, sessionId, context);
     } catch (error) {
-      throw new Error(explain(error));
+      throw new Error(this.explain(error));
     }
     const state = this.open.get(sessionId);
     const turn = {
@@ -401,7 +405,7 @@ export class CopilotAcpRuntime {
       if (turn.cancelled) {
         await handlers.onEvent({ type: 'completed', success: false, claudeSessionId: sessionId, result: null });
       } else {
-        throw new Error(explain(error));
+        throw new Error(this.explain(error));
       }
     } finally {
       if (this.turns.get(context.threadId) === turn) this.turns.delete(context.threadId);
@@ -574,3 +578,6 @@ export async function discoverCopilotModels({ command, env, cwd, timeoutMs = 60_
     connection.kill();
   }
 }
+
+/** Backward-compatible Copilot specialization of the shared ACP event bridge. */
+export class CopilotAcpRuntime extends AcpRuntime {}

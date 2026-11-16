@@ -1,5 +1,6 @@
 import envoy
 import gleam/list
+import simplifile
 import yacwu/backends.{Backend}
 import yacwu/hosts
 
@@ -145,4 +146,35 @@ pub fn generic_commands_inside_claude_named_folders_are_not_claude_test() {
       Backend("mini", ["node", "/srv/claude-project/server.mjs"]),
     )
     == "mini"
+}
+
+pub fn opencode_adapter_is_not_misidentified_as_claude_test() {
+  assert backends.provider(
+      backends.Backend("oc", [
+        "node",
+        "./scripts/opencode-backend.mjs",
+        "./claude-codex/dist/src/adapter.mjs",
+      ]),
+    )
+    == "opencode"
+}
+
+pub fn managed_opencode_discovery_respects_explicit_empty_backends_test() {
+  let root = ".workspace/opencode-discovery-test"
+  let marker = root <> "/.workspace/opencode/enabled"
+  let old_root = envoy.get("YACWU_BACKEND_ROOT")
+  let assert Ok(_) =
+    simplifile.create_directory_all(root <> "/.workspace/opencode")
+  let assert Ok(_) = simplifile.write(marker, "1")
+  envoy.set("YACWU_BACKEND_ROOT", root)
+  envoy.set("YACWU_BACKENDS", "claude=node claude-backend.mjs")
+  assert list.map(backends.discover(), fn(backend) { backend.name })
+    == ["claude", "opencode"]
+  envoy.set("YACWU_BACKENDS", "")
+  assert backends.discover() == []
+  let _ = simplifile.delete(marker)
+  case old_root {
+    Ok(value) -> envoy.set("YACWU_BACKEND_ROOT", value)
+    Error(_) -> envoy.unset("YACWU_BACKEND_ROOT")
+  }
 }

@@ -875,3 +875,44 @@ same session includes growing context and cache reuse in the measurements.
 ## License
 
 MIT
+
+### OpenCode with Magic Context
+
+- OpenCode is an optional local provider with Magic Context for persistent project memory and context management, including OpenAI/Codex models authenticated through OpenCode.
+
+Install the pinned OpenCode 2.3.0 and Magic Context 0.49.56 integration:
+
+```sh
+node scripts/install-opencode.mjs
+node scripts/opencode-backend.mjs auth
+```
+
+Choose OpenAI/Codex in OpenCode's login flow to use your supported subscription.
+This login is separate from Yacwu's existing Codex login. Select **OpenCode** in
+Yacwu's new-session Provider menu, then choose a model and its offered effort.
+Existing Codex, Claude and Copilot sessions keep their backends and histories.
+
+Installation stays inside `.workspace/opencode/`, including credentials,
+OpenCode history, the adapter database, caches and Magic Context memory. Back up
+that directory if you want to preserve these sessions. The installer enables
+automatic discovery alongside a nonempty `YACWU_BACKENDS`; an explicit empty
+`YACWU_BACKENDS=` disables all optional backends, including OpenCode. Alternatively,
+configure `opencode=node ./scripts/opencode-backend.mjs` explicitly in
+`YACWU_BACKENDS`. Remove `.workspace/opencode/enabled` to disable automatic
+discovery. Installation never restarts existing backend daemons.
+
+The managed configuration disables OpenCode's automatic compaction and pruning,
+pins the Magic Context plugin, disables plugin auto-updates, and turns off the
+periodic dreamer and embeddings. Magic Context still summarizes history and
+maintains project memory; its historian defaults to `openai/gpt-6-luna`. Set
+`YACWU_OPENCODE_MODEL` and/or `YACWU_OPENCODE_HISTORIAN_MODEL` in the server's
+environment to choose other available `provider/model` IDs. These settings apply
+when the OpenCode backend starts. `/compact` runs Magic Context's `/ctx-wrapup`;
+other `/ctx-*` commands can be sent directly as messages.
+
+The historian consumes provider allowance. OpenCode does not expose account
+allowance percentages through ACP, so Yacwu's native Codex/Claude reserve guards
+do not cover this backend or its historian; provider-side limits still apply.
+Read-only access is unavailable for OpenCode in this integration. Messages sent
+during a running prompt are queued until that prompt finishes. Forks retain
+OpenCode history; model and effort choices apply on the next prompt.

@@ -51,7 +51,7 @@ export function modelPickerGroups<T extends ModelChoiceSummary>(choices: T[]): A
 }
 
 export function isClaudeModelCatalog(choices: ModelChoiceSummary[]): boolean {
-	return choices.some((choice) => !isCopilotModel(choice) && /claude|^(?:sonnet|opus|haiku|fable|mythos)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
+	return choices.some((choice) => !isCopilotModel(choice) && !choice.id.startsWith('opencode/') && /claude|^(?:sonnet|opus|haiku|fable|mythos)(?:[-\s]|$)/i.test(`${choice.id} ${choice.displayName}`));
 }
 
 // Reviewed 2026-10-08. These are Yacwu estimates, not benchmark percentages or

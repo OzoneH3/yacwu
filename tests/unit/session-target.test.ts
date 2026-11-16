@@ -28,3 +28,10 @@ test('machine and provider map to the existing session routing without selecting
 	expect(sessionTarget('workstation', 'claude', hosts)).toBe('workstation');
 	expect(sessionTarget('local', 'claude', machines)).toBe('local');
 });
+
+test('OpenCode is an independent provider and routes to its configured backend', () => {
+ const oc: HostInfo = {name:'oc', kind:'backend', provider:'opencode', state:'connected'};
+ expect(backendProviders([...machines, oc])).toEqual(['opencode']);
+ expect(providerLabel('opencode')).toBe('OpenCode');
+ expect(sessionTarget('local','opencode',[...machines,oc])).toBe('oc');
+});

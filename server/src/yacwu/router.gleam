@@ -3979,6 +3979,7 @@ fn relay_peers(
                       json.string(case backends.provider_of(peer_host) {
                         Ok("claude") -> "claude"
                         Ok("copilot") -> "copilot"
+                        Ok("opencode") -> "opencode"
                         _ -> "codex"
                       }),
                     ),

@@ -28,6 +28,7 @@ import filepath
 import gleam/list
 import gleam/result
 import gleam/string
+import simplifile
 import yacwu/ssh_config
 
 /// One configured backend: the host name it is addressed by, and the argv of
@@ -38,9 +39,29 @@ pub type Backend {
 
 /// The backends configured right now (`YACWU_BACKENDS`, re-read on demand).
 pub fn discover() -> List(Backend) {
-  envoy.get("YACWU_BACKENDS")
-  |> result.unwrap("")
-  |> parse
+  let raw = envoy.get("YACWU_BACKENDS") |> result.unwrap("")
+  let configured = parse(raw)
+  let root =
+    envoy.get("YACWU_BACKEND_ROOT")
+    |> result.lazy_or(fn() { envoy.get("PWD") })
+    |> result.unwrap(".")
+  // An explicit empty backend list also disables managed integrations (tests
+  // and private servers must never discover the live backend daemons).
+  case
+    raw != ""
+    && simplifile.is_file(filepath.join(root, ".workspace/opencode/enabled"))
+    == Ok(True)
+    && !list.any(configured, fn(backend) { provider(backend) == "opencode" })
+  {
+    True ->
+      list.append(configured, [
+        Backend("opencode", [
+          "node",
+          filepath.join(root, "scripts/opencode-backend.mjs"),
+        ]),
+      ])
+    False -> configured
+  }
 }
 
 /// Parse a `YACWU_BACKENDS` value, dropping invalid entries.
@@ -96,19 +117,26 @@ pub fn provider(backend: Backend) -> String {
     list.any(values, string.contains(_, word))
   }
   case
-    string.contains(name, "copilot"),
-    string.contains(name, "claude"),
-    any_contains(file_names, "copilot"),
-    any_contains(file_names, "claude")
-    || list.any(args, fn(arg) {
-      string.ends_with(arg, "claude-codex/dist/src/adapter.mjs")
-    })
+    string.contains(name, "opencode") || any_contains(file_names, "opencode")
   {
-    True, _, _, _ -> "copilot"
-    _, True, _, _ -> "claude"
-    _, _, True, _ -> "copilot"
-    _, _, _, True -> "claude"
-    _, _, _, _ -> backend.name
+    True -> "opencode"
+    False -> {
+      case
+        string.contains(name, "copilot"),
+        string.contains(name, "claude"),
+        any_contains(file_names, "copilot"),
+        any_contains(file_names, "claude")
+        || list.any(args, fn(arg) {
+          string.ends_with(arg, "claude-codex/dist/src/adapter.mjs")
+        })
+      {
+        True, _, _, _ -> "copilot"
+        _, True, _, _ -> "claude"
+        _, _, True, _ -> "copilot"
+        _, _, _, True -> "claude"
+        _, _, _, _ -> backend.name
+      }
+    }
   }
 }
 

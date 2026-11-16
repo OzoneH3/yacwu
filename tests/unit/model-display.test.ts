@@ -194,3 +194,9 @@ test('Claude version IDs missing from the catalog learn under the catalog name',
 	expect(usageModelName(names, 'gpt-6-luna')).toBe('gpt-6-luna');
 	expect(usageModelName(names, 'copilot/claude-opus-5.5')).toBe('copilot/claude-opus-5.5');
 });
+
+test('OpenCode mixed catalogs retain OpenAI models alongside Claude', () => {
+ const choices=[{id:'opencode/openai/gpt-6-luna',displayName:'OpenAI/GPT-6 Luna'},{id:'opencode/anthropic/claude-opus-5-5',displayName:'Anthropic/Claude Opus 5.5'}];
+ expect(filterAndSortModelChoices(choices).map(c=>c.id)).toContain('opencode/openai/gpt-6-luna');
+ expect(isClaudeModelCatalog(choices)).toBe(false);
+});

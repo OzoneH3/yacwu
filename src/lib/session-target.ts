@@ -6,7 +6,7 @@ export function providerHost(hosts: HostInfo[], provider: string): string | null
 }
 
 /** Agents with a backend of their own; other backends count as Codex. */
-export const BACKEND_AGENTS = ['claude', 'copilot'];
+export const BACKEND_AGENTS = ['claude', 'copilot', 'opencode'];
 
 /** Providers offered besides Codex: the agents of the configured backends. */
 export function backendProviders(hosts: HostInfo[]): string[] {
@@ -14,7 +14,7 @@ export function backendProviders(hosts: HostInfo[]): string[] {
 }
 
 export function providerLabel(provider: string): string {
-	return provider === 'claude' ? 'Claude' : provider === 'copilot' ? 'Copilot' : provider === 'codex' ? 'Codex' : provider;
+	return provider === 'opencode' ? 'OpenCode' : provider === 'claude' ? 'Claude' : provider === 'copilot' ? 'Copilot' : provider === 'codex' ? 'Codex' : provider;
 }
 
 /** Alternative providers currently run locally; SSH targets use Codex. */

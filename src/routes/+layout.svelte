@@ -6520,12 +6520,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					<label for="new-file-access">File access</label>
 					<select id="new-file-access" bind:value={newFileAccess}>
 						<option value="read-write">Read/write</option>
-						<option value="read-only" disabled={newProvider === 'copilot'}>Read-only</option>
+						<option value="read-only" disabled={(newProvider === 'copilot' || newProvider === 'opencode')}>Read-only</option>
 					</select>
 				</div>
-				{#if newProvider === 'copilot'}<p class="create-hint">Copilot currently supports Read/write access only.</p>{:else if newProvider === 'claude' && newFileAccess === 'read-only'}<p class="create-hint">Claude can read and search files and ask questions. Commands, edits, subagents and external tools are disabled. Requires the updated Claude backend.</p>{/if}
+				{#if (newProvider === 'copilot' || newProvider === 'opencode')}<p class="create-hint">{providerLabel(newProvider)} currently supports Read/write access only.</p>{:else if newProvider === 'claude' && newFileAccess === 'read-only'}<p class="create-hint">Claude can read and search files and ask questions. Commands, edits, subagents and external tools are disabled. Requires the updated Claude backend.</p>{/if}
 				<div class="create-actions">
-					<button class="mini" disabled={cwdBrowseLoading || (newFileAccess === 'read-only' && newProvider === 'copilot')} onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
+					<button class="mini" disabled={cwdBrowseLoading || (newFileAccess === 'read-only' && (newProvider === 'copilot' || newProvider === 'opencode'))} onclick={() => newSession(newCwd.trim() || undefined)}>Start session</button>
 				</div>
 				{#if createError}
 					<div id="create-helper" class="create-err" role="alert">{createError}</div>
