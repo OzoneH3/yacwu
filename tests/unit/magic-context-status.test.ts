@@ -2,6 +2,7 @@
 import { expect, test } from 'bun:test';
 import {
 	formatMagicContextStatus,
+	magicContextStatusFromReply,
 	magicContextWarnings,
 	type MagicContextStatus
 } from '../../src/lib/magic-context-status';
@@ -98,4 +99,12 @@ test('Magic Context warnings follow the plugin order and deduplicate host limita
 	expect(text).toContain('Warning: The last context update failed; the next message retries it.');
 	expect(text).toContain('Warning: imageless_host');
 	expect(text).toContain('Warning: variant dropped');
+});
+
+test('Magic Context status accepts the wrapped route body and a bare plugin payload', () => {
+	expect(magicContextStatusFromReply({ status: live })?.usagePercentage).toBe(49.62023809523809);
+	expect(magicContextStatusFromReply(live)?.inputTokens).toBe(83362);
+	expect(magicContextStatusFromReply({ error: 'unavailable' })).toBeNull();
+	expect(magicContextStatusFromReply(null)).toBeNull();
+	expect(magicContextStatusFromReply({ status: [] })).toBeNull();
 });

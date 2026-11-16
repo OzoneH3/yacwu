@@ -67,7 +67,7 @@
 	} from '$lib/agents';
 	import { saveTodoAttachments, restoreTodoAttachments, validTodoAttachments, type SavedTodoAttachment } from '$lib/todo-attachments';
 	import { parseSlash, slashHelp, filterSlashCommands, slashArgumentChoices, type SlashCommandInfo } from '$lib/slash';
-	import { formatMagicContextStatus, type MagicContextStatus } from '$lib/magic-context-status';
+	import { formatMagicContextStatus, magicContextStatusFromReply } from '$lib/magic-context-status';
 	import { ComposerHistory } from '$lib/history';
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
@@ -3923,8 +3923,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const res = await fetch(threadApi(id, '/ctx-status'));
 					const data = await res.json();
 					if (!res.ok) throw new Error(data.error ?? 'Magic Context status unavailable');
-					if (!data.status) throw new Error('Magic Context returned no status');
-					addLocalNote(id, formatMagicContextStatus(data.status as MagicContextStatus));
+					const status = magicContextStatusFromReply(data);
+					if (!status) throw new Error('Magic Context returned no status');
+					addLocalNote(id, formatMagicContextStatus(status));
 				} catch (error) {
 					addLocalNote(
 						id,

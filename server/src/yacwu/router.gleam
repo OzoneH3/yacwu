@@ -853,14 +853,29 @@ fn is_claude_backend(host: String) -> Bool {
 }
 
 /// Magic Context reports `/ctx-status` as a TUI action Yacwu cannot render.
-/// The OpenCode adapter answers instead with the plugin's status-detail data.
+/// The OpenCode adapter answers with the plugin's status-detail payload; the
+/// thread note reads it from a `status` field.
+pub fn magic_context_status_body(result: Dynamic) -> Json {
+  json.object([#("status", jsonx.to_json(result))])
+}
+
 fn magic_context_status(
   host: String,
   cx: Codex,
   thread_id: String,
 ) -> Response(ResponseData) {
   case backends.provider_of(host) == Ok("opencode") {
-    True -> simple_rpc(cx, "yacwu/opencode/ctx-status", thread_id)
+    True ->
+      case
+        codex.request(
+          cx,
+          "yacwu/opencode/ctx-status",
+          json.object([#("threadId", json.string(thread_id))]),
+        )
+      {
+        Ok(result) -> json_response(200, magic_context_status_body(result))
+        Error(message) -> json_response(500, error_body(message))
+      }
     False ->
       json_response(
         400,

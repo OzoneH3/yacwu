@@ -3,7 +3,8 @@
 // The plugin answers `/ctx-status` with a TUI action, which Yacwu cannot show.
 // Its OpenCode server also exposes a loopback RPC server with the same status
 // data (`status-detail`); the server writes a discovery file named after the
-// canonical project directory, exactly as its TUI finds it.
+// canonical project directory, exactly as its TUI finds it. That file records
+// `started_at`, not `startedAt`.
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -58,7 +59,8 @@ export function discoverRpcServer(storageDir, directory, { alive = processAlive 
 			port,
 			token: typeof record?.token === 'string' ? record.token : '',
 			pid: Number(record?.pid) || null,
-			startedAt: Number(record?.startedAt) || 0
+			// The plugin writes `started_at`. Accept the camelCase alias too.
+			startedAt: Number(record?.started_at) || Number(record?.startedAt) || 0
 		});
 	}
 	servers.sort((a, b) => b.startedAt - a.startedAt || b.port - a.port);

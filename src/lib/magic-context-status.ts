@@ -7,6 +7,23 @@
  * and order aligned with the plugin's status summary.
  */
 
+/**
+ * The route wraps the plugin payload as `{status}`. A bare payload (the shape
+ * the adapter returns, and what older servers sent through) is accepted too.
+ */
+export function magicContextStatusFromReply(data: unknown): MagicContextStatus | null {
+	if (!data || typeof data !== 'object') return null;
+	const record = data as Record<string, unknown>;
+	const nested = record.status;
+	const candidate =
+		nested && typeof nested === 'object' && !Array.isArray(nested)
+			? (nested as Record<string, unknown>)
+			: record;
+	return typeof candidate.usagePercentage === 'number'
+		? (candidate as unknown as MagicContextStatus)
+		: null;
+}
+
 /** The subset of the plugin's status-detail reply this view renders. */
 export interface MagicContextStatus {
 	sessionId?: string;

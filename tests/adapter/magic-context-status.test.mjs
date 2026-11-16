@@ -79,6 +79,15 @@ test('Magic Context discovery ignores dead servers and prefers the newest one', 
 	);
 });
 
+test('Magic Context discovery reads the plugin started_at field', () => {
+	const { storage, directory, record } = projectStorage();
+	record(41011, { pid: 4011, started_at: 40 });
+	record(41012, { pid: 4012, started_at: 10 });
+	const server = discoverRpcServer(storage, directory, { alive: () => true });
+	assert.equal(server.port, 41011);
+	assert.equal(server.startedAt, 40);
+});
+
 test('Magic Context status explains a server that is not running', async () => {
 	const { storage, directory } = projectStorage();
 	await assert.rejects(
