@@ -98,3 +98,27 @@ test('read-only mode completion offers read-write access', async () => {
 	expect(mode?.description).toBe('set read-write file access');
 	expect(filterSlashCommands('mode', 'read-write').find((cmd) => cmd.name === '/mode')?.completion).toBeUndefined();
 });
+
+test('/ctx-status is offered only to OpenCode sessions and takes no arguments', async () => {
+	const { SLASH_COMMANDS, filterSlashCommands, parseSlash } = await import('../../src/lib/slash');
+	expect(parseSlash('/ctx-status')).toEqual({ kind: 'ctx-status' });
+	expect(parseSlash('/ctx-status now')).toEqual({ kind: 'unknown', command: '/ctx-status' });
+	expect(parseSlash('/ctx')).toEqual({ kind: 'unknown', command: '/ctx' });
+
+	expect(SLASH_COMMANDS.map((cmd) => cmd.name)).not.toContain('/ctx-status');
+	expect(filterSlashCommands('ctx')).toEqual([]);
+	expect(filterSlashCommands('ctx', undefined, true).map((cmd) => cmd.name)).toEqual(['/ctx-status']);
+	const all = filterSlashCommands('', undefined, true).map((cmd) => cmd.name);
+	expect(all.indexOf('/ctx-status')).toBe(all.indexOf('/compact') + 1);
+	expect(filterSlashCommands('', 'read-only', true).map((cmd) => cmd.name)).toContain('/ctx-status');
+});
+
+test('help lists /ctx-status only for OpenCode sessions', async () => {
+	const { SLASH_HELP, slashHelp } = await import('../../src/lib/slash');
+	expect(SLASH_HELP).not.toContain('/ctx-status');
+	expect(slashHelp()).toBe(SLASH_HELP);
+	const opencode = slashHelp(true);
+	expect(opencode).toContain('/ctx-status');
+	expect(opencode.indexOf('/ctx-status')).toBeLessThan(opencode.indexOf('/help'));
+	expect(opencode.trimEnd().endsWith('show this help')).toBe(true);
+});

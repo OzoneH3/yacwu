@@ -66,7 +66,8 @@
 		type AgentRegistry
 	} from '$lib/agents';
 	import { saveTodoAttachments, restoreTodoAttachments, validTodoAttachments, type SavedTodoAttachment } from '$lib/todo-attachments';
-	import { parseSlash, SLASH_HELP, filterSlashCommands, type SlashCommandInfo } from '$lib/slash';
+	import { parseSlash, slashHelp, filterSlashCommands, type SlashCommandInfo } from '$lib/slash';
+	import { formatMagicContextStatus, type MagicContextStatus } from '$lib/magic-context-status';
 	import { ComposerHistory } from '$lib/history';
 	import FileBrowser from '$lib/FileBrowser.svelte';
 	import GitDiffViewer from '$lib/GitDiffViewer.svelte';
@@ -879,7 +880,11 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	const slashToken = $derived(/^\/\S*$/.test(input) ? input : null);
 	const slashMatches = $derived(
 		slashToken !== null && slashToken !== slashDismissedToken
-			? filterSlashCommands(slashToken.slice(1), activeId ? fileAccessBySession[activeId]?.mode : undefined)
+			? filterSlashCommands(
+					slashToken.slice(1),
+					activeId ? fileAccessBySession[activeId]?.mode : undefined,
+					isOpenCodeSession(activeId)
+				)
 			: []
 	);
 	const slashPopupVisible = $derived(slashMatches.length > 0);
@@ -1126,6 +1131,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	function isClaudeSession(id: string | null): boolean {
 		const host = sessionHost(id);
 		return hostChoices.some((entry) => entry.name === host && entry.provider === 'claude');
+	}
+
+	/** OpenCode sessions run Magic Context, which owns `/ctx-status`. */
+	function isOpenCodeSession(id: string | null): boolean {
+		const host = sessionHost(id);
+		return hostChoices.some((entry) => entry.name === host && entry.provider === 'opencode');
 	}
 
 	/** The host a session runs on: its summary’s tag, the URL hint, or local. */
@@ -3699,7 +3710,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 
 		switch (parsed.kind) {
 			case 'help':
-				addLocalNote(id, SLASH_HELP);
+				addLocalNote(id, slashHelp(isOpenCodeSession(id)));
 				break;
 
 			case 'status':
@@ -3898,6 +3909,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				const { ok, data } = await postCmd(id, 'compact', {});
 				if (!ok) t.status = 'idle';
 				addLocalNote(id, ok ? 'compacting history…' : data.error ?? 'failed to compact', ok ? 'info' : 'err');
+				break;
+			}
+
+			case 'ctx-status': {
+				try {
+					const res = await fetch(threadApi(id, '/ctx-status'));
+					const data = await res.json();
+					if (!res.ok) throw new Error(data.error ?? 'Magic Context status unavailable');
+					if (!data.status) throw new Error('Magic Context returned no status');
+					addLocalNote(id, formatMagicContextStatus(data.status as MagicContextStatus));
+				} catch (error) {
+					addLocalNote(
+						id,
+						error instanceof Error ? error.message : 'Magic Context status unavailable',
+						'err'
+					);
+				}
 				break;
 			}
 

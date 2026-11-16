@@ -20,6 +20,7 @@ test('OpenCode adapter exposes models, runs a turn, persists history and forks o
   await request('initialize',{clientInfo:{name:'test',version:'1'},capabilities:{experimentalApi:true}});
   const models=await request('model/list');assert.equal(models.data[0].id,'opencode/openai/gpt-6-luna');assert.equal(models.data[0].isDefault,true);
   const {thread}=await request('thread/start',{cwd:root,model:models.data[0].id,approvalPolicy:'never',sandbox:'danger-full-access'});
+  await assert.rejects(request('yacwu/opencode/ctx-status',{threadId:thread.id}),/Send a message before asking for Magic Context status/);
   const {turn}=await request('turn/start',{threadId:thread.id,input:[{type:'text',text:'hello'}],model:models.data[0].id,effort:'high'});
   for(let i=0;i<100&&!notes.some(n=>n.method==='turn/completed'&&n.params.turn.id===turn.id);i++)await new Promise(r=>setTimeout(r,20));
   const done=notes.find(n=>n.method==='turn/completed'&&n.params.turn.id===turn.id);assert.equal(done?.params.turn.status,'completed',stderr);

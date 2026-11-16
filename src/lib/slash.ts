@@ -15,6 +15,7 @@ export type SlashCommand =
 	| { kind: 'todo-clear' }
 	| { kind: 'todo-remove'; position: number }
 	| { kind: 'compact' }
+	| { kind: 'ctx-status' }
 	| { kind: 'review'; instructions?: string }
 	| { kind: 'shell'; command: string }
 	| { kind: 'rollback'; numTurns: number }
@@ -55,7 +56,22 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
 	['/help', 'show this help']
 ];
 
-export const SLASH_HELP = COMMANDS.map(([cmd, desc]) => `${cmd.padEnd(25)}${desc}`).join('\n');
+const CTX_STATUS_HELP: readonly [string, string] = [
+	'/ctx-status',
+	'show Magic Context usage for this session'
+];
+
+/** Help text; OpenCode sessions also have Magic Context's `/ctx-status`. */
+export function slashHelp(opencode = false): string {
+	const rows = [...COMMANDS];
+	if (opencode) {
+		const helpAt = rows.findIndex(([cmd]) => cmd === '/help');
+		rows.splice(helpAt === -1 ? rows.length : helpAt, 0, CTX_STATUS_HELP);
+	}
+	return rows.map(([cmd, desc]) => `${cmd.padEnd(25)}${desc}`).join('\n');
+}
+
+export const SLASH_HELP = slashHelp();
 
 export interface SlashCommandInfo {
 	/** Command token including the leading slash, e.g. "/model". */
@@ -85,6 +101,14 @@ export const SLASH_COMMANDS: ReadonlyArray<SlashCommandInfo> = (() => {
 })();
 
 /**
+ * Commands only an OpenCode session has, listed next to the shared commands.
+ * Magic Context supplies the status behind `/ctx-status` there.
+ */
+export const OPENCODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandInfo> = [
+	{ name: '/ctx-status', args: null, description: 'show Magic Context usage for this session' }
+];
+
+/**
  * Commands matching a typed fragment (the text after the slash), mirroring
  * the Codex TUI's command popup: an empty fragment lists everything in
  * presentation order; otherwise case-insensitive exact matches rank ahead of
@@ -92,13 +116,18 @@ export const SLASH_COMMANDS: ReadonlyArray<SlashCommandInfo> = (() => {
  */
 export function filterSlashCommands(
 	fragment: string,
-	fileAccess?: 'read-only' | 'read-write'
+	fileAccess?: 'read-only' | 'read-write',
+	opencode = false
 ): SlashCommandInfo[] {
 	const commands = fileAccess === 'read-only'
 		? SLASH_COMMANDS.map((cmd) => cmd.name === '/mode'
 			? { ...cmd, args: 'rw', completion: '/mode rw', description: 'set read-write file access' }
 			: cmd)
-		: SLASH_COMMANDS;
+		: [...SLASH_COMMANDS];
+	if (opencode) {
+		const after = commands.findIndex((cmd) => cmd.name === '/compact');
+		commands.splice(after === -1 ? commands.length : after + 1, 0, ...OPENCODE_SLASH_COMMANDS);
+	}
 	const filter = fragment.trim().toLowerCase();
 	if (!filter) return [...commands];
 	const exact: SlashCommandInfo[] = [];
@@ -186,6 +215,8 @@ export function parseSlash(text: string): SlashCommand {
 			return { kind: 'todo-add', task: arg };
 		case '/compact':
 			return arg ? { kind: 'unknown', command: cmd } : { kind: 'compact' };
+		case '/ctx-status':
+			return arg ? { kind: 'unknown', command: cmd } : { kind: 'ctx-status' };
 		case '/review':
 			return arg ? { kind: 'review', instructions: arg } : { kind: 'review' };
 		case '/shell':

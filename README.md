@@ -910,8 +910,9 @@ periodic dreamer and embeddings. Magic Context still summarizes history and
 maintains project memory; its historian defaults to `openai/gpt-6-luna`. Set
 `YACWU_OPENCODE_MODEL` and/or `YACWU_OPENCODE_HISTORIAN_MODEL` in the server's
 environment to choose other available `provider/model` IDs. These settings apply
-when the OpenCode backend starts. `/compact` runs Magic Context's `/ctx-wrapup`;
-other `/ctx-*` commands can be sent directly as messages.
+when the OpenCode backend starts. `/compact` runs Magic Context's `/ctx-wrapup`,
+and `/ctx-status` shows Magic Context's own usage, compression and memory status
+in the thread; other `/ctx-*` commands can be sent directly as messages.
 
 The historian consumes provider allowance. OpenCode does not expose account
 allowance percentages through ACP, so Yacwu's native Codex/Claude reserve guards

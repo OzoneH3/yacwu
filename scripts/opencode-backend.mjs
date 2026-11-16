@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { AcpRuntime, sessionModels, sessionEfforts } from './copilot-acp-runtime.mjs';
 import { modelListResult } from './copilot-backend.mjs';
+import { fetchStatusDetail } from './magic-context-status.mjs';
 
 export const OPENCODE_VERSION = '2.3.0';
 export const MAGIC_CONTEXT_VERSION = '0.49.56';
@@ -144,6 +145,23 @@ export class OpenCodeRuntime extends AcpRuntime {
   }
 }
 
+/**
+ * Magic Context reports `/ctx-status` as a TUI action Yacwu cannot render, so
+ * read the same status through the plugin's loopback RPC for this session.
+ */
+export async function openCodeThreadStatus(store, threadId, options = {}) {
+  const thread = store.getThread(threadId);
+  if (!thread) throw new Error('Unknown thread');
+  if (!thread.claudeSessionId) throw new Error('Send a message before asking for Magic Context status');
+  const { storageDir = join(runtimeRoot, 'memory'), ...rest } = options;
+  return fetchStatusDetail({
+    storageDir,
+    directory: thread.cwd,
+    sessionId: thread.claudeSessionId,
+    ...rest
+  });
+}
+
 export function prepareEnvironment(root = runtimeRoot) {
   const tools = join(root, 'tools/node_modules');
   const plugin = join(tools, '@cortexkit/opencode-magic-context');
@@ -203,6 +221,9 @@ async function main() {
     if (method === 'model/list') return entries.length && Date.now()-catalogAt < 60_000 ? modelListResult(entries) : discover();
     if (method === 'thread/start' && !entries.length) await discover();
     if (method === 'account/read') return {account:null, requiresOpenaiAuth:false};
+    if (method === 'yacwu/opencode/ctx-status') {
+      return openCodeThreadStatus(store, params?.threadId, {storageDir: env.MAGIC_CONTEXT_STORAGE_DIR});
+    }
     if (method === 'account/rateLimits/read') return {rateLimits:null,rateLimitsByLimitId:{}};
     if (method === 'thread/compact/start') {
       if (!entries.length) await discover();

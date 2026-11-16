@@ -759,6 +759,10 @@ fn dispatch(
       use _, cx <- with_codex(ctx, req, Some(id))
       simple_rpc(cx, "thread/compact/start", id)
     }
+    ["api", "threads", id, "ctx-status"], Get -> {
+      use host, cx <- with_codex(ctx, req, Some(id))
+      magic_context_status(host, cx, id)
+    }
     ["api", "threads", id, "review"], Post -> {
       use _, cx <- with_codex(ctx, req, Some(id))
       review(cx, req, id)
@@ -845,6 +849,25 @@ fn default_model(host: String) -> String {
 
 fn is_claude_backend(host: String) -> Bool {
   backends.provider_of(host) == Ok("claude")
+}
+
+/// Magic Context reports `/ctx-status` as a TUI action Yacwu cannot render.
+/// The OpenCode adapter answers instead with the plugin's status-detail data.
+fn magic_context_status(
+  host: String,
+  cx: Codex,
+  thread_id: String,
+) -> Response(ResponseData) {
+  case backends.provider_of(host) == Ok("opencode") {
+    True -> simple_rpc(cx, "yacwu/opencode/ctx-status", thread_id)
+    False ->
+      json_response(
+        400,
+        error_body(
+          "Magic Context status is only available for OpenCode sessions",
+        ),
+      )
+  }
 }
 
 fn list_hosts(ctx: Context) -> Response(ResponseData) {
