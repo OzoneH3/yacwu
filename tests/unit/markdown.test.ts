@@ -1,6 +1,14 @@
 /// <reference types="bun" />
 import { describe, expect, test } from 'bun:test';
-import { markdownFileReferences, parseCodexMarkdown, isGitRefCode } from '../../src/lib/markdown';
+import { markdownFileReferences, parseCodexMarkdown, isGitRefCode, stripMessageAnnotation } from '../../src/lib/markdown';
+
+test('hides the message annotation prefix without removing occurrences in message text', () => {
+	expect(stripMessageAnnotation('§3§ Hello there')).toBe('Hello there');
+	expect(stripMessageAnnotation('§3§\n\nHello there')).toBe('Hello there');
+	expect(stripMessageAnnotation('Literal §3§ in prose')).toBe('Literal §3§ in prose');
+	expect(stripMessageAnnotation('```text\n§3§\n```')).toBe('```text\n§3§\n```');
+	expect(parseCodexMarkdown('§3§ Hello there')).toEqual(parseCodexMarkdown('Hello there'));
+});
 
 test('collects explicit local Markdown links while excluding plain code paths, web and image references', () => {
 	const text = '> **[Review](/tmp/review.md:12)**\n\n- [Results][results]\n\n| File |\n| --- |\n| `docs/notes.md` |\n\n[results]: /tmp/counts.json\n\n[Website](https://example.com/file.md) ![Image](/tmp/photo.png)\n\n```md\n[Example](/tmp/not-a-link.md)\n```';

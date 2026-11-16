@@ -198,8 +198,12 @@ function blockTokens(tokens: Token[]): MarkdownBlock[] {
 }
 
 /** Parsed once per text: every transcript update re-renders the visible messages. */
+export function stripMessageAnnotation(text: string): string {
+	return text.replace(/^§\d+§\s*/, '');
+}
+
 export const parseCodexMarkdown = textCache((markdown: string): MarkdownBlock[] =>
-	blockTokens(marked.lexer(markdown.replace(/^[\u200B-\u200F\uFEFF]/, ''), { gfm: true }))
+	blockTokens(marked.lexer(stripMessageAnnotation(markdown).replace(/^[\u200B-\u200F\uFEFF]/, ''), { gfm: true }))
 );
 
 /** Explicit local Markdown links in display order; ignore images and code paths. */

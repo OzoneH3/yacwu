@@ -90,7 +90,7 @@
 	import { claudeAccountNotice, readingNote, windowHasReset, windowLabel as allowanceWindowLabel, type UsageReadingError } from '$lib/account-window';
 	import { coordinatorHandoff, type HandoffFile } from '$lib/coordinator-handoff';
 	import { unconfirmedEchoes } from '$lib/user-echoes';
-	import { markdownFileReferences, parseCodexMarkdown, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
+	import { markdownFileReferences, parseCodexMarkdown, stripMessageAnnotation, type MarkdownBlock, type MarkdownInline } from '$lib/markdown';
 import { detectPromptKind, pendingQuestionsForThread, type PendingInteractiveQuestion } from '$lib/interactive-choice';
 	import { hasSharedChannelContext, sharedChannelPath, visibleUserText, withSharedChannelContext, withWorkspaceRule } from '$lib/shared-channel';
 	import { activityKind, liveActivityLabel, streamedChars, turnTokenLabel, turnTokens } from '$lib/live-activity';
@@ -7354,7 +7354,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 								>
 									<div class="body media-body">
 										{#if rawShown}
-										<pre class="agent-raw">{stripTaskProgressMarkers((item as any).text ?? '')}</pre>
+										<pre class="agent-raw">{stripTaskProgressMarkers(stripMessageAnnotation((item as any).text ?? ''))}</pre>
 									{:else}
 										{#each agentParts((item as any).text ?? '') as part}
 											{#if part.type === 'text'}
