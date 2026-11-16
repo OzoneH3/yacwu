@@ -19,7 +19,7 @@ export type SlashCommand =
 	| { kind: 'review'; instructions?: string }
 	| { kind: 'shell'; command: string }
 	| { kind: 'rollback'; numTurns: number }
-	| { kind: 'fork' }
+	| { kind: 'fork'; provider?: string }
 	| { kind: 'btw'; message?: string }
 	| { kind: 'archive' }
 	| { kind: 'mode-show' }
@@ -47,7 +47,7 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
 	['/review [notes]', 'review uncommitted changes (or custom notes)'],
 	['/shell <command>', 'run a shell command in the thread'],
 	['/rollback [turns]', 'roll back recent turns (default: 1)'],
-	['/fork', 'branch this thread into a new session'],
+	['/fork [provider]', 'branch this thread; optionally use codex, claude, copilot or opencode'],
 	['/btw [question]', 'start an ephemeral side conversation'],
 	['/mode', 'show the current file access mode'],
 	['/mode r', 'set read-only file access'],
@@ -229,7 +229,7 @@ export function parseSlash(text: string): SlashCommand {
 			return { kind: 'unknown', command: cmd };
 		}
 		case '/fork':
-			return arg ? { kind: 'unknown', command: cmd } : { kind: 'fork' };
+			return !arg ? { kind: 'fork' } : /^[a-z]+$/i.test(arg) ? { kind: 'fork', provider: arg.toLowerCase() } : { kind: 'unknown', command: cmd };
 		case '/btw':
 		case '/side':
 			return arg ? { kind: 'btw', message: arg } : { kind: 'btw' };

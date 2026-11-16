@@ -36,6 +36,7 @@ import yacwu/defaults
 import yacwu/diagnostics
 import yacwu/file_access
 import yacwu/files
+import yacwu/fork_transfer
 import yacwu/git
 import yacwu/hosts
 import yacwu/jsonx
@@ -3524,6 +3525,134 @@ fn fork(
   thread_id: String,
 ) -> Response(ResponseData) {
   let body = read_json_body(req)
+  case jsonx.field(body, ["provider"]) {
+    Error(_) -> native_fork(ctx, host, cx, body, thread_id)
+    Ok(_) -> {
+      let provider =
+        jsonx.field_string(body, ["provider"])
+        |> result.unwrap("")
+        |> string.trim
+        |> string.lowercase
+      let current = backends.provider_of(host) |> result.unwrap("codex")
+      let available =
+        backends.discover()
+        |> list.map(fn(backend) { #(backend.name, backends.provider(backend)) })
+      case fork_transfer.target_host(provider, host, current, available) {
+        Error(message) -> json_response(400, error_body(message))
+        Ok(target) if target == host ->
+          native_fork(ctx, host, cx, body, thread_id)
+        Ok(target) ->
+          cross_provider_fork(ctx, host, cx, target, provider, body, thread_id)
+      }
+    }
+  }
+}
+
+fn cross_provider_fork(
+  ctx: Context,
+  host: String,
+  source: Codex,
+  target_host: String,
+  provider: String,
+  body: Dynamic,
+  thread_id: String,
+) -> Response(ResponseData) {
+  let transferred = {
+    use _ <- result.try(
+      case hosts.is_local(host), jsonx.field_bool(body, ["ephemeral"]) {
+        False, _ ->
+          Error(
+            "Cross-provider forks require a local source session; remote files are not transferred",
+          )
+        _, Ok(True) -> Error("Side conversations cannot switch provider")
+        _, _ -> Ok(Nil)
+      },
+    )
+    use mode <- result.try(file_access.load(host, thread_id))
+    use _ <- result.try(case mode, provider {
+      "read-only", "copilot" | "read-only", "opencode" ->
+        Error(
+          "Destination provider does not support enforced read-only access; source access cannot be widened",
+        )
+      _, _ -> Ok(Nil)
+    })
+    use resolved <- result.try(hosts.resolve(
+      ctx.registry,
+      Some(target_host),
+      None,
+    ))
+    let target = resolved.1
+    use catalog <- result.try(model_state.list_model_choices(target))
+    let fallback = case catalog.default_model {
+      Some(id) -> list.find(catalog.models, fn(model) { model.id == id })
+      None -> list.first(catalog.models)
+    }
+    let selected =
+      list.find(catalog.models, fn(model) {
+        model.id == default_model(target_host)
+      })
+      |> result.or(fallback)
+    use model <- result.try(
+      selected
+      |> result.replace_error("Destination provider has no available model"),
+    )
+    let parent = project_rules.applied(ctx.project_rules, thread_id)
+    let instructions =
+      parent
+      |> option.map(fn(applied) { applied.instructions })
+      |> option.unwrap("")
+    use created <- result.try(fork_transfer.create(
+      fn(method, params) { codex.request(source, method, params) },
+      fn(method, params) { codex.request(target, method, params) },
+      thread_id,
+      model.id,
+      mode,
+      instructions,
+    ))
+    use id <- result.try(
+      jsonx.field_string(created.value, ["thread", "id"])
+      |> result.replace_error("Destination returned no session ID"),
+    )
+    hosts.record_threads(ctx.registry, target_host, [id])
+    let _ =
+      model_state.set_override(
+        ctx.store,
+        id,
+        model_state.Settings(model.id, model.default_effort),
+      )
+    project_rules.record(
+      ctx.project_rules,
+      id,
+      project_rules.Applied(
+        project: project_of(target_host, target, created.cwd),
+        version: parent
+          |> option.map(fn(applied) { applied.version })
+          |> option.unwrap(0),
+        instructions: created.instructions,
+        applied_at: oauth.now(),
+      ),
+    )
+    Ok(
+      jsonx.object_with(created.value, [
+        #("host", json.string(target_host)),
+        #("transfer", json.string("transcript")),
+        #("sourceThreadId", json.string(thread_id)),
+      ]),
+    )
+  }
+  case transferred {
+    Ok(value) -> json_response(200, value)
+    Error(message) -> json_response(400, error_body(message))
+  }
+}
+
+fn native_fork(
+  ctx: Context,
+  host: String,
+  cx: Codex,
+  body: Dynamic,
+  thread_id: String,
+) -> Response(ResponseData) {
   let extra = case jsonx.field_bool(body, ["ephemeral"]) {
     // Paginated ephemeral forks retain inherited context on the backend,
     // but require their initial response to omit turns.

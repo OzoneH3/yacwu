@@ -122,3 +122,12 @@ test('help lists /ctx-status only for OpenCode sessions', async () => {
 	expect(opencode.indexOf('/ctx-status')).toBeLessThan(opencode.indexOf('/help'));
 	expect(opencode.trimEnd().endsWith('show this help')).toBe(true);
 });
+
+test('/fork accepts an optional provider without changing the native default', () => {
+ expect(parseSlash('/fork')).toEqual({kind:'fork'});
+ expect(parseSlash('/fork OpenCode')).toEqual({kind:'fork',provider:'opencode'});
+ expect(parseSlash('/fork claude')).toEqual({kind:'fork',provider:'claude'});
+ expect(parseSlash('/fork codex')).toEqual({kind:'fork',provider:'codex'});
+ expect(parseSlash('/fork copilot')).toEqual({kind:'fork',provider:'copilot'});
+ expect(parseSlash('/fork opencode extra')).toEqual({kind:'unknown',command:'/fork'});
+});

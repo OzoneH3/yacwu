@@ -191,7 +191,7 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/review [notes]` | review uncommitted changes (or run a custom review) |
 | `/shell <command>` | run a user-initiated shell command in the thread |
 | `/rollback [turns]` | roll back the last N turns (default 1) |
-| `/fork` | branch this thread into a new, permanent session that carries the history and continues the work |
+| `/fork [provider]` | branch this thread, optionally switching to an enabled provider |
 | `/btw [question]` | ask on the side: a throwaway fork with the message box focused and a Close button beside its parent link, nested under its parent and deleted when closed, told to treat the history as reference and not to change anything (an instruction, not enforced) |
 | `/archive` | archive this session |
 | `/help` | list the commands |
@@ -920,3 +920,12 @@ do not cover this backend or its historian; provider-side limits still apply.
 Read-only access is unavailable for OpenCode in this integration. Messages sent
 during a running prompt are queued until that prompt finishes. Forks retain
 OpenCode history; model and effort choices apply on the next prompt.
+
+Provider forks: `/fork` keeps the current backend and copies its native history.
+`/fork codex`, `/fork claude`, `/fork copilot`, or `/fork opencode` selects an enabled
+provider. Switching providers creates an idle session in the same local folder
+with the source transcript as labelled reference context and the destination's
+default model. It preserves file access and rejects unsupported read-only targets.
+Backend tool state and approvals are not migrated, and files are not copied.
+Transfers larger than 512 KiB and transfers from remote machines are rejected
+rather than truncated.

@@ -3967,11 +3967,12 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}
 
 			case 'fork': {
-				const { ok, data } = await postCmd(id, 'fork', {});
+				const { ok, data } = await postCmd(id, 'fork', parsed.provider ? { provider: parsed.provider } : {});
 				if (ok && data.thread?.id) {
 					upsertSession({ ...data.thread, host: data.host ?? sessionHost(id) });
 					ensureThread(data.thread.id);
-					addLocalNote(id, `forked into ${data.thread.id.slice(0, 8)}`);
+					if (data.transfer === 'transcript') addLocalNote(data.thread.id, 'Created from a reference transcript of another provider. No work has started; send a message when ready.');
+					addLocalNote(id, `forked into ${data.thread.id.slice(0, 8)}${data.transfer === 'transcript' ? ' on ' + providerLabel(parsed.provider ?? '') + ' (transcript handoff)' : ''}`);
 					goto(`/s/${data.thread.id}${hostQuery(data.host ?? sessionHost(id))}`);
 				} else {
 					addLocalNote(id, data.error ?? 'failed to fork session', 'err');
