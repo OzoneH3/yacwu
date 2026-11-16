@@ -74,6 +74,9 @@ export function slashHelp(opencode = false): string {
 export const SLASH_HELP = slashHelp();
 
 export interface SlashCommandInfo {
+	/** Marks a finite argument completion rather than a command. */
+	argument?: boolean;
+	continues?: boolean;
 	/** Command token including the leading slash, e.g. "/model". */
 	name: string;
 	/** Full command to insert when it differs from the command token. */
@@ -244,4 +247,67 @@ export function parseSlash(text: string): SlashCommand {
 		default:
 			return { kind: 'unknown', command: cmd };
 	}
+}
+
+export interface SlashArgumentContext {
+    providers?: string[];
+    models?: Array<{
+        id: string;
+        displayName: string;
+        efforts: string[];
+    }>;
+    currentModel?: string;
+    profiles?: string[];
+}
+/** Finite argument choices only: arbitrary task text never becomes a suggestion. */
+export function slashArgumentChoices(input: string, context: SlashArgumentContext = {}): SlashCommandInfo[] {
+    const match = /^\/(\S+)[ \t]+([^\r\n]*)$/.exec(input);
+    if (!match)
+        return [];
+    const command = match[1].toLowerCase();
+    let filter = match[2];
+    let prefix = `/${command} `;
+    type Choice = {
+        value: string;
+        description: string;
+        continues?: boolean;
+    };
+    let choices: Choice[] = [];
+    const models = context.models ?? [];
+    const effortMatch = command === 'model' ? /^(\S+)[ \t]+(.*)$/.exec(filter) : null;
+    if (effortMatch) {
+        const model = models.find(m => m.id.toLowerCase() === (effortMatch[1].toLowerCase() === '--effort' ? context.currentModel?.toLowerCase() : effortMatch[1].toLowerCase()));
+        if (!model)
+            return [];
+        filter = effortMatch[2];
+        prefix += `${effortMatch[1].toLowerCase() === '--effort' ? '--effort' : model.id} `;
+        choices = model.efforts.map(value => ({ value, description: 'Reasoning effort' }));
+    }
+    else
+        switch (command) {
+            case 'fork':
+                choices = (context.providers ?? ['codex']).map(value => ({ value, description: `Fork using ${value === 'opencode' ? 'OpenCode' : value === 'codex' ? 'Codex' : value === 'claude' ? 'Claude' : 'Copilot'}` }));
+                break;
+            case 'mode':
+                choices = [{ value: 'r', description: 'Read-only file access' }, { value: 'rw', description: 'Read/write file access' }];
+                break;
+            case 'todo':
+                if (/^rm\s*$/i.test(filter))
+                    return [];
+                choices = [{ value: 'clear', description: 'Clear queued tasks' }, { value: 'rm', description: 'Choose a queued task to remove', continues: true }];
+                break;
+            case 'goal':
+                choices = [{ value: 'clear', description: 'Clear the goal' }, { value: '--budget', description: 'Enter a token budget and objective', continues: true }];
+                break;
+            case 'profile':
+                choices = [{ value: 'clear', description: 'Use the base configuration' }, ...(context.profiles ?? []).filter(value => value.toLowerCase() !== 'clear').map(value => ({ value, description: 'Session profile' }))];
+                break;
+            case 'model':
+                choices = [{ value: '--effort', description: 'Change reasoning effort only', continues: true }, ...models.map(model => ({ value: model.id, description: model.displayName, continues: model.efforts.length > 0 }))];
+                break;
+            default: return [];
+        }
+    const needle = filter.toLowerCase();
+    return choices.filter(choice => choice.value.toLowerCase().startsWith(needle) || command === 'model' && !effortMatch && choice.description.toLowerCase().includes(needle))
+        .map(choice => ({ name: choice.value, completion: prefix + choice.value + (choice.continues ? ' ' : ''), args: null, description: choice.description, argument: true, continues: choice.continues }));
 }

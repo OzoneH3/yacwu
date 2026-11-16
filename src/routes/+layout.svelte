@@ -66,7 +66,7 @@
 		type AgentRegistry
 	} from '$lib/agents';
 	import { saveTodoAttachments, restoreTodoAttachments, validTodoAttachments, type SavedTodoAttachment } from '$lib/todo-attachments';
-	import { parseSlash, slashHelp, filterSlashCommands, type SlashCommandInfo } from '$lib/slash';
+	import { parseSlash, slashHelp, filterSlashCommands, slashArgumentChoices, type SlashCommandInfo } from '$lib/slash';
 	import { formatMagicContextStatus, type MagicContextStatus } from '$lib/magic-context-status';
 	import { ComposerHistory } from '$lib/history';
 	import FileBrowser from '$lib/FileBrowser.svelte';
@@ -872,15 +872,20 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 		const host = activeHost;
 		return observeWhileVisible(() => refreshTaskUsage(host), settings.usageRefreshSeconds * 1000);
 	});
-	// Slash-command autocomplete: offered while the composer holds a bare
-	// command token ("/…" with no whitespace or newline yet), mirroring the
-	// codex TUI's command popup. Esc hides it until the token changes.
+	// Slash autocomplete includes finite arguments on a single line.
+	// Escape hides the current suggestions until the draft changes.
 	let slashDismissedToken = $state<string | null>(null);
 	let slashIndex = $state(0);
-	const slashToken = $derived(/^\/\S*$/.test(input) ? input : null);
+	const slashToken = $derived(/^\/[^\r\n]*$/.test(input) ? input : null);
+	const slashArguments = $derived(slashToken !== null && /\s/.test(slashToken));
+	let slashProfiles = $state<Record<string, string[]>>({});
 	const slashMatches = $derived(
 		slashToken !== null && slashToken !== slashDismissedToken
-			? filterSlashCommands(
+			? slashArguments ? slashArgumentChoices(slashToken, {
+				providers: ['codex', ...backendProviders(hostChoices)],
+				models: activeModels, currentModel: activeConfig?.model,
+				profiles: activeId ? slashProfiles[activeId] ?? [] : []
+			}) : filterSlashCommands(
 					slashToken.slice(1),
 					activeId ? fileAccessBySession[activeId]?.mode : undefined,
 					isOpenCodeSession(activeId)
@@ -2780,7 +2785,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			}),
 			fetch(threadApi(id, '/profile')).then(async (res) => {
 				if (!res.ok) throw new Error('profile unavailable');
-				return (await res.json()) as { profile?: string | null };
+				return (await res.json()) as { profile?: string | null; profiles?: ProfileChoice[] };
 			})
 		]);
 		let model = modelResult.status === 'fulfilled' ? modelResult.value : null;
@@ -2789,6 +2794,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (migrated.ok) model = migrated.data as ModelState;
 		}
 		if (model) rememberEfforts(id, model);
+		if (profileResult.status === 'fulfilled') slashProfiles[id] = (profileResult.value.profiles ?? []).map(profile => profile.name);
 		const profile = profileResult.status === 'fulfilled' ? profileResult.value.profile ?? null : previous?.profile ?? null;
 		if (!model && !previous) return;
 		sessionConfigs[id] = {
@@ -4707,14 +4713,28 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	function slashOptionId(cmd: SlashCommandInfo): string {
-		return `slash-option-${cmd.name.slice(1)}`;
+		return `slash-option-${encodeURIComponent(cmd.completion ?? cmd.name)}`;
 	}
 
 	function acceptSlashCompletion(cmd: SlashCommandInfo, submit: boolean) {
+		if (cmd.argument) {
+			if (submit && !cmd.continues && input.trim() === cmd.completion?.trim()) {
+				void send();
+				return;
+			}
+			input = cmd.completion ?? cmd.name;
+			slashDismissedToken = cmd.continues ? null : input;
+			void tick().then(() => {
+				composerTextareaEl?.focus();
+				composerTextareaEl?.setSelectionRange(input.length, input.length);
+			});
+			return;
+		}
 		slashDismissedToken = null;
 		// Tab completion leaves a trailing space when the command takes
 		// arguments, so typing continues naturally.
 		input = cmd.completion ?? (submit ? cmd.name : cmd.name + (cmd.args ? ' ' : ''));
+		if (!submit && cmd.completion?.includes(' ') && !/\s$/.test(input)) slashDismissedToken = input;
 		if (submit) {
 			void send();
 			return;
@@ -4791,6 +4811,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	$effect(() => {
 		input;
 		void tick().then(resizeComposer);
+	});
+
+	$effect(() => {
+		if (slashIndex > 0 && slashIndex >= slashMatches.length) slashIndex = 0;
 	});
 
 	// Selection restarts at the top match whenever the typed token changes.
@@ -7847,8 +7871,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							</div>
 						{/if}
 						{#if slashPopupVisible}
-							<div class="slash-popup" id="slash-popup" role="listbox" aria-label="Slash commands">
-								{#each slashMatches as cmd, i (cmd.name)}
+							<div class="slash-popup" id="slash-popup" role="listbox" aria-label={slashArguments ? 'Slash command options' : 'Slash commands'}>
+								{#each slashMatches as cmd, i (cmd.completion ?? cmd.name)}
 									<button
 										type="button"
 										class="slash-option"

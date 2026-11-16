@@ -929,3 +929,10 @@ default model. It preserves file access and rejects unsupported read-only target
 Backend tool state and approvals are not migrated, and files are not copied.
 Transfers larger than 512 KiB and transfers from remote machines are rejected
 rather than truncated.
+
+Slash commands with finite arguments show a searchable dropdown: enabled `/fork`
+providers, `/mode` choices, `/todo` and `/goal` subcommands, and the session's
+models, reasoning efforts and profiles. Use arrows, Tab/Enter, or click to fill
+an option; Escape dismisses the list. Selecting a partial argument fills the
+draft. Enter on an already complete command submits it normally. Profile choices
+reuse the session's cached profile list instead of fetching on every keystroke.
