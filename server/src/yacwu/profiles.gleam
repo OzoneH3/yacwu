@@ -27,6 +27,7 @@ import gleam/string
 import simplifile
 import tom
 import yacwu/jsonx
+import yacwu/platform
 
 pub type Profile {
   Profile(name: String, config: Dynamic, model: Option(String))
@@ -37,7 +38,7 @@ pub fn codex_home() -> String {
   case envoy.get("CODEX_HOME") {
     Ok(home) if home != "" -> home
     _ -> {
-      let home = envoy.get("HOME") |> result.unwrap("/")
+      let home = platform.home()
       home <> "/.codex"
     }
   }

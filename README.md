@@ -198,9 +198,45 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 
 ## Windows support
 
-Native Windows support is planned for Codex first. Claude and Copilot Windows
-backends are outside the initial scope. See the [Windows Codex conversion
-plan](docs/windows-codex-plan.md) for the phased work and acceptance criteria.
+The `windows-codex` branch includes native Windows foreground startup for
+**local Codex only**. Native Windows acceptance is pending; the implementation
+has been checked on Linux and has a Windows CI job. See the
+[conversion status and acceptance checklist](docs/windows-codex-plan.md).
+
+Install Node.js 24+, Bun 1.3+, Gleam 1.18+, Erlang/OTP 27+, `rebar3`, and Git
+on `PATH`, then install and authenticate Codex. In PowerShell, from this checkout:
+
+```powershell
+npm install -g @openai/codex
+codex login
+.\start.ps1
+# Optional server arguments:
+.\start.ps1 --port 3001
+```
+
+If your PowerShell execution policy blocks the script, invoke it for this
+process with `powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1`.
+The launcher builds the application and starts it on `127.0.0.1:3000`, with
+authentication disabled by default for local use. `HOST`, `PORT`,
+`YACWU_INSECURE_SKIP_AUTH`, and other server overrides remain available.
+After building, `bun run start` uses the portable Node launcher; it retains the
+server's normal authentication requirement unless configured explicitly.
+
+Codex runs over stdio. `YACWU_CODEX_BIN` optionally identifies a native
+`codex.exe`; standard global and local npm Codex installations are resolved
+automatically. Stopping the foreground server stops its Codex process tree.
+Existing bounded task recovery may resume interrupted work after restart.
+Windows does not enable persistent daemons, SSH hosts, Claude/Copilot, or
+external session in-use detection.
+
+Windows state defaults to `%LOCALAPPDATA%\yacwu`; `XDG_STATE_HOME` overrides
+the parent directory. Codex keeps its existing `%USERPROFILE%\.codex` home
+(or `CODEX_HOME`). Uploads use `TMPDIR`, `TEMP`, or `TMP`. Relay credentials
+are protected with a current-user ACL using Windows PowerShell.
+
+Read-only sessions retain Codex sandbox restrictions. Configure the
+[native Windows sandbox](https://learn.chatgpt.com/docs/windows/windows-sandbox)
+before using them; sandbox errors do not cause a fallback to full access.
 
 ## Requirements
 
@@ -210,7 +246,8 @@ plan](docs/windows-codex-plan.md) for the phased work and acceptance criteria.
 - [Bun](https://bun.sh) ≥ 1.3 (builds the web UI)
 - [`codex`](https://developers.openai.com/codex) CLI on `PATH`, already
   authenticated (`codex login`)
-- Optional Claude support: Node.js ≥ 24, a built `claude-codex` checkout and
+- Node.js ≥ 24 (portable server launcher and session relay)
+- Optional Claude support: a built `claude-codex` checkout and
   working Claude authentication. See [adapter setup](#alternative-backends).
 
 ## Run

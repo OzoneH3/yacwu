@@ -9,7 +9,8 @@ const argument = (name: string, fallback: string) => {
 	const index = process.argv.indexOf(name);
 	return index < 0 ? fallback : process.argv[index + 1] ?? fallback;
 };
-const usageDir = argument('--usage-dir', process.env.YACWU_USAGE_DIR ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local/state'), 'yacwu/usage'));
+const stateHome = process.env.XDG_STATE_HOME || (process.platform === 'win32' ? process.env.LOCALAPPDATA || join(homedir(), 'AppData/Local') : join(homedir(), '.local/state'));
+const usageDir = argument('--usage-dir', process.env.YACWU_USAGE_DIR ?? join(stateHome, 'yacwu/usage'));
 const codexDir = argument('--codex-home', process.env.CODEX_HOME ?? join(homedir(), '.codex'));
 const since = Date.parse(argument('--since', new Date(Date.now() - 86_400_000).toISOString()));
 if (!Number.isFinite(since)) throw new Error('Invalid --since date');

@@ -1,110 +1,85 @@
-# Windows conversion plan (Codex only)
+# Native Windows Codex conversion
 
-## Goal and scope
+## Implemented scope
 
-Run Yacwu natively on supported 64-bit Windows with the Codex CLI as its only
-agent backend. Preserve the browser UI, session management, Codex app-server
-features, workspace browser, file changes view, local history, and normal
-Codex login. Do not make Claude Code or GitHub Copilot work on Windows in this
-project phase; retain their current behavior on supported Unix hosts.
+This branch implements a foreground source installation for Windows 11 x64,
+with local Codex as its only backend. The Gleam/OTP server and Svelte UI remain
+the application architecture. Start it with `start.ps1` after installing the
+prerequisites listed in the README.
 
-The first milestone is a source checkout launched by PowerShell, not an
-installer or packaged desktop app. Windows 11 is the initial validation target.
-Record exact supported Windows, Node/Bun, Gleam, and OTP versions after
-prototyping the server toolchain.
+The standard local Codex transport was already stdio. The Windows port reuses
+it through `scripts/codex-stdio.mjs`, launched directly by Erlang through Node.
+The bridge resolves a native executable or the standard npm Codex JavaScript
+entry point, passes arguments without a shell, preserves stdout for JSON-RPC,
+and captures stderr separately. `YACWU_CODEX_BIN` can select another native
+Codex executable. This handles both global npm installs and local `.bin` shims.
 
-## Current platform assumptions to resolve
+Windows uses child processes owned by the foreground server. Closing the stdio
+port triggers termination of the Codex process tree with `taskkill /T /F`.
+An interrupted turn is subject to the existing bounded recovery mechanism on
+restart; it does not continue uninterrupted while Yacwu is stopped. Saved
+sessions remain in Codex's own home.
 
-- Codex currently launches with a Unix-domain socket. Check the installed
-  Windows Codex app-server transport and choose its supported local transport
-  (prefer loopback TCP if Unix sockets are not supported). Keep the transport
-  behind a platform-neutral interface; do not expose an unauthenticated
-  listener beyond loopback.
-- The server is written in Gleam and requires Erlang/OTP plus `rebar3`. Prove
-  this toolchain can build and run reliably on Windows before broad porting.
-  If it cannot, evaluate a small Windows host/runtime replacement while
-  preserving the existing API and browser client.
-- `start.sh`, `scripts/install-service.sh`, release packaging, and AppImage
-  scripts are Unix-specific. Add a PowerShell foreground launcher first;
-  service installation and packaging are later milestones.
-- Several state paths assume `$HOME`, XDG directories, `/tmp`, or Unix
-  permissions. Centralize Yacwu state/config/cache resolution and use Windows
-  known folders, while honoring existing environment overrides.
-- Runtime helpers use `/proc`, Unix signals, Unix sockets, `pkill`, and shell
-  commands. Inventory each helper and provide a Windows implementation or
-  disable a feature with a clear explanation.
-- Normalize path handling around Node/Gleam path libraries. Preserve drive
-  letters and UNC paths, handle case-insensitive comparisons, and avoid
-  assuming `/` separators or Unix executable permissions.
+Windows ignores alternative backend configuration and persistent mode. The
+host picker offers local Codex, and SSH requests are rejected explicitly.
+Persistent daemons, SSH hosts, Windows services, packaging, and native in-use
+session detection remain outside this foreground release. Unix retains its
+existing transports and providers.
 
-## Phased work
+## Changes by area
 
-### 1. Prove the native Codex path
+| Area | Implementation |
+| --- | --- |
+| Launch | `start.ps1` checks prerequisites and builds; `scripts/run-server.mjs` supplies paths and forwards server arguments without POSIX environment assignments. |
+| Process transport | `yacwu_platform.erl` starts a Node stdio bridge on Windows; Unix keeps its existing launcher. |
+| Paths | Host helpers recognize drives and UNC shares; workspace-relative API paths use a platform-independent traversal check. Windows device names, alternate streams, and ambiguous drive-relative folder paths are rejected. |
+| State | `XDG_STATE_HOME` overrides the state root; Windows defaults to `%LOCALAPPDATA%`, with Yacwu files under `yacwu`. Home comes from `USERPROFILE`; `CODEX_HOME` remains independently configurable. |
+| Uploads | Local uploads use `TMPDIR`, then `TEMP`, then `TMP`, with an OS-specific fallback. |
+| UI | Folder parents preserve drive/share roots. Transcript links accept Windows paths, spaces, and Unicode. Remote access controls follow server capabilities. |
+| Relay | PowerShell instructions use `$env:YACWU_RELAY_CLI`. Credential files and their dedicated directory receive an ACL for the current Windows user before the credential is written. ACL failure disables the agent relay. |
+| Permissions | Existing read-only policies remain enforced at thread start/resume/fork and turn start. No Windows fallback widens a read-only session. |
 
-- On a clean Windows 11 machine, install the supported Node/Bun and Gleam/OTP
-  toolchains and the Codex CLI; complete `codex login`.
-- Build the Gleam service and UI, launch Codex app-server, and establish a
-  local connection using the transport supported by the Windows CLI.
-- Verify one new session, one resumed session, streaming, stop/continue,
-  file reads/writes, diff display, and app shutdown/restart.
-- Document any Codex CLI feature gaps or version requirements before choosing
-  a transport or runtime redesign.
+## Validation
 
-### 2. Remove platform assumptions from the Codex server path
+Local Linux checks passed: production build, Svelte type checks, 71 portable
+backend tests, 20 path/Markdown/relay unit tests, two Node bridge tests, and
+two Playwright browser tests. The Windows child-tree test is skipped on Linux. A real
+Codex initialization and thread-list smoke test uses an isolated home and does
+not submit an inference request.
 
-- Separate app-server transport selection from session logic; configure local
-  loopback TCP or the supported Windows transport without changing API
-  semantics.
-- Replace shell-dependent start/dev commands with PowerShell scripts and
-  cross-platform package scripts; keep Unix launchers working.
-- Centralize config/state/cache locations and path comparisons, including
-  `CODEX_HOME`, project directories, `.workspace`, logs, and temporary files.
-- Audit process lifetime, child process termination, environment inheritance,
-  process inspection, and file watching on Windows.
-- Make Codex-only app flows avoid loading Claude/Copilot-specific runtime
-  helpers; keep Unix-only optional backend integrations isolated.
+The Windows CI job builds the UI and server, runs the portable backend suite,
+checks PowerShell syntax and actual ACL operations, tests child-tree shutdown,
+initializes a real npm-installed Codex, and runs browser path tests. Linux-only
+fixtures (`/proc`, Unix sockets, Bash stubs) remain in the existing Linux job.
+The portable suite also checks read-only policy persistence across resume,
+fork, and manager recreation using a protocol fixture.
 
-### 3. Windows validation and UX
+Windows CI and a Windows desktop have not been executed from this Linux
+workspace. Native runtime acceptance is pending; successful Linux tests do
+not establish Windows sandbox enforcement or lifecycle behavior.
 
-- Add Windows CI for dependency installation, UI build/type check, Gleam build,
-  and focused server tests. Add Windows-specific tests for path handling,
-  transport, process shutdown, and file operations.
-- Run an end-to-end smoke test on Windows covering login, create/resume, live
-  output, stop, file browser/edit, git changes, and clean restart.
-- Check browser file picker paths, drag/drop attachments, clipboard images,
-  Monaco editor behavior, and long Windows paths.
-- Update README requirements and startup instructions only after the native
-  workflow succeeds. State clearly that Claude and Copilot remain unsupported
-  on Windows until separately ported.
+## Native acceptance checklist
 
-### 4. Optional distribution
+- [ ] Windows CI passes on the branch.
+- [ ] On Windows 11 x64, install Node 24+, Bun 1.3+, Gleam 1.18+, OTP 27+,
+  rebar3 and Git; install Codex, log in, and run `start.ps1` from a path with
+  spaces and Unicode.
+- [ ] Create, stream, steer, interrupt, resume, fork, archive and restore a
+  session; inspect files/diffs and upload images and text.
+- [ ] Browse a drive root and a reachable UNC share; open transcript links
+  and verify traversal and alternate-stream inputs are rejected.
+- [ ] Set up the native Codex sandbox; verify a read-only turn cannot create,
+  modify or delete a file, including after resume/fork/restart. Setup failure
+  must remain an error. Follow the [official Windows sandbox documentation](https://learn.chatgpt.com/docs/windows/windows-sandbox).
+- [ ] Send a relay message between two Codex sessions from PowerShell; verify
+  active delivery, idle queuing, restart persistence and credential ACLs.
+- [ ] Close the foreground server during a command with a child process;
+  confirm the process tree exits, saved state survives, and subsequent startup
+  applies the documented recovery behavior.
 
-- Decide between a documented source install, a PowerShell bootstrapper, and
-  a packaged release based on toolchain results and user demand.
-- If packaging, define upgrade behavior, data preservation, log collection,
-  firewall binding (loopback by default), and uninstall behavior.
-- Add Windows service/background startup only after foreground operation and
-  clean shutdown are dependable.
+## Later work
 
-## Acceptance criteria
-
-- A Windows user can follow documented steps to install prerequisites, log
-  into Codex, start Yacwu, and use core Codex session workflows without WSL.
-- The server binds only to loopback by default and connects to the local Codex
-  app-server using a supported Windows transport.
-- Project paths with spaces, drive letters, and UNC paths are handled correctly
-  in session creation, file operations, and Git changes.
-- Restarting Yacwu does not orphan Codex processes or lose persisted Yacwu
-  state; running Codex work follows documented restart semantics.
-- Windows CI and the manual end-to-end checklist pass. Unix behavior and the
-  existing Unix packaging workflow remain intact.
-
-## Initial investigation checklist
-
-1. Confirm current Codex CLI installation and app-server transport on Windows.
-2. Build Gleam/OTP server on Windows and identify any failing dependencies or
-   FFI assumptions.
-3. Inventory server FFI and runtime references to `/proc`, `/tmp`, Unix
-   sockets, process signals, shell commands, `chmod`, and XDG paths.
-4. Select state/config known-folder defaults and define override precedence.
-5. Prototype a PowerShell foreground launch and document the verified steps.
+Persistent Windows backends need a separate lifecycle design and transport
+selection. Background service installation and packaged releases follow native
+foreground acceptance. Claude and Copilot Windows integrations require their
+own projects and are not enabled by this branch.

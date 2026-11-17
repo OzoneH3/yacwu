@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows-codex]
   pull_request:
 
 jobs:
@@ -82,3 +82,54 @@ jobs:
         with:
           name: integration-failures
           path: test-results/
+
+  windows:
+    name: Windows native Codex (build, paths, stdio, policies, relay)
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      YACWU_PORTABLE_TESTS: '1'
+      YACWU_BACKEND_ROOT: ${{ github.workspace }}
+      YACWU_BACKENDS: ''
+      YACWU_PERSISTENT_BACKENDS: '0'
+      YACWU_RESET_FEED: 'off'
+      CODEX_HOME: ${{ github.workspace }}/.workspace/ci-codex
+      XDG_STATE_HOME: ${{ github.workspace }}/.workspace/ci-state
+      TMPDIR: ${{ github.workspace }}/.workspace/tmp
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27'
+          gleam-version: '1.18.1'
+          rebar3-version: '3'
+      - name: Prepare isolated directories
+        run: New-Item -ItemType Directory -Force $env:TMPDIR, $env:CODEX_HOME, $env:XDG_STATE_HOME
+      - run: bun install
+      - run: bun run check
+      - run: bun run build
+      - run: bun test tests/unit/host-path.test.ts tests/unit/shared-channel.test.ts tests/unit/markdown.test.ts tests/unit/file-change-stats.test.ts
+      - run: node --test tests/adapter/windows-runtime.test.mjs
+      - run: gleam build --warnings-as-errors
+        working-directory: server
+      - run: gleam test
+        working-directory: server
+      - name: Parse PowerShell scripts
+        run: |
+          foreach ($file in @('start.ps1', 'scripts/protect-path.ps1')) {
+            $parseErrors = $null
+            $tokens = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors) { throw ($parseErrors | Out-String) }
+          }
+      - run: npm install --prefix .workspace/cli @openai/codex@0.160.0
+      - name: Native Codex protocol smoke test (no model credentials)
+        run: |
+          $env:YACWU_CODEX_BIN = Join-Path $pwd '.workspace/cli/node_modules/.bin/codex.cmd'
+          node scripts/smoke-codex.mjs
+      - run: bunx playwright install chromium
+      - run: bunx playwright test tests/windows-paths.spec.ts tests/directory-links.spec.ts

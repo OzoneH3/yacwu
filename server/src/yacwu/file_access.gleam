@@ -2,7 +2,6 @@
 //// unreadable records fail closed. Codex uses its sandbox; a capable Claude
 //// backend restricts tools to reads/searches/questions.
 
-import envoy
 import filepath
 import gleam/bit_array
 import gleam/crypto
@@ -15,6 +14,7 @@ import gleam/result
 import gleam/string
 import simplifile
 import yacwu/jsonx
+import yacwu/platform
 
 pub const read_only = "read-only"
 
@@ -25,12 +25,7 @@ pub fn valid(mode: String) -> Bool {
 }
 
 pub fn path(host: String, thread: String) -> String {
-  let root =
-    envoy.get("XDG_STATE_HOME")
-    |> result.unwrap(filepath.join(
-      envoy.get("HOME") |> result.unwrap("."),
-      ".local/state",
-    ))
+  let root = platform.state_home()
   let key =
     crypto.hash(crypto.Sha256, bit_array.from_string(host <> "\n" <> thread))
     |> bit_array.base16_encode

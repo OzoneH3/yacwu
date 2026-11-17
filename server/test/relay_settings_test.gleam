@@ -9,7 +9,7 @@ fn unique() -> Int
 
 pub fn default_is_accept_and_choice_round_trips_test() {
   let path =
-    "/tmp/yacwu-relay-settings-"
+    "../.workspace/yacwu-relay-settings-"
     <> int.to_string(int.absolute_value(unique()))
     <> "/nested/relay-settings.json"
   relay_settings.load(path) |> should.be_true
@@ -23,7 +23,7 @@ pub fn default_is_accept_and_choice_round_trips_test() {
 
 pub fn undelivered_messages_round_trip_test() {
   let path =
-    "/tmp/yacwu-relay-queue-"
+    "../.workspace/yacwu-relay-queue-"
     <> int.to_string(int.absolute_value(unique()))
     <> "/relay-queue.json"
   relay_settings.load_open(path) |> should.equal([])

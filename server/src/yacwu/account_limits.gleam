@@ -1,6 +1,5 @@
 //// Server-wide account usage stops. Zero disables a provider's limit.
 
-import envoy
 import filepath
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -11,6 +10,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import simplifile
 import yacwu/jsonx
+import yacwu/platform
 
 pub type Limits {
   Limits(codex_reserve_percent: Int, copilot_credit_limit: Int)
@@ -46,12 +46,7 @@ pub fn encode(limits: Limits) -> Json {
 }
 
 pub fn path() -> String {
-  let root =
-    envoy.get("XDG_STATE_HOME")
-    |> result.unwrap(filepath.join(
-      envoy.get("HOME") |> result.unwrap("."),
-      ".local/state",
-    ))
+  let root = platform.state_home()
   filepath.join(root, "yacwu/account-limits.json")
 }
 

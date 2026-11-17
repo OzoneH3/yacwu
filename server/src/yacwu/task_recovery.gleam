@@ -7,7 +7,6 @@
 //// Running turns are saved to disk, so a crash of Yacwu itself is covered:
 //// they are checked when each host first connects after a restart.
 
-import envoy
 import filepath
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
@@ -16,8 +15,10 @@ import gleam/json
 import gleam/list
 import gleam/result
 import simplifile
+import yacwu/platform
 
-pub const continuation_prompt = "The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work."
+pub const continuation_prompt =
+  "The previous task was interrupted by an app restart. Continue from the current state: first inspect what is already complete, then finish only the remaining work."
 
 /// At most this many automatic continues per thread within
 /// `attempt_window_seconds`,
@@ -182,11 +183,7 @@ pub fn cut_off(read: Dynamic, turn: String) -> Bool {
 // -- Persistence ----------------------------------------------------------------
 
 pub fn path() -> String {
-  let state = case envoy.get("XDG_STATE_HOME") {
-    Ok(dir) if dir != "" -> dir
-    _ ->
-      filepath.join(envoy.get("HOME") |> result.unwrap("/tmp"), ".local/state")
-  }
+  let state = platform.state_home()
   filepath.join(state, "yacwu/running-turns.json")
 }
 

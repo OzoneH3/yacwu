@@ -73,6 +73,7 @@
 	import FolderBrowser from '$lib/FolderBrowser.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
 	import RemoteAccess from '$lib/RemoteAccess.svelte';
+	import { isWindowsPath, normalizeHostPath, parentHostPath } from '$lib/host-path';
 	import CopilotCreditHistory from '$lib/CopilotCreditHistory.svelte';
 	import { copilotAccountUsage, copilotAccountLabel, copilotAccountTitle, type CopilotAccountUsage } from '$lib/copilot-account';
 	import { copilotTaskCredits, creditLabel, creditTitle } from '$lib/copilot-credits';
@@ -241,6 +242,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let newProvider = $state('codex');
 	let hostChoices = $state<HostInfo[]>([]);
 	let remoteAccessOpen = $state(false);
+	let remoteSupported = $state(true);
 	// The new-session dialog's check of a remote machine, shown under its picker.
 	let hostChecks = $state<Record<string, { state: 'connecting' | 'connected' | 'error'; message?: string }>>({});
 	const newProviders = $derived(backendProviders(hostChoices));
@@ -1214,6 +1216,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (!response.ok) return;
 			const data = await response.json();
 			hostChoices = (data.hosts ?? []) as HostInfo[];
+			remoteSupported = data.remoteSupported !== false;
 			for (const host of hostChoices) {
 				if (host.kind === 'remote' && !(host.name in hostStates)) hostStates[host.name] = host.state;
 			}
@@ -5165,36 +5168,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			candidate = withLine[1];
 			line = Number(withLine[2]) || null;
 		}
-		if (candidate.length > 1) candidate = candidate.replace(/\/+$/, '');
-		if (candidate.startsWith('/')) {
+		const absolute = candidate.startsWith('/') || isWindowsPath(candidate);
+		candidate = candidate.replace(/\\/g, '/');
+		if (absolute) {
+			candidate = normalizeHostPath(candidate);
 			const rawCwd = cwds[activeId] ?? activeSummary?.cwd;
-			const cwd = rawCwd?.replace(/[\\/]+$/, '') || '';
-			if (!cwd) {
-				const slash = candidate.lastIndexOf('/');
-				root = slash <= 0 ? '/' : candidate.slice(0, slash);
-				candidate = candidate.slice(slash + 1);
-			} else {
-			const normalizedCwd = cwd || '/';
-			if (candidate === normalizedCwd) return { path: '', line: null, root: null };
-			const prefix = normalizedCwd === '/' ? '/' : `${normalizedCwd}/`;
-			if (candidate.startsWith(prefix)) candidate = candidate.slice(prefix.length);
+			const cwd = rawCwd ? normalizeHostPath(rawCwd) : '';
+			if (candidate === cwd) return { path: '', line: null, root: null };
+			const prefix = cwd.endsWith('/') ? cwd : `${cwd}/`;
+			if (cwd && candidate.startsWith(prefix)) candidate = candidate.slice(prefix.length);
 			else {
-				const slash = candidate.lastIndexOf('/');
-				root = slash <= 0 ? '/' : candidate.slice(0, slash);
-				candidate = candidate.slice(slash + 1);
+				root = parentHostPath(candidate);
+				if (root === candidate) return { path: '', line, root };
+				candidate = candidate.slice(root.length).replace(/^\//, '');
 			}
-			}
-		} else if (candidate.startsWith('./')) {
-			candidate = candidate.slice(2);
-		}
-		// Markdown link hrefs may name a single file; bare code spans need a
-		// separator so ordinary identifiers stay plain.
-		const pattern = requireSeparator
-			? /^[\w.@+-]+(?:\/[\w.@+-]+)+$/
-			: /^[\w.@+-]+(?:\/[\w.@+-]+)*$/;
-		if (!pattern.test(candidate)) return null;
-		// The character class admits dots, so rule out ".."-style segments.
-		if (candidate.split('/').some((segment) => /^\.+$/.test(segment))) return null;
+		} else if (candidate.startsWith('./')) candidate = candidate.slice(2);
+		// Explicit links can contain spaces and Unicode; control characters,
+		// URI schemes and traversal are never workspace-relative filenames.
+		if (!candidate || /[\x00-\x1f:<>|?*]/.test(candidate)) return null;
+		if (requireSeparator && !absolute && !candidate.includes('/')) return null;
+		if (candidate.split('/').some(segment => !segment || /^\.+$/.test(segment))) return null;
 		return { path: candidate, line, root };
 	}
 
@@ -6457,7 +6450,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</p>
 					{/if}
 				{/if}
-				<button class="mini ghost" type="button" onclick={() => remoteAccessOpen = true}>Manage SSH access</button>
+				{#if remoteSupported}<button class="mini ghost" type="button" onclick={() => remoteAccessOpen = true}>Manage SSH access</button>{/if}
 				{#if newProviders.length}
 					<div class="create-row">
 						<label for="new-provider">Provider</label>

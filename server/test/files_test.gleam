@@ -54,7 +54,7 @@ pub fn sort_entries_puts_directories_first_then_names_test() {
 // -- list_directory / read_file (against a real temp tree) --------------------
 
 fn with_temp_tree(run: fn(String) -> Nil) -> Nil {
-  let root = "/tmp/yacwu_files_test"
+  let root = "../.workspace/yacwu_files_test"
   let _ = simplifile.delete(root)
   let assert Ok(_) = simplifile.create_directory_all(root <> "/sub")
   let assert Ok(_) = simplifile.write(root <> "/hello.txt", "hi there\n")
@@ -84,7 +84,7 @@ fn dir_size(path: String) -> Int {
 }
 
 pub fn list_directory_fails_for_missing_directories_test() {
-  files.list_directory("/tmp/yacwu_files_test_missing")
+  files.list_directory("../.workspace/yacwu_files_test_missing")
   |> should.be_error
 }
 

@@ -28,6 +28,7 @@ import filepath
 import gleam/list
 import gleam/result
 import gleam/string
+import yacwu/platform
 import yacwu/ssh_config
 
 /// One configured backend: the host name it is addressed by, and the argv of
@@ -38,6 +39,13 @@ pub type Backend {
 
 /// The backends configured right now (`YACWU_BACKENDS`, re-read on demand).
 pub fn discover() -> List(Backend) {
+  case platform.is_windows() {
+    True -> []
+    False -> configured()
+  }
+}
+
+fn configured() -> List(Backend) {
   envoy.get("YACWU_BACKENDS")
   |> result.unwrap("")
   |> parse

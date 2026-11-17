@@ -1,4 +1,3 @@
-import envoy
 import filepath
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -19,7 +18,7 @@ pub fn policies_survive_opens_forks_and_manager_recreation_test() {
   let label = "access-test-" <> int.to_string(unique())
   let fixture =
     filepath.join(
-      envoy.get("PWD") |> result.unwrap("."),
+      simplifile.current_directory() |> result.unwrap("."),
       "../tests/fixtures/file-access-server.mjs",
     )
   let name = process.new_name(label)
@@ -161,7 +160,7 @@ pub fn spawned_agents_and_approval_requests_retain_read_only_access_test() {
 pub fn claude_read_only_requires_the_backend_capability_test() {
   let fixture =
     filepath.join(
-      envoy.get("PWD") |> result.unwrap("."),
+      simplifile.current_directory() |> result.unwrap("."),
       "../tests/fixtures/file-access-server.mjs",
     )
   let ready = process.new_name("claude_ready")
