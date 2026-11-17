@@ -203,8 +203,26 @@ The `windows-codex` branch includes native Windows foreground startup for
 has been checked on Linux and has a Windows CI job. See the
 [conversion status and acceptance checklist](docs/windows-codex-plan.md).
 
-Install Node.js 24+, Bun 1.3+, Gleam 1.18+, Erlang/OTP 27+, `rebar3`, and Git
-on `PATH`, then install and authenticate Codex. In PowerShell, from this checkout:
+Install the build toolchain from PowerShell in this checkout:
+
+```powershell
+.\install-windows.ps1
+# Preview installation and PATH changes:
+.\install-windows.ps1 -WhatIf
+```
+
+The installer uses WinGet for Bun 1.3+, Gleam 1.18+, and Erlang/OTP 27+,
+skips compatible versions, and installs checksum-verified rebar3 3.27.0 into
+`.workspace/tools/rebar3` if needed. It adds missing tool directories to your
+user PATH. Reopen PowerShell afterward. Erlang installation may show a Windows
+elevation prompt. If WinGet is missing, install
+[Microsoft App Installer](https://aka.ms/getwinget) first. If you move this
+checkout, rerun the installer to update the rebar3 PATH entry.
+
+The package IDs come from the [WinGet manifests](https://github.com/microsoft/winget-pkgs);
+the rebar3 wrapper follows its [Windows installation instructions](https://rebar3.org/docs/getting-started/#windows).
+
+Also install Node.js 24+ and Git on `PATH`, then install and authenticate Codex:
 
 ```powershell
 npm install -g @openai/codex
@@ -215,7 +233,8 @@ codex login
 ```
 
 If your PowerShell execution policy blocks the script, invoke it for this
-process with `powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1`.
+process with `powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1`
+(or use `install-windows.ps1` as the file for prerequisite installation).
 The launcher builds the application and starts it on `127.0.0.1:3000`, with
 authentication disabled by default for local use. `HOST`, `PORT`,
 `YACWU_INSECURE_SKIP_AUTH`, and other server overrides remain available.

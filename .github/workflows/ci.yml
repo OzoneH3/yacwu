@@ -120,12 +120,14 @@ jobs:
         working-directory: server
       - name: Parse PowerShell scripts
         run: |
-          foreach ($file in @('start.ps1', 'scripts/protect-path.ps1')) {
+          foreach ($file in @('start.ps1', 'install-windows.ps1', 'scripts/protect-path.ps1')) {
             $parseErrors = $null
             $tokens = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors) { throw ($parseErrors | Out-String) }
           }
+      - name: Preview prerequisite installer
+        run: .\install-windows.ps1 -WhatIf
       - run: npm install --prefix .workspace/cli @openai/codex@0.160.0
       - name: Native Codex protocol smoke test (no model credentials)
         run: |

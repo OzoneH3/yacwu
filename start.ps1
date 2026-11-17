@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
     foreach ($tool in @('bun', 'node', 'gleam', 'erl', 'rebar3', 'git')) {
-        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing prerequisite: $tool. See README Windows support." }
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing prerequisite: $tool. Run .\install-windows.ps1 for Bun/Gleam/Erlang/rebar3; see README for Node and Git." }
     }
     if (-not $env:YACWU_CODEX_BIN -and -not (Get-Command codex -ErrorAction SilentlyContinue)) {
         throw 'Install Codex with npm install -g @openai/codex, then run codex login.'
