@@ -19,6 +19,7 @@ import yacwu/backends
 import yacwu/config
 import yacwu/hosts
 import yacwu/model_state
+import yacwu/platform
 import yacwu/profiles
 import yacwu/project_rules
 import yacwu/relay
@@ -61,6 +62,13 @@ pub fn main() -> Nil {
 }
 
 fn serve(conf: config.Config) -> Nil {
+  case platform.is_windows(), conf.unix {
+    True, Some(_) -> {
+      io.println_error("Windows uses HTTP on loopback; --unix is unavailable")
+      halt(1)
+    }
+    _, _ -> Nil
+  }
   // Authentication configuration is immutable: loaded here, once, and
   // carried by the router for the lifetime of the process.
   let auth_config = auth.load()

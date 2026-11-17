@@ -1,6 +1,16 @@
 import { expect, test } from 'bun:test';
 import { anchorCorrection, pickTranscriptAnchor, settleTranscriptBottom } from '../../src/lib/transcript-scroll';
 
+test('scrolling before the scroll event does not get mistaken for a layout shift', () => {
+	const anchor = [{ key: 'reading', offset: 120 }];
+	// The browser has scrolled down 300px but its scroll event is pending.
+	expect(anchorCorrection(anchor, () => -180, 300)).toBe(0);
+	// Compensate only for an additional 50px of content inserted above it.
+	expect(anchorCorrection(anchor, () => -130, 300)).toBe(50);
+	// The same rule applies when scrolling upward.
+	expect(anchorCorrection(anchor, () => 420, -300)).toBe(0);
+});
+
 test('bottom jump follows multiple virtual row measurements rather than stopping after two frames', async () => {
 	let height = 1000, top = 0, frames = 0;
 	const viewport = { get scrollHeight() { return height; }, get scrollTop() { return top; }, set scrollTop(value) { top = Math.min(value, height - 200); }, clientHeight: 200 };
@@ -18,13 +28,14 @@ test('manual interaction cancels settling without pulling the reader back down',
 	expect(viewport.scrollTop).toBe(100);
 });
 
-test('a scroll away without an input event also stops the jump', async () => {
+test('a later layout adjustment without input does not abort the bottom jump', async () => {
 	let frames = 0;
-	const viewport = { scrollHeight: 1000, scrollTop: 0, clientHeight: 200 };
+	let top = 0;
+	const viewport = { scrollHeight: 1000, get scrollTop() { return top; }, set scrollTop(value) { top = Math.min(value, 800); }, clientHeight: 200 };
 	await settleTranscriptBottom(viewport, { flush: async () => {}, update: () => {}, atEnd: () => true, cancelled: () => false,
 		frame: async () => { frames += 1; if (frames === 2) viewport.scrollTop = 0; } });
-	expect(viewport.scrollTop).toBe(0);
-	expect(frames).toBe(2);
+	expect(viewport.scrollTop).toBe(800);
+	expect(frames).toBeGreaterThan(2);
 });
 
 test('row height shrinkage and browser anchoring do not cancel an explicit bottom jump', async () => {
@@ -62,4 +73,15 @@ test('a row folding away above the reader is compensated through the next anchor
 	// Unmoved, sub-pixel, or nothing left to hold on to: no correction.
 	expect(anchorCorrection(anchor, (key) => (key === 'folded' ? -50.3 : 400))).toBe(0);
 	expect(anchorCorrection(anchor, () => null)).toBe(0);
+});
+
+test('refreshing the viewport anchor after compensation avoids applying the same shift twice', () => {
+	const original = [{ key: 'folded', offset: -50 }, { key: 'reading', offset: 120 }];
+	const moved = [{ key: 'reading', offset: -180 }];
+	const currentTop = (key: string) => key === 'reading' ? -180 : null;
+	const correction = anchorCorrection(original, currentTop);
+	expect(correction).toBe(-300);
+	// After moving scrollTop by the correction, the visible row is back at 120px.
+	const refreshed = moved.map((row) => ({ ...row, offset: row.offset - correction }));
+	expect(anchorCorrection(refreshed, (key) => key === 'reading' ? 120 : null)).toBe(0);
 });

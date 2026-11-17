@@ -45,6 +45,7 @@ import yacwu/diagnostics
 import yacwu/file_access
 import yacwu/jsonx
 import yacwu/oauth
+import yacwu/platform
 import yacwu/remote
 import yacwu/usage
 import yacwu/ws
@@ -226,7 +227,7 @@ pub fn default_cwd() -> String {
 }
 
 fn local_home() -> String {
-  envoy.get("HOME") |> result.unwrap("/")
+  platform.home()
 }
 
 type TimeUnit {
@@ -1447,7 +1448,32 @@ fn begin_initialize(state: State, conn: Conn, queued: List(Queued)) -> State {
   )
 }
 
+@external(erlang, "yacwu_platform", "spawn_codex")
+fn spawn_windows_codex(
+  command: List(String),
+  cwd: String,
+  stderr: String,
+) -> Port
+
 fn spawn_codex(command: List(String), label: String) -> Port {
+  case platform.is_windows() {
+    True -> {
+      let _ = diagnostics.rotate_stderr(label)
+      let #(_, stderr) = diagnostics.paths(label)
+      let command = case command {
+        ["codex", ..args] -> [
+          envoy.get("YACWU_CODEX_BIN") |> result.unwrap("codex"),
+          ..args
+        ]
+        _ -> command
+      }
+      spawn_windows_codex(command, default_cwd(), stderr)
+    }
+    False -> spawn_unix_codex(command, label)
+  }
+}
+
+fn spawn_unix_codex(command: List(String), label: String) -> Port {
   let capture = diagnostics.rotate_stderr(label)
   let #(_, stderr) = diagnostics.paths(label)
   diagnostics.record(label, oauth.now(), "child_start", [
@@ -1601,7 +1627,10 @@ fn on_conn_result(
         Local(_) -> Nil
         _ -> {
           let delay =
-            int.min(30_000, 1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)))
+            int.min(
+              30_000,
+              1000 * pow2(int.min(int.max(state.backoff - 1, 0), 5)),
+            )
           let _ =
             process.send_after(
               process.named_subject(state.self),

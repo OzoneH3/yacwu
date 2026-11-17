@@ -11,6 +11,7 @@ import gleam/result
 import simplifile
 import yacwu/jsonx
 import yacwu/oauth
+import yacwu/platform
 
 @external(erlang, "yacwu_ssh_access", "host_id")
 fn host_id(host: String) -> String
@@ -19,10 +20,7 @@ fn host_id(host: String) -> String
 fn run(script: String, input: String) -> Result(String, String)
 
 pub fn root() -> String {
-  let home = envoy.get("HOME") |> result.unwrap(".")
-  let state =
-    envoy.get("XDG_STATE_HOME")
-    |> result.unwrap(filepath.join(home, ".local/state"))
+  let state = platform.state_home()
   filepath.join(state, "yacwu/ssh-access")
 }
 
@@ -131,7 +129,14 @@ pub fn tunnel_wrapper(host: String) -> String {
   <> "cat >/dev/null; kill \"$p\" 2>/dev/null; [ -z \"$t\" ] || kill \"$t\" 2>/dev/null"
 }
 
-pub fn operation(input: Dynamic, action: String) -> Result(Dynamic, String) {
+pub fn operation(body: Dynamic, action: String) -> Result(Dynamic, String) {
+  case platform.is_windows() {
+    True -> Error("SSH access is unavailable on Windows; use local Codex")
+    False -> native_operation(body, action)
+  }
+}
+
+fn native_operation(input: Dynamic, action: String) -> Result(Dynamic, String) {
   let root =
     envoy.get("YACWU_BACKEND_ROOT")
     |> result.lazy_or(fn() { envoy.get("PWD") })

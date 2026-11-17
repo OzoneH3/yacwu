@@ -33,6 +33,7 @@ function safeResource(value: string): { value: string | null; external: boolean 
 	const href = value.trim();
 	if (!href) return { value: null, external: false };
 	if (/^(?:https?):\/\//i.test(href)) return { value: href, external: true };
+	if (/^[a-z]:[\\/]/i.test(href) || /^\\\\/.test(href)) return { value: href, external: false };
 	if (/^\/\//.test(href)) return { value: href, external: true };
 	if (/^mailto:/i.test(href)) return { value: href, external: true };
 	if (/^(?:\/|\.\/|\.\.\/|#|\?)/.test(href)) return { value: href, external: false };

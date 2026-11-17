@@ -14,6 +14,7 @@ import gleam/list
 import gleam/order
 import gleam/string
 import simplifile
+import yacwu/platform
 
 /// Files larger than this are reported, not returned.
 pub const max_file_bytes = 1_000_000
@@ -36,14 +37,31 @@ pub fn sanitize(raw: String) -> Result(String, Nil) {
   case
     string.contains(raw, "\\")
     || string.contains(raw, "\u{0000}")
-    || filepath.is_absolute(raw)
+    || string.starts_with(raw, "/")
+    || platform.is_absolute(raw)
+    || { platform.is_windows() && !platform.windows_relative(raw) }
   {
     True -> Error(Nil)
     False ->
       case string.trim(raw) {
         "" -> Ok("")
-        trimmed -> filepath.expand(trimmed)
+        trimmed -> expand_relative(string.split(trimmed, "/"), [])
       }
+  }
+}
+
+// Relative API paths always use forward slashes, independently of host OS.
+// Empty segments must not count as directories when resolving traversal.
+fn expand_relative(
+  parts: List(String),
+  stack: List(String),
+) -> Result(String, Nil) {
+  case parts, stack {
+    [], _ -> Ok(string.join(list.reverse(stack), "/"))
+    ["", ..rest], _ | [".", ..rest], _ -> expand_relative(rest, stack)
+    ["..", ..], [] -> Error(Nil)
+    ["..", ..rest], [_, ..parent] -> expand_relative(rest, parent)
+    [part, ..rest], _ -> expand_relative(rest, [part, ..stack])
   }
 }
 

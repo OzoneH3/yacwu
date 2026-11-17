@@ -42,6 +42,7 @@ import yacwu/hosts
 import yacwu/jsonx
 import yacwu/model_state.{type Store}
 import yacwu/oauth
+import yacwu/platform
 import yacwu/profiles
 import yacwu/project_rules
 import yacwu/relay
@@ -898,6 +899,7 @@ fn list_hosts(ctx: Context) -> Response(ResponseData) {
     ]
     |> list.flatten
     |> list.unique
+    |> list.filter(fn(host) { !platform.is_windows() || host == hosts.local })
     |> list.map(fn(host) {
       let backend =
         list.find(configured_backends, fn(entry) { entry.name == host })
@@ -936,7 +938,17 @@ fn list_hosts(ctx: Context) -> Response(ResponseData) {
     })
   json_response(
     200,
-    json.object([#("hosts", json.preprocessed_array(entries))]),
+    json.object([
+      #("hosts", json.preprocessed_array(entries)),
+      #(
+        "platform",
+        json.string(case platform.is_windows() {
+          True -> "windows"
+          False -> "unix"
+        }),
+      ),
+      #("remoteSupported", json.bool(!platform.is_windows())),
+    ]),
   )
 }
 
@@ -1209,7 +1221,7 @@ const image_mime = [
 ]
 
 fn extension_of(path: String) -> String {
-  case string.split(path, "/") |> list.last {
+  case string.split(platform.normalize(path), "/") |> list.last {
     Ok(name) ->
       case string.split(name, ".") {
         [_only] -> ""
@@ -1233,7 +1245,7 @@ fn image(
     |> result.unwrap([])
     |> list.key_find("path")
     |> result.unwrap("")
-  case string.starts_with(path, "/") {
+  case platform.is_absolute(path) {
     False ->
       json_response(
         400,
@@ -1340,7 +1352,7 @@ fn workspace_root(
   case query_value(req, "root") {
     "" -> thread_root(cx, thread_id)
     root ->
-      case filepath.is_absolute(root) && !string.contains(root, "\u{0000}") {
+      case platform.is_absolute(root) && !string.contains(root, "\u{0000}") {
         False -> Error("invalid workspace root")
         True -> {
           let resolved = case hosts.is_local(host) {
@@ -1370,6 +1382,17 @@ fn list_directories(
   req: Request(Connection),
 ) -> Response(ResponseData) {
   let requested = query_value(req, "path")
+  case hosts.is_local(host) && !platform.valid_path(requested) {
+    True -> json_response(400, error_body("Invalid directory path"))
+    False -> list_valid_directories(host, cx, requested)
+  }
+}
+
+fn list_valid_directories(
+  host: String,
+  cx: Codex,
+  requested: String,
+) -> Response(ResponseData) {
   let path = case requested, hosts.is_local(host) {
     "", True -> codex.default_cwd()
     "", False -> codex.info(cx).home
@@ -2524,6 +2547,18 @@ fn save_thread_project_rules(
 /// existence is codex's call — it errors on a bad cwd and that error flows
 /// back as-is.
 fn checked_cwd(host: String, cx: Codex, raw: String) -> Result(String, String) {
+  case hosts.is_local(host) && !platform.valid_path(raw) {
+    True ->
+      Error("Invalid folder path; use a full drive path such as C:/Projects")
+    False -> checked_cwd_path(host, cx, raw)
+  }
+}
+
+fn checked_cwd_path(
+  host: String,
+  cx: Codex,
+  raw: String,
+) -> Result(String, String) {
   case hosts.is_local(host) {
     True -> {
       let cwd = resolve_cwd(raw)
@@ -2588,7 +2623,8 @@ fn directory_status(path: String) -> DirectoryStatus {
 
 /// Resolve relative paths against the default cwd and expand a leading `~`.
 fn resolve_cwd(raw: String) -> String {
-  let home = envoy.get("HOME") |> result.unwrap("/")
+  let raw = platform.normalize(raw)
+  let home = platform.home()
   let expanded = case raw {
     "~" -> home
     _ ->
@@ -2597,10 +2633,7 @@ fn resolve_cwd(raw: String) -> String {
         False -> raw
       }
   }
-  case string.starts_with(expanded, "/") {
-    True -> expanded
-    False -> filepath.join(codex.default_cwd(), expanded)
-  }
+  platform.resolve(expanded, codex.default_cwd())
 }
 
 /// The same resolution against a remote host's home directory. With the home
@@ -2902,7 +2935,7 @@ fn store_upload(
   data: BitArray,
 ) -> Result(String, String) {
   use dir <- result.try(case hosts.is_local(host) {
-    True -> Ok(envoy.get("TMPDIR") |> result.unwrap("/tmp"))
+    True -> Ok(platform.temp_dir())
     False ->
       case codex.info(cx).home {
         "" -> Error("remote home directory unknown; reconnect and retry")

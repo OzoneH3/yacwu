@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { parentHostPath as parentOf } from './host-path';
 
 	interface DirectoryChoice {
 		name: string;
@@ -38,13 +39,6 @@
 	let showHidden = $state(false);
 	let request = 0;
 	const visibleEntries = $derived(entries.filter((entry) => showHidden || !entry.name.startsWith('.')));
-
-	function parentOf(folder: string): string {
-		const normalized = folder.replace(/[\\/]+$/, '');
-		const slash = normalized.lastIndexOf('/');
-		if (slash <= 0) return normalized.startsWith('/') ? '/' : normalized;
-		return normalized.slice(0, slash);
-	}
 
 	async function browse(folder?: string) {
 		const current = ++request;

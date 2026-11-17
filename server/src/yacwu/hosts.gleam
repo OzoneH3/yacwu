@@ -23,6 +23,7 @@ import gleam/otp/supervision
 import gleam/result
 import yacwu/backends
 import yacwu/codex.{type Codex}
+import yacwu/platform
 import yacwu/remote_access
 import yacwu/ssh_config
 
@@ -335,6 +336,13 @@ fn handle(state: State, msg: Msg) -> actor.Next(State, Msg) {
 
 /// Local backends never use managed SSH identities.
 pub fn check_access(host: String) -> Result(Nil, String) {
+  case platform.is_windows() && host != local {
+    True -> Error("Windows supports local Codex sessions only")
+    False -> check_host_access(host)
+  }
+}
+
+fn check_host_access(host: String) -> Result(Nil, String) {
   case is_local(host) {
     True -> Ok(Nil)
     False -> remote_access.check(host)
@@ -371,7 +379,7 @@ fn ensure_manager(
 /// a host's manager starts.
 fn persistent_backends() -> Bool {
   case envoy.get("YACWU_PERSISTENT_BACKENDS") {
-    Ok("1") | Ok("true") | Ok("yes") -> True
+    Ok("1") | Ok("true") | Ok("yes") -> !platform.is_windows()
     _ -> False
   }
 }

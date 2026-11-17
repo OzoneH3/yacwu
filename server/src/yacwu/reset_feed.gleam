@@ -12,6 +12,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import simplifile
+import yacwu/platform
 
 pub const url = "https://codex-resets.com/api/v1/resets?limit=100"
 
@@ -36,10 +37,7 @@ pub fn enabled() -> Bool {
 }
 
 fn cache_path() -> String {
-  let state = case envoy.get("XDG_STATE_HOME") {
-    Ok(dir) if dir != "" -> dir
-    _ -> filepath.join(envoy.get("HOME") |> result.unwrap("."), ".local/state")
-  }
+  let state = platform.state_home()
   // Separate from the retired XML source: never mix in its stale records.
   filepath.join(state, "yacwu/reset-feed-v2.json")
 }

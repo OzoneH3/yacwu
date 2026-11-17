@@ -14,8 +14,8 @@ run(Cwd, Args) ->
             Port = open_port(
                 {spawn_executable, Git},
                 [binary, exit_status, use_stdio, stderr_to_stdout, hide,
-                 {cd, binary_to_list(Cwd)},
-                 {args, [binary_to_list(Arg) || Arg <- Args]}]
+                 {cd, unicode:characters_to_list(Cwd)},
+                 {args, [unicode:characters_to_list(Arg) || Arg <- Args]}]
             ),
             collect(Port, [], 0)
     end.

@@ -5,7 +5,6 @@
 //// session's rules are outdated.
 //// Changing the rules never rewrites an existing thread's instructions.
 
-import envoy
 import filepath
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode
@@ -18,6 +17,7 @@ import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import simplifile
+import yacwu/platform
 
 pub type Rules {
   Rules(text: String, version: Int, updated_at: Int)
@@ -34,11 +34,7 @@ pub type State {
 }
 
 pub fn path() -> String {
-  let state = case envoy.get("XDG_STATE_HOME") {
-    Ok(dir) if dir != "" -> dir
-    _ ->
-      filepath.join(envoy.get("HOME") |> result.unwrap("/tmp"), ".local/state")
-  }
+  let state = platform.state_home()
   filepath.join(state, "yacwu/project-rules.json")
 }
 

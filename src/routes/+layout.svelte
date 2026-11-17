@@ -74,6 +74,7 @@
 	import FolderBrowser from '$lib/FolderBrowser.svelte';
 	import UsageHistory from '$lib/UsageHistory.svelte';
 	import RemoteAccess from '$lib/RemoteAccess.svelte';
+	import { isWindowsPath, normalizeHostPath, parentHostPath } from '$lib/host-path';
 	import CopilotCreditHistory from '$lib/CopilotCreditHistory.svelte';
 	import { copilotAccountUsage, copilotAccountLabel, copilotAccountTitle, type CopilotAccountUsage } from '$lib/copilot-account';
 	import { copilotTaskCredits, creditLabel, creditTitle } from '$lib/copilot-credits';
@@ -242,6 +243,7 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 	let newProvider = $state('codex');
 	let hostChoices = $state<HostInfo[]>([]);
 	let remoteAccessOpen = $state(false);
+	let remoteSupported = $state(true);
 	// The new-session dialog's check of a remote machine, shown under its picker.
 	let hostChecks = $state<Record<string, { state: 'connecting' | 'connected' | 'error'; message?: string }>>({});
 	const newProviders = $derived(backendProviders(hostChoices));
@@ -947,6 +949,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let cwdInputEl = $state<HTMLInputElement | null>(null);
 
 	let transcriptEl = $state<HTMLDivElement | null>(null);
+	// Preserve bottom-follow intent while virtual rows are measured; those
+	// measurements can temporarily enlarge scrollHeight.
+	let transcriptBottomIntent = $state(true);
 	let showAllActivity = $state(false);
 	let expandedActivity = $state<Record<string, boolean>>({});
 	function toggleActivityGroup(id: string) {
@@ -1230,6 +1235,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (!response.ok) return;
 			const data = await response.json();
 			hostChoices = (data.hosts ?? []) as HostInfo[];
+			remoteSupported = data.remoteSupported !== false;
 			for (const host of hostChoices) {
 				if (host.kind === 'remote' && !(host.name in hostStates)) hostStates[host.name] = host.state;
 			}
@@ -2222,7 +2228,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 
 		if (shouldScroll) {
-			scrollToBottom();
+			// A running explicit jump already tracks layout changes. For normal
+			// streaming, one post-render adjustment per batch is enough; starting
+			// the multi-frame settle loop on every delta makes Firefox visibly
+			// oscillate as it repeatedly clamps scrollTop to the growing bottom.
+			if (!followingBottom()) followStreamingTranscript();
 		} else if (
 			affectedThreadId === viewedId &&
 			(msg.method.startsWith('item/') || msg.method.startsWith('turn/'))
@@ -2238,7 +2248,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	let bottomJumpGeneration = 0;
-	function cancelBottomJump() { bottomJumpGeneration++; }
+	function cancelBottomJump() {
+		bottomJumpGeneration++;
+		transcriptBottomIntent = false;
+	}
+	let streamingFollowScheduled = false;
+	function followStreamingTranscript() {
+		if (streamingFollowScheduled) return;
+		streamingFollowScheduled = true;
+		const generation = bottomJumpGeneration;
+		const targetId = viewedId;
+		void tick().then(() => {
+			streamingFollowScheduled = false;
+			if (generation !== bottomJumpGeneration || targetId !== viewedId || !transcriptEl) return;
+			transcriptEl.scrollTop = transcriptEl.scrollHeight;
+			updateTranscriptViewport();
+		});
+	}
 	function cancelJumpOnInput(node: HTMLElement) {
 		const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
 		for (const event of events) node.addEventListener(event, cancelBottomJump, { passive: true });
@@ -2257,6 +2283,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	// into "Background work" when the next one arrives, output collapsing,
 	// rows measured as they render — would otherwise move the text away.
 	let transcriptAnchor: TranscriptAnchor | null = null;
+	let transcriptAnchorScrollTop = 0;
 	function recordTranscriptAnchor() {
 		const el = transcriptEl;
 		if (!el || followingBottom() || isTranscriptAtBottom()) {
@@ -2269,6 +2296,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			return { key: row.dataset.rowKey ?? '', top: rect.top - viewportTop, bottom: rect.bottom - viewportTop };
 		});
 		transcriptAnchor = pickTranscriptAnchor(rows, el.clientHeight);
+		transcriptAnchorScrollTop = el.scrollTop;
 	}
 	function restoreTranscriptAnchor() {
 		const el = transcriptEl;
@@ -2278,14 +2306,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const delta = anchorCorrection(anchor, (key) => {
 			const row = el.querySelector<HTMLElement>(`.virtual-row[data-row-key="${CSS.escape(key)}"]`);
 			return row ? row.getBoundingClientRect().top - viewportTop : null;
-		});
-		if (delta) el.scrollTop += delta;
+		}, el.scrollTop - transcriptAnchorScrollTop);
+		if (delta) {
+			el.scrollTop += delta;
+			// Scroll events are delivered asynchronously in Firefox. Refresh the
+			// anchor now so a subsequent layout pass cannot apply this correction
+			// a second time against the old viewport position.
+			const rows = Array.from(el.querySelectorAll<HTMLElement>('.virtual-row[data-row-key]'), (row) => {
+				const rect = row.getBoundingClientRect();
+				return { key: row.dataset.rowKey ?? '', top: rect.top - viewportTop, bottom: rect.bottom - viewportTop };
+			});
+			transcriptAnchor = pickTranscriptAnchor(rows, el.clientHeight);
+			transcriptAnchorScrollTop = el.scrollTop;
+		}
 	}
 	// After every transcript render: rows added, removed, regrouped or
 	// re-windowed (row resizes restore from their own observer).
 	$effect(() => {
 		void virtualTranscript;
-		untrack(restoreTranscriptAnchor);
+		if (transcriptBottomIntent) untrack(followStreamingTranscript);
+		else untrack(restoreTranscriptAnchor);
 	});
 
 	async function scrollToBottom() {
@@ -2294,6 +2334,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const targetId = viewedId;
 		const jump = { generation, targetId };
 		activeBottomJump = jump;
+		transcriptAnchor = null;
+		transcriptBottomIntent = true;
 		try {
 			await tick();
 			if (!transcriptEl || generation !== bottomJumpGeneration || targetId !== viewedId) return;
@@ -2326,6 +2368,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		_heightVersion: number
 	): { items: ThreadItem[]; before: number; after: number; total: number } {
 		if (items.length === 0) return { items: [], before: 0, after: 0, total: 0 };
+
+		// While following the end, choose the window from the tail itself.
+		// Pixel offsets become stale as newly mounted rows replace estimates;
+		// using them here can repeatedly unmount/remount the final rows.
+		if (transcriptBottomIntent) {
+			const total = items.reduce((sum, item) => sum + measuredRowHeight(item), 0);
+			scrollTop = Math.max(0, total - viewportHeight);
+		}
 
 		const startOffset = Math.max(0, scrollTop - VIRTUAL_OVERSCAN_PX);
 		const endOffset = scrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX;
@@ -2370,7 +2420,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// then held to what is on screen now.
 		recordTranscriptAnchor();
 		updateTranscriptViewport();
-		if (isTranscriptAtBottom()) unseenActivity = false;
+		if (!followingBottom() && !streamingFollowScheduled) transcriptBottomIntent = isTranscriptAtBottom();
+		if (transcriptBottomIntent) unseenActivity = false;
 	}
 
 	function jumpToTranscriptPoint(index: number) {
@@ -2392,8 +2443,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (next <= 0) return;
 			const prev = rowHeights.get(key);
 			if (prev === undefined || Math.abs(prev - next) > 0.5) {
+				// Measuring a newly rendered tail row can change the total height
+				// after the reader reached the bottom. Keep that intent across the
+				// virtual spacer update, just as streaming deltas do.
+				const wasAtBottom = transcriptBottomIntent || isTranscriptAtBottom();
 				rowHeights.set(key, next);
 				transcriptHeightVersion += 1;
+				if (wasAtBottom && !followingBottom()) followStreamingTranscript();
 			}
 			// Resize observers run after layout, before paint: no visible jump.
 			restoreTranscriptAnchor();
@@ -5219,36 +5275,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			candidate = withLine[1];
 			line = Number(withLine[2]) || null;
 		}
-		if (candidate.length > 1) candidate = candidate.replace(/\/+$/, '');
-		if (candidate.startsWith('/')) {
+		const absolute = candidate.startsWith('/') || isWindowsPath(candidate);
+		candidate = candidate.replace(/\\/g, '/');
+		if (absolute) {
+			candidate = normalizeHostPath(candidate);
 			const rawCwd = cwds[activeId] ?? activeSummary?.cwd;
-			const cwd = rawCwd?.replace(/[\\/]+$/, '') || '';
-			if (!cwd) {
-				const slash = candidate.lastIndexOf('/');
-				root = slash <= 0 ? '/' : candidate.slice(0, slash);
-				candidate = candidate.slice(slash + 1);
-			} else {
-			const normalizedCwd = cwd || '/';
-			if (candidate === normalizedCwd) return { path: '', line: null, root: null };
-			const prefix = normalizedCwd === '/' ? '/' : `${normalizedCwd}/`;
-			if (candidate.startsWith(prefix)) candidate = candidate.slice(prefix.length);
+			const cwd = rawCwd ? normalizeHostPath(rawCwd) : '';
+			if (candidate === cwd) return { path: '', line: null, root: null };
+			const prefix = cwd.endsWith('/') ? cwd : `${cwd}/`;
+			if (cwd && candidate.startsWith(prefix)) candidate = candidate.slice(prefix.length);
 			else {
-				const slash = candidate.lastIndexOf('/');
-				root = slash <= 0 ? '/' : candidate.slice(0, slash);
-				candidate = candidate.slice(slash + 1);
+				root = parentHostPath(candidate);
+				if (root === candidate) return { path: '', line, root };
+				candidate = candidate.slice(root.length).replace(/^\//, '');
 			}
-			}
-		} else if (candidate.startsWith('./')) {
-			candidate = candidate.slice(2);
-		}
-		// Markdown link hrefs may name a single file; bare code spans need a
-		// separator so ordinary identifiers stay plain.
-		const pattern = requireSeparator
-			? /^[\w.@+-]+(?:\/[\w.@+-]+)+$/
-			: /^[\w.@+-]+(?:\/[\w.@+-]+)*$/;
-		if (!pattern.test(candidate)) return null;
-		// The character class admits dots, so rule out ".."-style segments.
-		if (candidate.split('/').some((segment) => /^\.+$/.test(segment))) return null;
+		} else if (candidate.startsWith('./')) candidate = candidate.slice(2);
+		// Explicit links can contain spaces and Unicode; control characters,
+		// URI schemes and traversal are never workspace-relative filenames.
+		if (!candidate || /[\x00-\x1f:<>|?*]/.test(candidate)) return null;
+		if (requireSeparator && !absolute && !candidate.includes('/')) return null;
+		if (candidate.split('/').some(segment => !segment || /^\.+$/.test(segment))) return null;
 		return { path: candidate, line, root };
 	}
 
@@ -6511,7 +6557,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 						</p>
 					{/if}
 				{/if}
-				<button class="mini ghost" type="button" onclick={() => remoteAccessOpen = true}>Manage SSH access</button>
+				{#if remoteSupported}<button class="mini ghost" type="button" onclick={() => remoteAccessOpen = true}>Manage SSH access</button>{/if}
 				{#if newProviders.length}
 					<div class="create-row">
 						<label for="new-provider">Provider</label>

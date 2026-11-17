@@ -4,22 +4,18 @@
 //// delivered (so a restart does not lose them). Per-session choices stay in
 //// memory.
 
-import envoy
 import filepath
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
 import gleam/result
 import simplifile
+import yacwu/platform
 import yacwu/relay
 import yacwu/relay_core.{type Message}
 
 pub fn path() -> String {
-  let state = case envoy.get("XDG_STATE_HOME") {
-    Ok(dir) if dir != "" -> dir
-    _ ->
-      filepath.join(envoy.get("HOME") |> result.unwrap("/tmp"), ".local/state")
-  }
+  let state = platform.state_home()
   filepath.join(state, "yacwu/relay-settings.json")
 }
 

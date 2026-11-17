@@ -4,10 +4,7 @@
 -define(LIMIT, 5242880).
 
 paths(Label) ->
-    Home = case os:getenv("XDG_STATE_HOME") of
-        false -> filename:join(os:getenv("HOME", "/tmp"), ".local/state");
-        State -> State
-    end,
+    Home = unicode:characters_to_list(yacwu_platform:state_home()),
     Dir = case os:getenv("YACWU_DIAGNOSTICS_DIR") of
         false -> filename:join(Home, "yacwu/diagnostics");
         Override -> Override
@@ -21,10 +18,10 @@ write(Label, Line) ->
     try
         {Path, _} = paths(Label),
         ok = filelib:ensure_dir(Path),
-        ok = file:change_mode(filename:dirname(Path), 8#700),
+        ok = yacwu_platform:mode(filename:dirname(Path), 8#700),
         rotate(Path, false),
         ok = file:write_file(Path, [Line, "\n"], [append]),
-        ok = file:change_mode(Path, 8#600),
+        ok = yacwu_platform:mode(Path, 8#600),
         true
     catch _:_ -> log_failure(), false end.
 
@@ -32,12 +29,12 @@ rotate_stderr(Label) ->
     try
         {_, Path} = paths(Label),
         ok = filelib:ensure_dir(Path),
-        ok = file:change_mode(filename:dirname(Path), 8#700),
+        ok = yacwu_platform:mode(filename:dirname(Path), 8#700),
         case filelib:is_file(Path) of
             false -> ok = file:write_file(Path, <<>>);
             true -> ok
         end,
-        ok = file:change_mode(Path, 8#600),
+        ok = yacwu_platform:mode(Path, 8#600),
         rotate(Path, true),
         true
     catch _:_ -> log_failure(), false end.
@@ -58,7 +55,7 @@ rotate(Path, KeepInode) ->
                     _ = file:delete(Previous),
                     ok = file:rename(Path, Previous)
             end,
-            ok = file:change_mode(Previous, 8#600);
+            ok = yacwu_platform:mode(Previous, 8#600);
         _ -> ok
     end.
 

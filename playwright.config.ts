@@ -46,11 +46,12 @@ export default defineConfig({
 			// backend daemons (a single-client daemon would keep switching
 			// between the two servers) or start alternative backends.
 			YACWU_PERSISTENT_BACKENDS: '0',
-			YACWU_BACKENDS: ''
+			YACWU_BACKENDS: '',
+			YACWU_INSECURE_SKIP_AUTH: '1'
 		},
 		// Build the static SPA, then serve it (and the API) from the Gleam backend.
 		// The server fails closed without auth; the e2e suite runs it open on loopback.
-		command: `bun run build && cd server && YACWU_STATIC=../build YACWU_INSECURE_SKIP_AUTH=1 gleam run -- --host 127.0.0.1 --port ${port}`,
+		command: `bun run build && node scripts/run-server.mjs --host 127.0.0.1 --port ${port}`,
 		url: baseURL,
 		reuseExistingServer: !process.env.CI,
 		timeout: 120_000

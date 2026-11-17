@@ -37,8 +37,13 @@ test('slash arguments filter and fill by click, Tab and Enter without submitting
     await list.getByRole('option', { name: /opencode/ }).click();
     await expect(box).toHaveValue('/fork opencode');
     await expect(list).toHaveCount(0);
+    // Leave the popup before switching to keyboard selection: a stationary
+    // pointer can hover a newly mounted option and replace the arrow selection.
+    await page.mouse.move(0, 0);
     await box.fill('/mode ');
+    await expect(list.getByRole('option')).toHaveCount(2);
     await box.press('ArrowDown');
+    await expect(list.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
     await box.press('Enter');
     await expect(box).toHaveValue('/mode rw');
     await expect(list).toHaveCount(0);

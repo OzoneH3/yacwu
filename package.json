@@ -6,10 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "dev:server": "export YACWU_BACKEND_ROOT=\"${YACWU_BACKEND_ROOT:-$PWD}\"; cd server && YACWU_STATIC=../build gleam run",
+    "dev:server": "node scripts/run-server.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "export YACWU_BACKEND_ROOT=\"${YACWU_BACKEND_ROOT:-$PWD}\"; cd server && YACWU_STATIC=../build gleam run",
+    "start": "node scripts/run-server.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:unit": "bun test tests/unit",
     "test:server": "cd server && gleam test",

@@ -22,6 +22,7 @@ import gleam/result
 import gleam/string
 import simplifile
 import yacwu/config
+import yacwu/platform
 
 /// Create the credential and export the environment. Returns the
 /// credential, or "" (relay agent routes disabled) if it cannot be stored.
@@ -88,11 +89,7 @@ pub fn url(conf: config.Config) -> String {
 fn state_dir() -> String {
   case envoy.get("XDG_RUNTIME_DIR") {
     Ok(dir) if dir != "" -> filepath.join(dir, "yacwu")
-    _ ->
-      filepath.join(
-        envoy.get("HOME") |> result.unwrap("/tmp"),
-        ".local/state/yacwu",
-      )
+    _ -> filepath.join(platform.state_home(), "yacwu/relay")
   }
 }
 
@@ -108,16 +105,12 @@ fn store(
   use _ <- result.try(
     simplifile.create_directory_all(dir) |> result.map_error(describe),
   )
-  use _ <- result.try(
-    simplifile.set_permissions_octal(dir, 0o700) |> result.map_error(describe),
-  )
+  use _ <- result.try(platform.restrict(dir, True))
   let _ = simplifile.delete(path)
   use _ <- result.try(
     simplifile.create_file(path) |> result.map_error(describe),
   )
-  use _ <- result.try(
-    simplifile.set_permissions_octal(path, 0o600) |> result.map_error(describe),
-  )
+  use _ <- result.try(platform.restrict(path, False))
   use _ <- result.try(
     simplifile.write(path, credential) |> result.map_error(describe),
   )
