@@ -198,9 +198,10 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 
 ## Windows support
 
-The `windows-codex` branch includes native Windows foreground startup for
-**local Codex only**. Native Windows acceptance is pending; the implementation
-has been checked on Linux and has a Windows CI job. See the
+Yacwu includes native Windows foreground startup for **local Codex only**.
+Windows startup has been confirmed by a user; the full native acceptance
+checklist remains pending. The implementation has been checked on Linux and
+has a Windows CI job. See the
 [conversion status and acceptance checklist](docs/windows-codex-plan.md).
 
 Install the build toolchain from PowerShell in this checkout:

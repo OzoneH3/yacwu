@@ -2,7 +2,7 @@
 
 ## Implemented scope
 
-This branch implements a foreground source installation for Windows 11 x64,
+Yacwu implements a foreground source installation for Windows 11 x64,
 with local Codex as its only backend. The Gleam/OTP server and Svelte UI remain
 the application architecture. Start it with `start.ps1` after installing the
 prerequisites listed in the README.
@@ -54,9 +54,10 @@ fixtures (`/proc`, Unix sockets, Bash stubs) remain in the existing Linux job.
 The portable suite also checks read-only policy persistence across resume,
 fork, and manager recreation using a protocol fixture.
 
-Windows CI and a Windows desktop have not been executed from this Linux
-workspace. Native runtime acceptance is pending; successful Linux tests do
-not establish Windows sandbox enforcement or lifecycle behavior.
+The user confirmed successful Windows startup on 2026-11-17. Windows CI and
+a Windows desktop have not been executed from this Linux workspace. The full
+native acceptance checklist remains pending; startup confirmation and Linux
+tests do not establish Windows sandbox enforcement or lifecycle behavior.
 
 ## Native acceptance checklist
 
@@ -82,4 +83,4 @@ not establish Windows sandbox enforcement or lifecycle behavior.
 Persistent Windows backends need a separate lifecycle design and transport
 selection. Background service installation and packaged releases follow native
 foreground acceptance. Claude and Copilot Windows integrations require their
-own projects and are not enabled by this branch.
+own projects and are not enabled by this implementation.
