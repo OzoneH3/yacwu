@@ -40,9 +40,12 @@ test('new activity folding rows above the reader does not move the text being re
 	const transcript = page.locator('.transcript');
 	const marker = page.getByText(/^READ-MARKER/);
 	// Scroll up the way a reader does, until the marked message sits near the top.
+	await expect.poll(() => transcript.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(2);
 	await transcript.evaluate((el) => el.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true })));
 	for (let i = 0; i < 40; i += 1) {
-		const offset = await marker.evaluate((m) => m.getBoundingClientRect().top - m.closest('.transcript')!.getBoundingClientRect().top).catch(() => null);
+		// Virtualized rows may be absent: do not wait for one before scrolling
+		// far enough to mount it.
+		const offset = await marker.evaluateAll(([m]) => m ? m.getBoundingClientRect().top - m.closest('.transcript')!.getBoundingClientRect().top : null);
 		if (offset !== null && offset > 40 && offset < 200) break;
 		await transcript.evaluate((el, step) => { el.scrollTop += step; }, offset === null ? -400 : offset - 120);
 		await page.waitForTimeout(50);
