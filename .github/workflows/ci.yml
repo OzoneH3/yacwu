@@ -126,6 +126,8 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors) { throw ($parseErrors | Out-String) }
           }
+      - name: Check missing-prerequisite installer preview
+        run: .\tests\windows-installer-preview.ps1
       - name: Preview prerequisite installer
         run: .\install-windows.ps1 -WhatIf
       - run: npm install --prefix .workspace/cli @openai/codex@0.160.0

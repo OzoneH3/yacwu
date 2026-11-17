@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Install Yacwu's Bun, Gleam, Erlang/OTP and rebar3 prerequisites.
+Install Yacwu's Node.js, Git, Bun, Gleam, Erlang/OTP and rebar3 prerequisites.
 .DESCRIPTION
 Uses WinGet for missing or outdated tools. Installs a checksum-verified rebar3
 in this checkout's ignored .workspace/tools folder and adds it to the user PATH.
-Run with -WhatIf to preview changes. Node, Git and Codex are separate prerequisites.
+Run with -WhatIf to preview changes. Install and authenticate Codex separately.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param()
@@ -77,6 +77,8 @@ function Find-ErlangBin {
 
 Refresh-ToolPath
 foreach ($tool in @(
+    @{ Name = 'node'; Id = 'OpenJS.NodeJS.LTS'; Minimum = [version]'24.0' }
+    @{ Name = 'git'; Id = 'Git.Git'; Minimum = [version]'2.0' }
     @{ Name = 'bun'; Id = 'Oven-sh.Bun'; Minimum = [version]'1.3' }
     @{ Name = 'gleam'; Id = 'Gleam.Gleam'; Minimum = [version]'1.18' }
     @{ Name = 'erl'; Id = 'Erlang.ErlangOTP'; Minimum = [version]'27.0' }
@@ -146,5 +148,5 @@ exit /b %errorlevel%
 
 if (-not $WhatIfPreference) {
     Write-Host 'Toolchain ready. Reopen PowerShell before running .\start.ps1.'
-    Write-Host 'Yacwu also requires Node.js 24+, Git, and an authenticated Codex CLI (see README).'
+    Write-Host 'If Codex is not installed, run npm.cmd install -g @openai/codex, then codex login (see README).'
 }

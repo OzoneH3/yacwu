@@ -1,9 +1,17 @@
 # Build and run local Codex in the foreground. Works from Windows PowerShell 5.1.
 $ErrorActionPreference = 'Stop'
+# Pick up tool installs made since this terminal was opened.
+if ($env:OS -eq 'Windows_NT') {
+    $env:Path = (@(
+        [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        [Environment]::GetEnvironmentVariable('Path', 'User')
+        $env:Path
+    ) | Where-Object { $_ }) -join ';'
+}
 Push-Location $PSScriptRoot
 try {
     foreach ($tool in @('bun', 'node', 'gleam', 'erl', 'rebar3', 'git')) {
-        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing prerequisite: $tool. Run .\install-windows.ps1 for Bun/Gleam/Erlang/rebar3; see README for Node and Git." }
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing prerequisite: $tool. Run .\install-windows.ps1 to install the required tools, then reopen PowerShell." }
     }
     if (-not $env:YACWU_CODEX_BIN -and -not (Get-Command codex -ErrorAction SilentlyContinue)) {
         throw 'Install Codex with npm install -g @openai/codex, then run codex login.'

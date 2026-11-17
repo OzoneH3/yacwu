@@ -211,7 +211,8 @@ Install the build toolchain from PowerShell in this checkout:
 .\install-windows.ps1 -WhatIf
 ```
 
-The installer uses WinGet for Bun 1.3+, Gleam 1.18+, and Erlang/OTP 27+,
+The installer uses WinGet for Node.js LTS (24+), Git, Bun 1.3+, Gleam 1.18+,
+and Erlang/OTP 27+,
 skips compatible versions, and installs checksum-verified rebar3 3.27.0 into
 `.workspace/tools/rebar3` if needed. It adds missing tool directories to your
 user PATH. Reopen PowerShell afterward. Erlang installation may show a Windows
@@ -222,10 +223,10 @@ checkout, rerun the installer to update the rebar3 PATH entry.
 The package IDs come from the [WinGet manifests](https://github.com/microsoft/winget-pkgs);
 the rebar3 wrapper follows its [Windows installation instructions](https://rebar3.org/docs/getting-started/#windows).
 
-Also install Node.js 24+ and Git on `PATH`, then install and authenticate Codex:
+After reopening PowerShell, install Codex if needed and authenticate it:
 
 ```powershell
-npm install -g @openai/codex
+npm.cmd install -g @openai/codex
 codex login
 .\start.ps1
 # Optional server arguments:
