@@ -939,6 +939,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	let cwdInputEl = $state<HTMLInputElement | null>(null);
 
 	let transcriptEl = $state<HTMLDivElement | null>(null);
+	// Preserve bottom-follow intent while virtual rows are measured; those
+	// measurements can temporarily enlarge scrollHeight.
+	let transcriptBottomIntent = $state(true);
 	let showAllActivity = $state(false);
 	let expandedActivity = $state<Record<string, boolean>>({});
 	function toggleActivityGroup(id: string) {
@@ -2209,7 +2212,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 
 		if (shouldScroll) {
-			scrollToBottom();
+			// A running explicit jump already tracks layout changes. For normal
+			// streaming, one post-render adjustment per batch is enough; starting
+			// the multi-frame settle loop on every delta makes Firefox visibly
+			// oscillate as it repeatedly clamps scrollTop to the growing bottom.
+			if (!followingBottom()) followStreamingTranscript();
 		} else if (
 			affectedThreadId === viewedId &&
 			(msg.method.startsWith('item/') || msg.method.startsWith('turn/'))
@@ -2225,7 +2232,23 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	}
 
 	let bottomJumpGeneration = 0;
-	function cancelBottomJump() { bottomJumpGeneration++; }
+	function cancelBottomJump() {
+		bottomJumpGeneration++;
+		transcriptBottomIntent = false;
+	}
+	let streamingFollowScheduled = false;
+	function followStreamingTranscript() {
+		if (streamingFollowScheduled) return;
+		streamingFollowScheduled = true;
+		const generation = bottomJumpGeneration;
+		const targetId = viewedId;
+		void tick().then(() => {
+			streamingFollowScheduled = false;
+			if (generation !== bottomJumpGeneration || targetId !== viewedId || !transcriptEl) return;
+			transcriptEl.scrollTop = transcriptEl.scrollHeight;
+			updateTranscriptViewport();
+		});
+	}
 	function cancelJumpOnInput(node: HTMLElement) {
 		const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
 		for (const event of events) node.addEventListener(event, cancelBottomJump, { passive: true });
@@ -2244,6 +2267,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 	// into "Background work" when the next one arrives, output collapsing,
 	// rows measured as they render — would otherwise move the text away.
 	let transcriptAnchor: TranscriptAnchor | null = null;
+	let transcriptAnchorScrollTop = 0;
 	function recordTranscriptAnchor() {
 		const el = transcriptEl;
 		if (!el || followingBottom() || isTranscriptAtBottom()) {
@@ -2256,6 +2280,7 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			return { key: row.dataset.rowKey ?? '', top: rect.top - viewportTop, bottom: rect.bottom - viewportTop };
 		});
 		transcriptAnchor = pickTranscriptAnchor(rows, el.clientHeight);
+		transcriptAnchorScrollTop = el.scrollTop;
 	}
 	function restoreTranscriptAnchor() {
 		const el = transcriptEl;
@@ -2265,14 +2290,26 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const delta = anchorCorrection(anchor, (key) => {
 			const row = el.querySelector<HTMLElement>(`.virtual-row[data-row-key="${CSS.escape(key)}"]`);
 			return row ? row.getBoundingClientRect().top - viewportTop : null;
-		});
-		if (delta) el.scrollTop += delta;
+		}, el.scrollTop - transcriptAnchorScrollTop);
+		if (delta) {
+			el.scrollTop += delta;
+			// Scroll events are delivered asynchronously in Firefox. Refresh the
+			// anchor now so a subsequent layout pass cannot apply this correction
+			// a second time against the old viewport position.
+			const rows = Array.from(el.querySelectorAll<HTMLElement>('.virtual-row[data-row-key]'), (row) => {
+				const rect = row.getBoundingClientRect();
+				return { key: row.dataset.rowKey ?? '', top: rect.top - viewportTop, bottom: rect.bottom - viewportTop };
+			});
+			transcriptAnchor = pickTranscriptAnchor(rows, el.clientHeight);
+			transcriptAnchorScrollTop = el.scrollTop;
+		}
 	}
 	// After every transcript render: rows added, removed, regrouped or
 	// re-windowed (row resizes restore from their own observer).
 	$effect(() => {
 		void virtualTranscript;
-		untrack(restoreTranscriptAnchor);
+		if (transcriptBottomIntent) untrack(followStreamingTranscript);
+		else untrack(restoreTranscriptAnchor);
 	});
 
 	async function scrollToBottom() {
@@ -2281,6 +2318,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		const targetId = viewedId;
 		const jump = { generation, targetId };
 		activeBottomJump = jump;
+		transcriptAnchor = null;
+		transcriptBottomIntent = true;
 		try {
 			await tick();
 			if (!transcriptEl || generation !== bottomJumpGeneration || targetId !== viewedId) return;
@@ -2313,6 +2352,14 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		_heightVersion: number
 	): { items: ThreadItem[]; before: number; after: number; total: number } {
 		if (items.length === 0) return { items: [], before: 0, after: 0, total: 0 };
+
+		// While following the end, choose the window from the tail itself.
+		// Pixel offsets become stale as newly mounted rows replace estimates;
+		// using them here can repeatedly unmount/remount the final rows.
+		if (transcriptBottomIntent) {
+			const total = items.reduce((sum, item) => sum + measuredRowHeight(item), 0);
+			scrollTop = Math.max(0, total - viewportHeight);
+		}
 
 		const startOffset = Math.max(0, scrollTop - VIRTUAL_OVERSCAN_PX);
 		const endOffset = scrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX;
@@ -2357,7 +2404,8 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		// then held to what is on screen now.
 		recordTranscriptAnchor();
 		updateTranscriptViewport();
-		if (isTranscriptAtBottom()) unseenActivity = false;
+		if (!followingBottom() && !streamingFollowScheduled) transcriptBottomIntent = isTranscriptAtBottom();
+		if (transcriptBottomIntent) unseenActivity = false;
 	}
 
 	function jumpToTranscriptPoint(index: number) {
@@ -2379,8 +2427,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 			if (next <= 0) return;
 			const prev = rowHeights.get(key);
 			if (prev === undefined || Math.abs(prev - next) > 0.5) {
+				// Measuring a newly rendered tail row can change the total height
+				// after the reader reached the bottom. Keep that intent across the
+				// virtual spacer update, just as streaming deltas do.
+				const wasAtBottom = transcriptBottomIntent || isTranscriptAtBottom();
 				rowHeights.set(key, next);
 				transcriptHeightVersion += 1;
+				if (wasAtBottom && !followingBottom()) followStreamingTranscript();
 			}
 			// Resize observers run after layout, before paint: no visible jump.
 			restoreTranscriptAnchor();

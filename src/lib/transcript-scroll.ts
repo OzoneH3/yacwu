@@ -33,11 +33,13 @@ export function pickTranscriptAnchor(rows: AnchorRow[], viewportHeight: number, 
  * anchor row still rendered decides; 0 when none is (nothing to hold on to)
  * or it has not moved.
  */
-export function anchorCorrection(anchor: TranscriptAnchor, currentTop: (key: string) => number | null): number {
+export function anchorCorrection(anchor: TranscriptAnchor, currentTop: (key: string) => number | null, scrollDelta = 0): number {
 	for (const { key, offset } of anchor) {
 		const top = currentTop(key);
 		if (top === null) continue;
-		const delta = top - offset;
+		// Viewport movement is not a layout shift. Scroll events may arrive
+		// after a render/resize callback, especially during Firefox scrolling.
+		const delta = top - offset + scrollDelta;
 		return Math.abs(delta) > 0.5 ? delta : 0;
 	}
 	return 0;
@@ -58,14 +60,12 @@ export async function settleTranscriptBottom(viewport: ScrollViewport, options: 
 		if (options.cancelled()) return;
 		const placedHeight = viewport.scrollHeight;
 		viewport.scrollTop = placedHeight;
-		const placed = viewport.scrollTop;
 		options.update();
 		await options.frame();
 		if (options.cancelled()) return;
-		// Allow the first focus/layout adjustment after clicking the jump button.
-		// Later upward moves without shrinking content signal other navigation
-		// (a jump link, find in page, a script) without an input event.
-		if (frame > 0 && viewport.scrollHeight >= placedHeight && viewport.scrollTop < placed - 2 && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > 2) return;
+		// Layout and virtual spacer changes can move scrollTop even without
+		// shrinking the final scrollHeight. Only explicit cancellation signals
+		// user navigation; a transient upward move must not abort the jump.
 		const height = viewport.scrollHeight;
 		const atBottom = height - viewport.scrollTop - viewport.clientHeight <= 2;
 		stableFrames = height === previousHeight && atBottom && options.atEnd() ? stableFrames + 1 : 0;
