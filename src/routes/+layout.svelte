@@ -33,6 +33,7 @@
 		type RelayRecord
 	} from '$lib/relay';
 	import { defaultSessionRules, readSessionRules, withSessionRules, SESSION_RULES_KEY, type SessionRules } from '$lib/session-rules';
+	import { transcriptWindow } from '$lib/transcript-window';
 	import { anchorCorrection, pickTranscriptAnchor, settleTranscriptBottom, type TranscriptAnchor } from '$lib/transcript-scroll';
 	import { runtimeOutcome, interruptionReason } from '$lib/runtime-reconciliation';
 	import { page, updated } from '$app/state';
@@ -2367,40 +2368,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		viewportHeight: number,
 		_heightVersion: number
 	): { items: ThreadItem[]; before: number; after: number; total: number } {
-		if (items.length === 0) return { items: [], before: 0, after: 0, total: 0 };
-
-		// While following the end, choose the window from the tail itself.
-		// Pixel offsets become stale as newly mounted rows replace estimates;
-		// using them here can repeatedly unmount/remount the final rows.
-		if (transcriptBottomIntent) {
-			const total = items.reduce((sum, item) => sum + measuredRowHeight(item), 0);
-			scrollTop = Math.max(0, total - viewportHeight);
-		}
-
-		const startOffset = Math.max(0, scrollTop - VIRTUAL_OVERSCAN_PX);
-		const endOffset = scrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX;
-		let before = 0;
-		let start = 0;
-
-		while (start < items.length) {
-			const h = measuredRowHeight(items[start]);
-			if (before + h >= startOffset) break;
-			before += h;
-			start += 1;
-		}
-
-		let renderedHeight = 0;
-		let end = start;
-		while (end < items.length) {
-			const h = measuredRowHeight(items[end]);
-			renderedHeight += h;
-			end += 1;
-			if (before + renderedHeight > endOffset) break;
-		}
-
-		let after = 0;
-		for (let i = end; i < items.length; i += 1) after += measuredRowHeight(items[i]);
-		return { items: items.slice(start, end), before, after, total: before + renderedHeight + after };
+		// The version dependency invalidates cached heights measured by row actions.
+		void _heightVersion;
+		return transcriptWindow(items, measuredRowHeight, scrollTop, viewportHeight,
+			VIRTUAL_OVERSCAN_PX, transcriptBottomIntent);
 	}
 
 	function updateTranscriptViewport() {

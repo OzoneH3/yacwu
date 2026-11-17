@@ -99,7 +99,7 @@ rules locally, and records usage/diagnostic journals on the server.
   links in responses
 - ± Git changes inspector with All / Staged / Unstaged scopes and lazy diffs
 - 🖼️ Attach images, PDFs, and text/code files (including .txt) by picker or clipboard paste; click to open, or × to remove
-- 🧭 Transcript position rail and scroll-to-bottom control
+- 🧭 Transcript position rail and scroll-to-bottom control; completed tasks remain visible when activity rows collapse
 - 📋 **Copy files** collects the contents of every file a response links to;
   **Copy for coordinator** copies a Markdown handoff (session, folder, branch,
   request, response, changed files and linked file contents) for another chat;
