@@ -196,6 +196,12 @@ Type these in the composer (anything not starting with `/` is a normal model tur
 | `/archive` | archive this session |
 | `/help` | list the commands |
 
+## Windows support
+
+Native Windows support is planned for Codex first. Claude and Copilot Windows
+backends are outside the initial scope. See the [Windows Codex conversion
+plan](docs/windows-codex-plan.md) for the phased work and acceptance criteria.
+
 ## Requirements
 
 - [Gleam](https://gleam.run) ≥ 1.18 with Erlang/OTP ≥ 27 (and `rebar3` on
