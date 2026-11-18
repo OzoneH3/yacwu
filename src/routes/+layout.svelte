@@ -103,7 +103,7 @@ import { estimateBias, estimateRemainingMinutes, latestTaskProgress, parseTaskPr
 import { indexFileLineStats, lineStatsForPath, normalizeWorkspacePath } from '$lib/file-change-stats';
 import { archiveProviderLabel, loadArchiveCatalog } from '$lib/archive';
 import { backendProviders, providerLabel, sessionTarget } from '$lib/session-target';
-import { normalizeModelChoice, filterAndSortModelChoices, isCopilotModel, modelDisplayProfile, modelPickerGroups, isClaudeModelCatalog, claudeModelIdentity, usageModelNames, usageModelName as learnedModelName } from '$lib/model-display';
+import { normalizeModelChoice, filterAndSortModelChoices, availableModelUpgrade, isCopilotModel, modelDisplayProfile, modelPickerGroups, isClaudeModelCatalog, claudeModelIdentity, usageModelNames, usageModelName as learnedModelName } from '$lib/model-display';
 import { createMessageTimestampStore } from '$lib/message-timestamps';
 
 	let { children } = $props();
@@ -532,6 +532,10 @@ import { createMessageTimestampStore } from '$lib/message-timestamps';
 			? { ...choice, displayName: choice.displayName.replace(/\s*\(default\)/gi, '').trim() }
 			: choice;
 	});
+	const activeModelUpgrade = $derived(availableModelUpgrade(
+		activeModelChoice ?? (activeConfig?.model ? { id: activeConfig.model, displayName: activeConfig.model } : null),
+		activeId ? sessionModels[activeId] ?? [] : []
+	));
 	const activePickerModel = $derived(
 		activeClaude && activeModelChoice
 			? activeModels.find((choice) => claudeModelIdentity(choice) === claudeModelIdentity(activeModelChoice))?.id ?? activeConfig?.model
@@ -8002,6 +8006,11 @@ Do not modify files, source, git state, permissions, configuration, or any other
 							{/each}
 									</select>
 									</div>
+								{#if activeModelUpgrade}
+									<span class="model-upgrade-warning" role="img"
+										aria-label={`Better model available: ${activeModelUpgrade.displayName}`}
+										title={`Better model available: ${activeModelUpgrade.displayName}. Based on Yacwu ratings.`}>!</span>
+								{/if}
 								{/if}
 								{#if activeSettingsChangedDuringTurn}
 									<button
@@ -11551,6 +11560,15 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		border-radius: var(--radius-input);
 		color: var(--color-muted);
 		transition: background-color var(--dur-micro) var(--ease-out);
+	}
+
+	.model-upgrade-warning {
+		color: var(--color-error);
+		font-size: var(--text-lg);
+		font-weight: 800;
+		line-height: 1;
+		flex-shrink: 0;
+		cursor: help;
 	}
 
 	.model-picker {

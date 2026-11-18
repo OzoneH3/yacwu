@@ -84,7 +84,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - 🧠 Per-session model and reasoning effort that persist across server reloads,
   applied to new turns including session messages, with "Suggest settings"
   and capability/efficiency indicators in the picker, including provisional
-  GPT-6.2 Sol and Astra ratings
+  GPT-6.2 Sol and Astra ratings; a red **!** marks sessions with a better
+  rated model available under the same provider cost policy
   (see [rating methodology](docs/model-ratings.md))
   — restart running work on changed settings while preserving queued todos
 - Background checks share runtime reads across tabs and build checks across

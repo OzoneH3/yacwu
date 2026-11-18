@@ -126,6 +126,38 @@ export function modelDisplayProfile(choice: ModelChoiceSummary | null): ModelDis
 	return profiles.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 }
 
+function profileDominates(candidate: ModelDisplayProfile, current: ModelDisplayProfile): boolean {
+	const nextEfficiency = efficiencyRank[candidate.efficiency] ?? 0;
+	const oldEfficiency = efficiencyRank[current.efficiency] ?? 0;
+	return nextEfficiency >= oldEfficiency && candidate.capability >= current.capability
+		&& (nextEfficiency > oldEfficiency || candidate.capability > current.capability);
+}
+function comparisonCatalog(choice: ModelChoiceSummary): string {
+	if (isCopilotModel(choice))
+		return `copilot/${modelPickerGroups([choice])[0]?.label}`;
+	const provider = choice.id.startsWith('opencode/') ? choice.id.split('/').slice(0, 2).join('/') : 'native';
+	const family = claudeVersion.test(choice.id) || claudeVersion.test(choice.displayName) ? 'claude' : 'gpt';
+	return `${provider}/${family}`;
+}
+/** Find an available upgrade under the picker's capability and cost rules. */
+export function availableModelUpgrade<T extends ModelChoiceSummary>(current: ModelChoiceSummary | null, choices: T[]): T | null {
+	if (!current)
+		return null;
+	const currentProfile = modelDisplayProfile(isCopilotModel(current) ? { ...current, id: current.id.slice(8) } : current);
+	if (!currentProfile)
+		return null;
+	return filterAndSortModelChoices(choices).find(candidate => {
+		if (candidate.id === current.id || comparisonCatalog(candidate) !== comparisonCatalog(current))
+			return false;
+		if (isCopilotModel(current)) {
+			// The fixed credit table, including cache/context categories, decides cost.
+			return !filterAndSortModelChoices([current, candidate]).some(choice => choice.id === current.id);
+		}
+		const nextProfile = modelDisplayProfile(candidate);
+		return Boolean(nextProfile && profileDominates(nextProfile, currentProfile));
+	}) ?? null;
+}
+
 /** Hide known dominated choices and rank the remaining tradeoffs, best first. */
 export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices: T[]): T[] {
 	choices = choices.map(normalizeModelChoice);
@@ -173,11 +205,7 @@ export function filterAndSortModelChoices<T extends ModelChoiceSummary>(choices:
 		if (!profile) return true;
 		return !scored.some((other) => {
 			if (other.choice.id === choice.id || !other.profile) return false;
-			const otherEfficiency = efficiencyRank[other.profile.efficiency] ?? 0;
-			const efficiency = efficiencyRank[profile.efficiency] ?? 0;
-			return otherEfficiency >= efficiency
-				&& other.profile.capability >= profile.capability
-				&& (otherEfficiency > efficiency || other.profile.capability > profile.capability);
+			return profileDominates(other.profile, profile);
 		});
 	});
 	visible.sort((a, b) => {
