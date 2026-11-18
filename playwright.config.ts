@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const port = Number(process.env.YACWU_PORT ?? 5173);
 const baseURL = `http://127.0.0.1:${port}`;
@@ -36,6 +37,9 @@ export default defineConfig({
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 	webServer: {
 		env: {
+			// Never inherit the live frontend or backend root from a Yacwu session.
+			YACWU_STATIC: fileURLToPath(new URL('./build', import.meta.url)),
+			YACWU_BACKEND_ROOT: fileURLToPath(new URL('.', import.meta.url)),
 			YACWU_USAGE_DIR: testUsageDir,
 			CODEX_HOME: testCodexHome,
 			XDG_STATE_HOME: testStateHome,
