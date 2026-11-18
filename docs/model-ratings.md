@@ -1,6 +1,7 @@
 # Model picker ratings
 
-Reviewed October 27, 2026. The implementation is in
+GPT ratings reviewed November 18, 2026; Claude ratings reviewed October 27, 2026.
+The implementation is in
 [`model-display.ts`](../src/lib/model-display.ts).
 
 ## Ordering
@@ -14,8 +15,8 @@ GPT and Claude use the same rules:
 3. Keep unknown models after rated choices, without assigning speculative ratings.
    Claude catalogs exclude GPT choices from the adapter's optional Codex proxy.
 
-The current GPT profiles sort as GPT-6 Luna, GPT-6.1 Terra, GPT-6.1 Sol,
-then GPT-6 Astra when all are available. GPT-6.1 Terra also replaces the older
+The current GPT profiles sort as GPT-6 Luna, GPT-6.1 Terra, GPT-6.2 Sol,
+then GPT-6.2 Astra when all are available. GPT-6.1 Terra also replaces the older
 GPT-6 Sol and GPT-5.6 Terra entries under the dominance rule.
 
 Claude aliases (`default`, `opus`, `sonnet`, `haiku`, and context variants) use
@@ -67,6 +68,24 @@ try Fable on tasks where their Opus evaluations fall short, as Anthropic advises
 
 ## GPT estimates
 
+GPT-6.2 ratings are provisional Yacwu judgments. Sol is the balanced coding
+choice; Astra is the higher-cost option for demanding reasoning and projects.
+OpenAI reports Sol within 0.5 points of Astra on FrontierCode 2.0 at about a
+fifth of the task cost, and stronger Astra results than GPT-6 Astra on scientific
+terminal work with lower task cost. See the
+[release announcement](https://openai.com/index/introducing-gpt-6-2-astra-sol/).
+
+Keep Sol in the existing Very good efficiency band: its standard API rates
+remain $2 input / $0.10 cached / $10 output per million tokens. Astra's rates
+are $8 / $0.40 / $40, so its efficiency rises to Good while remaining below
+Sol. Sources: [Sol model card](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
+and [Astra model card](https://developers.openai.com/api/docs/models/gpt-6.2-astra).
+These prices are evidence for static estimates, not Codex allowance multipliers.
+The capability scale still tops out at 100; the older Astra's existing 100
+is not a claim of equal performance. Existing ratings remain available when
+newer models are absent. When offered, 6.2 Sol and Astra hide 6.1 Sol and
+6 Astra under the existing dominance rule. Luna and Terra retain their cheaper tiers.
+
 GPT-6.1 Terra is positioned between Luna and Sol: its official announcement
 emphasizes visual reasoning, computer use, and scoped coding, while retaining
 Sol and Astra as the better choices for the hardest software-engineering work.
@@ -79,6 +98,8 @@ claims that Terra is universally better than Luna or Sol.
 | --- | ---: | --- | ---: |
 | GPT-6 Luna | 70 | Exceptional | 5.0 |
 | GPT-6.1 Terra | 88 | Excellent | 4.0 |
+| GPT-6.2 Sol | 97 | Very good | 4.0 |
+| GPT-6.2 Astra | 100 | Good | 2.5 |
 | GPT-6.1 Sol | 93 | Very good | 3.0 |
 | GPT-6 Astra | 100 | Moderate/low | 1.0 |
 

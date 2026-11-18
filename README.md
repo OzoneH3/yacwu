@@ -83,7 +83,8 @@ rules locally, and records usage/diagnostic journals on the server.
 - Claude allowance reserve is shared across sessions and browsers; changes apply to running-task checks and waiting resumes.
 - 🧠 Per-session model and reasoning effort that persist across server reloads,
   applied to new turns including session messages, with "Suggest settings"
-  and capability/efficiency indicators in the picker
+  and capability/efficiency indicators in the picker, including provisional
+  GPT-6.2 Sol and Astra ratings
   (see [rating methodology](docs/model-ratings.md))
   — restart running work on changed settings while preserving queued todos
 - Background checks share runtime reads across tabs and build checks across

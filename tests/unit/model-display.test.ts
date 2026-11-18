@@ -200,3 +200,18 @@ test('OpenCode mixed catalogs retain OpenAI models alongside Claude', () => {
  expect(filterAndSortModelChoices(choices).map(c=>c.id)).toContain('opencode/openai/gpt-6-luna');
  expect(isClaudeModelCatalog(choices)).toBe(false);
 });
+
+test('GPT-6.2 receives provisional ratings and replaces only dominated choices', () => {
+ const sol = {id:'gpt-6.2-sol',displayName:'GPT-6.2-Sol'};
+ const astra = {id:'gpt-6.2-astra',displayName:'GPT-6.2-Astra'};
+ expect(modelDisplayProfile(sol)).toMatchObject({capability:97,efficiency:'Very good',valueRating:4});
+ expect(modelDisplayProfile(astra)).toMatchObject({capability:100,efficiency:'Good',valueRating:2.5});
+ expect(modelDisplayProfile(sol)?.estimateBasis).toContain('Provisional');
+ expect(filterAndSortModelChoices([...models,sol,astra]).map(m=>m.id)).toEqual([
+  'gpt-6-luna','gpt-6.1-terra','gpt-6.2-sol','gpt-6.2-astra'
+ ]);
+ expect(filterAndSortModelChoices(models).map(m=>m.id)).toContain('gpt-6.1-sol');
+ expect(modelDisplayProfile({id:'gpt-6.3-sol',displayName:'GPT-6.3 Sol'})).toBeNull();
+ expect(modelDisplayProfile({id:'opencode/openai/gpt-6.2-sol',displayName:'GPT-6.2 Sol'})).toMatchObject({capability:97});
+ expect(modelDisplayProfile({id:'copilot/gpt-6.2-sol',displayName:'GPT-6.2 Sol'})).toBeNull();
+});

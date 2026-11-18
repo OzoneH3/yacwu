@@ -76,7 +76,12 @@ const claudeProfiles: Record<string, ModelDisplayProfile> = {
 	'fable 5': { capability: 96, efficiency: 'Moderate/low', valueRating: 1 }
 };
 
+// Reviewed 2026-11-18 against the GPT-6.2 announcement and model cards.
+// Keep the existing scale and efficiency bands; API cost is only a proxy.
+const gpt62EstimateBasis = 'Provisional Yacwu estimates from published task results and API pricing, not measured Codex subscription allowance. Capability 100 is the scale ceiling, not benchmark accuracy or equality with older models.';
 const profiles: Array<[RegExp, ModelDisplayProfile]> = [
+	[/gpt 6\.2 sol/, { capability: 97, efficiency: 'Very good', valueRating: 4, estimateBasis: gpt62EstimateBasis }],
+	[/gpt 6\.2 astra/, { capability: 100, efficiency: 'Good', valueRating: 2.5, estimateBasis: gpt62EstimateBasis }],
 	[/gpt 6(?:\.0)? luna/, { capability: 70, efficiency: 'Exceptional', valueRating: 5 }],
 	[/gpt 5\.6 luna/, { capability: 60, efficiency: 'Exceptional', valueRating: 4.5 }],
 	[/gpt 6\.1 terra/, { capability: 88, efficiency: 'Excellent', valueRating: 4 }],
