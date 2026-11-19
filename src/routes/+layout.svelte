@@ -1102,6 +1102,45 @@ Do not modify files, source, git state, permissions, configuration, or any other
 		}
 	}
 
+	// Completion can reach a tab that missed the final message notification.
+	const pendingFinalReads = new Map<string, { turnId: string }>();
+
+	function isFinalResponse(item: ThreadItem | undefined): item is ThreadItem & {
+		type: 'agentMessage'; text: string; _completed?: boolean; _turnId?: string;
+	} {
+		return item?.type === 'agentMessage' && item.phase !== 'commentary'
+			&& typeof item.text === 'string' && Boolean(item.text.trim());
+	}
+
+	async function recoverFinalResponse(id: string, turnId: string, thread: ThreadState) {
+		if (pendingFinalReads.get(id)?.turnId === turnId) return;
+		const read = { turnId };
+		pendingFinalReads.set(id, read);
+		try {
+			const response = await fetch(threadApi(id, '/history'), { signal: AbortSignal.timeout(5000) });
+			if (!response.ok) return;
+			const { turns } = await response.json() as { turns?: Turn[] };
+			const saved = turns?.at(-1);
+			// An old history response must not append text behind a newer turn.
+			if (pendingFinalReads.get(id) !== read || threads[id] !== thread || thread.status !== 'idle'
+				|| saved?.id !== turnId || saved.status !== 'completed') return;
+			const shouldFollow = id === viewedId && (transcriptBottomIntent || isTranscriptAtBottom());
+			let restored = false;
+			for (const item of saved.items ?? []) {
+				if (!item.id || !isFinalResponse(item)) continue;
+				const existing = thread.byId[item.id];
+				if (isFinalResponse(existing) && existing.text === visibleAgentMessageText(item.text)) continue;
+				upsertItem(id, item, true, turnId, true);
+				restored = true;
+			}
+			if (restored && shouldFollow) void scrollToBottom();
+		} catch {
+			// The live transcript remains usable if saved history is unavailable.
+		} finally {
+			if (pendingFinalReads.get(id) === read) pendingFinalReads.delete(id);
+		}
+	}
+
 	function syncThreadRuntime(id: string, thread: { status?: { type: string }; turns?: Turn[] }) {
 		const t = ensureThread(id);
 		const runtimeStatus = thread.status?.type;
@@ -2043,7 +2082,10 @@ Do not modify files, source, git state, permissions, configuration, or any other
 				break;
 			}
 			case 'turn/started': {
-				if (tid) sharedRuntime?.invalidate(runtimeUrl(tid));
+				if (tid) {
+					pendingFinalReads.delete(tid);
+					sharedRuntime?.invalidate(runtimeUrl(tid));
+				}
 				if (tid) {
 					scheduleTaskUsageRefresh(tid);
 					if (!turnModels[tid] && sessionConfigs[tid]?.model) {
@@ -2097,6 +2139,9 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					const t = ensureThread(tid);
 					t.status = 'idle';
 					for (const item of p.turn?.items ?? []) {
+						if (item.id && completedTurnId && isFinalResponse(item)) {
+							upsertItem(tid, item, true, completedTurnId, true);
+						}
 						if (item.type === 'localNote' && item.quotaStop) {
 							upsertItem(tid, item, false, completedTurnId);
 							refreshQuotaUsage(sessionHost(tid));
@@ -2108,6 +2153,13 @@ Do not modify files, source, git state, permissions, configuration, or any other
 					t.turnId = null;
 				delete activeTurnBySession[tid];
 				if (p.turn?.status === 'completed') {
+					if (completedTurnId && (tid === viewedId || sessionHistoryLoaded[tid])
+						&& !t.order.some(id => {
+							const item = t.byId[id];
+							return isFinalResponse(item) && item._completed && item._turnId === completedTurnId;
+						})) {
+						void recoverFinalResponse(tid, completedTurnId, t);
+					}
 					for (const itemId of t.order) {
 						const item = t.byId[itemId] as any;
 						if (item?.type === 'agentMessage' && !item._completed) {
